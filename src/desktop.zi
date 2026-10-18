@@ -1,0 +1,179 @@
+// Self's standalone native provider hosts the same portable UI as Inbe and
+// Werkzeug. It manages only its own window and its private account store.
+#import "model"
+#import "account_store"
+#import "management"
+#import "native_management"
+#import "native_files"
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/file"
+#import "std/vec"
+#import "std/text_buffer"
+#import "kryon/hosted_app"
+#import "scroll_device"
+#import "kryon/app_context_host"
+#import "kryon/app_protocol"
+#import "kryon/hosted_values"
+#import "kryon/widget_host"
+#import "kryon/key_input"
+#import "tree_draw"
+#import "std/timer_linux"
+using UI :: #import "kryon/Widgets";
+Desktop :: #import "kryon/Desktop";
+
+sdl :: #system_library "SDL2";
+SetTitle :: (window: *void, title: *u8) #foreign sdl "SDL_SetWindowTitle";
+portable: AppContext;
+bundle_bytes: string;
+profile_document: string;
+asset_folder: [4096]u8;
+typed: [1024]u8;
+
+TextValue :: (text: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(text), .length = cast(usize)text.count}
+}
+Allows :: (context: *void, name: string) -> bool {
+    return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
+    name == "AppLocaleHost" || name == "self.management" || name == "self.assets"
+}
+Services :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    name := TextFromCString(function)
+    if name == "AppServiceHost" && count == 2 {
+        service := AppArgumentText(arguments[0])
+        if service == "self.assets" { result.* = TextValue(TextUntilNul(asset_folder[:])); return 1 }
+        if service == "self.management" {
+            request := AppArgumentText(arguments[1])
+            if request == "" { ProviderRefresh(*account_provider); result.* = TextValue(account_provider.document) }
+            else { result.* = TextValue(ifx ProviderEnqueue(*account_provider, request) then "queued" else "rejected") }
+            return 1
+        }
+    }
+    if name == "AppLocaleHost" && count == 1 { result.* = TextValue(AppArgumentText(arguments[0])); return 1 }
+    if name == "ClipboardCopyHost" && count == 2 {
+        result.* = HostScalar("bool", ifx Desktop.SystemClipboardWriteHost(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
+    if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
+        owner: [65]u8
+        for index: 0..64 { owner[index] = account_profile.owner_id[index] }
+        unused SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
+        SelfFree(profile_document)
+        profile_document = SelfEncode(account_profile)
+        output := arguments[1]
+        if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)profile_document.count { return 0 }
+        for index: 0..profile_document.count {
+            byte := ifx index < profile_document.count then profile_document[index] else cast(u8)0
+            output.elements[index].bits = cast(u64)byte
+            output.elements[index].integer = cast(s64)byte
+        }
+        result.* = HostScalar("s32", profile_document.count)
+        return 1
+    }
+    if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
+        state: SelfState
+        saved := SelfDecode(AppArgumentText(arguments[1]), *state) && AccountStoreSaveProfile(state)
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    return 0
+}
+AssetAllowed :: (path: string) -> bool {
+    first: [4096]u8
+    second: [4096]u8
+    return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/self/pfp.png") ||
+    path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/self/flowers.png")
+}
+OpenSelf :: (path: string) -> bool {
+    file := OpenRead(path)
+    if !file.valid { return false }
+    defer { unused CloseFile(file) }
+    size := FileSize(file)
+    if size < 1 || size > 16777216 { return false }
+    bytes: Vec(u8)
+    for index: 0..size - 1 { if !VecPush(bytes, cast(u8)0) { VecFree(bytes); return false } }
+    read: s64
+    {
+        output := VecSlice(bytes, 0, bytes.count)
+        read = ReadAt(file, output, 0)
+    }
+    if read != size { VecFree(bytes); return false }
+    bundle_bytes = BuilderFinish(bytes)
+    portable = AppContext.{.expected_id = "self", .allows = Allows, .services = Services, .widgets = WidgetHostCall}
+    if !AppContextOpen(*portable, bundle_bytes) { return false }
+    unused NativeRoot(asset_folder[:])
+    for index: cast(u64)0..BundleAssets(portable.app.bundle) - 1 {
+        name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
+        if name != "assets/self/pfp.png" && name != "assets/self/flowers.png" { continue }
+        folder: [4096]u8
+        path_buffer: [4096]u8
+        if !NativeDirectory(NativeJoin(folder[:], TextUntilNul(asset_folder[:]), "assets/self")) { return false }
+        asset_bytes := BytesFromPointer(BundleAssetBytes(portable.app.bundle, index), BundleAssetLength(portable.app.bundle, index))
+        if !NativeWrite(NativeJoin(path_buffer[:], TextUntilNul(asset_folder[:]), name), TextFromBytes(asset_bytes)) { return false }
+    }
+    return true
+}
+Draw :: (session: UI.Session) -> bool {
+    Desktop.BeginDesktopFrame()
+    area := Desktop.DesktopViewport()
+    pointer := Desktop.PollPointer()
+    TreePointerUpdate(session, pointer)
+    TreeSecondaryPointerUpdate(session, Desktop.PollSecondaryPointer())
+    PointerWheelSend(session, pointer.x, pointer.y, Desktop.DesktopWheelMove())
+    if BeginFrame(session, cast(u64)1, area) != FrameStatus.FrameOk { return false }
+    key := KeyboardTake(session)
+    modifiers := KeyboardModifiers(session)
+    text: Vec(u8)
+    BuilderPrint(*text, "%", TypedTextTake(session, typed[:]))
+    input_text := BuilderFinish(text)
+    input := TextFieldInputFor(key, modifiers, input_text)
+    BeginScrollFrame(session, Vector2.{pointer.x, pointer.y}, pointer.pressed, pointer.down,
+        pointer.released, PointerWheelTake(session, area), cast(float64)MonotonicMilliseconds() / 1000.0)
+    portable.session = session
+    portable.bounds = area
+    portable.scale = 1.0
+    portable.font = 16
+    portable.key = key
+    portable.modifiers = modifiers
+    portable.input = input
+    WidgetHostBegin(session, AssetAllowed)
+    ran := AppContextRun(*portable, APP_FRAME)
+    WidgetHostEnd()
+    portable.input = UI.TextFieldInput.{}
+    SelfFree(input_text)
+    AccountStorePump()
+    if !ran { TreeCancel(session); return false }
+    if EndFrame(session) != FrameStatus.FrameOk { return false }
+    unused Desktop.DesktopCursor(session)
+    return Desktop.EndDesktopFrame()
+}
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    path := ifx argc > 1 then TextFromCString(argv[1]) else "build/self.zib"
+    if !AccountStoreStart() || !OpenSelf(path) { return 1 }
+    if !Desktop.OpenDesktopSized(480, 800) { return 1 }
+    title: [16]u8
+    unused CopyCString("Self", title[:])
+    SetTitle(Desktop.window, *title[0])
+    unused Desktop.WindowInterceptCloseHost(true)
+    session := SessionOpen()
+    if !SessionValid(session) { Desktop.CloseDesktop(); return 1 }
+    good := true
+    while good && Desktop.PollDesktop() {
+        KeyboardModifiersSend(session, Desktop.DesktopModifiers())
+        key := Desktop.DesktopPressedKey()
+        if key != 0 { KeyboardSend(session, key) }
+        point := Desktop.DesktopTypedCodepoint()
+        while point != 0 { TypedCodepointSend(session, point); point = Desktop.DesktopTypedCodepoint() }
+        good = Draw(session)
+        if Desktop.WindowTakeCloseRequestHost() { break }
+        if good { Desktop.PauseDesktop() }
+    }
+    good = AppContextRun(*portable, APP_SAVE) && good
+    HostedAppClose(*portable.app)
+    CloseSession(session)
+    Desktop.CloseDesktop()
+    return ifx good then 0 else 1
+}

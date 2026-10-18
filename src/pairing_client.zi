@@ -1,0 +1,408 @@
+// Native pairing session shared by Self hosts. Private keys, relay requests
+// and protected recovery context never cross the portable UI boundary.
+#import "pairing"
+#import "recovery"
+#import "model"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "daochi_client/async_client"
+#import "std/json_scan"
+#import "std/text"
+#import "std/vec"
+#import "std/text_buffer"
+#import "std/net_http"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/timer_linux"
+#import "kryon/http_transfer"
+
+PairingLoad :: #type (context: *void, output: *Recovery) -> bool;
+PairingServer :: #type (context: *void, output: []u8) -> bool;
+pairing_context: *void;
+pairing_load: PairingLoad;
+pairing_server: PairingServer;
+DeviceLinkClock :: () -> float64 { return cast(float64)MonotonicMilliseconds() / 1000.0 }
+PairingStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*device_link_transfer, request, output, 15000)
+}
+PairingPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*device_link_transfer, status) }
+PairingCancel :: (context: *void) { HttpTransferCancel(*device_link_transfer) }
+PairingTransport :: () -> AsyncTransport {
+    return AsyncTransport.{.start = PairingStart, .poll = PairingPoll, .cancel = PairingCancel}
+}
+DeviceLinkStage :: enum {
+    DeviceLinkIdle :: 0
+    // This device shows its code and waits for a phone to scan it.
+    DeviceLinkShowing :: 1
+    // A scanner answered; compare the digits, then send the account.
+    DeviceLinkConfirm :: 2
+    // This device scanned a code and waits for the other device to confirm.
+    DeviceLinkWaiting :: 3
+    // This device scanned a device without an account; send it ours?
+    DeviceLinkAsk :: 4
+    DeviceLinkWorking :: 5
+    DeviceLinkConnected :: 6
+    DeviceLinkFailed :: 7
+    // The account arrived; the screen imports it with the same choices as
+    // importing a key file, then calls DeviceLinkImported.
+    DeviceLinkReceived :: 8
+}
+using DeviceLinkStage;
+
+// Requests to the mailbox, one in flight at a time.
+DEVICE_LINK_PUT_REQUEST :: 1
+DEVICE_LINK_GET_REQUEST :: 2
+DEVICE_LINK_PUT_RESPONSE :: 3
+DEVICE_LINK_GET_RESPONSE :: 4
+DEVICE_LINK_CLOSE :: 5
+// Links expire on the node after ten minutes.
+DEVICE_LINK_LIFETIME :: 590.0
+DEVICE_LINK_POLL :: 1.0
+DEVICE_LINK_LOG_WARNING :: 4
+
+DeviceLinkSession :: struct {
+    stage: DeviceLinkStage
+    shows: bool
+    sends: bool
+    keys: DeviceLinkKeys
+    id: [DEVICE_LINK_ID_HEX + 1]u8
+    other: [DEVICE_LINK_KEY]u8
+    server: [DEVICE_LINK_SERVER_MAX + 1]u8
+    code: [DEVICE_LINK_CODE_MAX + 1]u8
+    confirmation: s32
+    expires_at: float64
+    next_poll: float64
+    error: string
+    request: s32
+    request_active: bool
+    // Close the link once the current request finishes.
+    close_next: bool
+}
+
+device_link: DeviceLinkSession;
+device_link_transfer: HttpTransfer;
+device_link_url: [DEVICE_LINK_SERVER_MAX + 32]u8;
+device_link_body: [DEVICE_LINK_MESSAGE_MAX + 128]u8;
+device_link_output: [DEVICE_LINK_MESSAGE_MAX + 256]u8;
+device_link_pending: DeviceLinkAccount;
+device_link_message_in: [DEVICE_LINK_MESSAGE_MAX]u8;
+
+DeviceLinkActive :: () -> bool {
+    return device_link.stage != cast(DeviceLinkStage)DeviceLinkIdle
+}
+
+DeviceLinkCodeShown :: () -> string {
+    return TextUntilNul(device_link.code[:])
+}
+
+DeviceLinkReset :: () {
+    if device_link.request_active {
+        transport := PairingTransport()
+        transport.cancel(transport.context)
+    }
+    DeviceLinkForget(*device_link.keys)
+    device_link = DeviceLinkSession.{}
+}
+
+DeviceLinkFail :: (error: string) {
+    DeviceLinkForget(*device_link.keys)
+    SecureWipe(*device_link_pending.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*device_link_pending.context[0], device_link_pending.context.count)
+    device_link_pending = DeviceLinkAccount.{}
+    device_link.stage = cast(DeviceLinkStage)DeviceLinkFailed
+    device_link.error = error
+}
+
+DeviceLinkFailAt :: (error: string, step: string, status: s32) {
+    DeviceLinkFail(error)
+}
+
+DeviceLinkServer :: (output: []u8) -> bool {
+    if pairing_server == null { return false }
+    return pairing_server(pairing_context, output)
+}
+
+PairingLoadKeys :: (output: *AccountKeys) -> s32 {
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    if pairing_load == null || !pairing_load(pairing_context, *recovery) { return 0 }
+    output.* = recovery.keys
+    return 1
+}
+
+// Shows a code. With an account here, the scanning device receives it;
+// without one, the scanning device sends its account to this device.
+DeviceLinkShow :: () -> bool {
+    DeviceLinkReset()
+    account: AccountKeys
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    device_link.sends = PairingLoadKeys(*account) != 0
+    device_link.shows = true
+    if !DeviceLinkServer(device_link.server[:]) || !DeviceLinkNewKeys(*device_link.keys) ||
+    !DeviceLinkNewID(device_link.id[:]) {
+        DeviceLinkFail("device_link_failed")
+        return false
+    }
+    text := DeviceLinkCodeText(TextUntilNul(device_link.id[:]), *device_link.keys, device_link.sends,
+        TextUntilNul(device_link.server[:]))
+    defer { SelfFree(text) }
+    if text.count == 0 || text.count > DEVICE_LINK_CODE_MAX {
+        DeviceLinkFail("device_link_failed")
+        return false
+    }
+    unused CopyCString(text, device_link.code[:])
+    device_link.stage = cast(DeviceLinkStage)DeviceLinkShowing
+    device_link.expires_at = DeviceLinkClock() + DEVICE_LINK_LIFETIME
+    device_link.next_poll = DeviceLinkClock()
+    return true
+}
+
+// Starts from a scanned code.
+DeviceLinkScan :: (text: string) -> bool {
+    DeviceLinkReset()
+    code := DeviceLinkParse(text)
+    if !code.valid {
+        DeviceLinkFail("device_link_not_a_code")
+        return false
+    }
+    device_link.shows = false
+    device_link.sends = code.sends
+    for byte, index: code.id { device_link.id[index] = byte }
+    for byte, index: code.public { device_link.other[index] = byte }
+    for byte, index: code.server { device_link.server[index] = byte }
+    if !DeviceLinkNewKeys(*device_link.keys) {
+        DeviceLinkFail("device_link_failed")
+        return false
+    }
+    device_link.expires_at = DeviceLinkClock() + DEVICE_LINK_LIFETIME
+    if code.sends {
+        // The other device holds the account: send our key and show the
+        // digits it must match before it sends anything.
+        device_link.confirmation = DeviceLinkConfirmation(*device_link.other[0], *device_link.keys.public[0])
+        device_link.stage = cast(DeviceLinkStage)DeviceLinkWaiting
+        DeviceLinkSend(DEVICE_LINK_PUT_REQUEST)
+        return true
+    }
+    account: AccountKeys
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    if PairingLoadKeys(*account) == 0 {
+        DeviceLinkFail("device_link_no_account")
+        return false
+    }
+    device_link.stage = cast(DeviceLinkStage)DeviceLinkAsk
+    return true
+}
+
+// The person confirmed on this device: send the account.
+DeviceLinkAccept :: () {
+    stage := device_link.stage
+    if stage != cast(DeviceLinkStage)DeviceLinkConfirm && stage != cast(DeviceLinkStage)DeviceLinkAsk {
+        return
+    }
+    device_link.stage = cast(DeviceLinkStage)DeviceLinkWorking
+    DeviceLinkSend(DEVICE_LINK_PUT_RESPONSE)
+}
+
+DeviceLinkCancel :: () {
+    open := device_link.stage != cast(DeviceLinkStage)DeviceLinkIdle && device_link.id[0] != cast(u8)0 &&
+    device_link.stage != cast(DeviceLinkStage)DeviceLinkConnected
+    id := device_link.id
+    server := device_link.server
+    DeviceLinkReset()
+    if open {
+        // Let the other device stop waiting. The idle session still
+        // finishes this one request.
+        device_link.id = id
+        device_link.server = server
+        DeviceLinkSend(DEVICE_LINK_CLOSE)
+    }
+}
+
+DeviceLinkSend :: (request: s32) {
+    if device_link.request_active {
+        return
+    }
+    id := TextUntilNul(device_link.id[:])
+    out: Vec(u8)
+    path := "/api/v1/link/get"
+    if request == DEVICE_LINK_PUT_REQUEST {
+        public: [DEVICE_LINK_KEY * 2 + 1]u8
+        unused BytesToHex(*device_link.keys.public[0], DEVICE_LINK_KEY, *public[0], public.count)
+        BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"request\",\"data\":\"%\"}", id, TextUntilNul(public[:]))
+        path = "/api/v1/link/put"
+    } else if request == DEVICE_LINK_PUT_RESPONSE {
+        recovery: Recovery
+        defer { RecoveryClear(*recovery) }
+        if pairing_load == null || !pairing_load(pairing_context, *recovery) {
+            DeviceLinkFail("device_link_no_account")
+            return
+        }
+        server: [DEVICE_LINK_SERVER_MAX + 1]u8
+        unused DeviceLinkServer(server[:])
+        sealed := DeviceLinkSeal(*recovery.keys, TextUntilNul(server[:]), id, *device_link.keys,
+            *device_link.other[0], device_link.shows, TextUntilNul(recovery.context[:]))
+        defer { SelfFree(sealed) }
+        if sealed.count == 0 {
+            DeviceLinkFail("device_link_failed")
+            return
+        }
+        BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"response\",\"data\":\"%\"}", id, sealed)
+        path = "/api/v1/link/put"
+    } else if request == DEVICE_LINK_CLOSE {
+        BuilderPrint(*out, "{\"id\":\"%\"}", id)
+        path = "/api/v1/link/close"
+    } else {
+        slot := ifx request == DEVICE_LINK_GET_REQUEST then "request" else "response"
+        BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"%\"}", id, slot)
+    }
+    body := BuilderFinish(out)
+    defer { SelfFree(body) }
+    url: Vec(u8)
+    BuilderPrint(*url, "%", TextUntilNul(device_link.server[:]))
+    BuilderPrint(*url, "%", path)
+    address := BuilderFinish(url)
+    defer { SelfFree(address) }
+    if body.count >= device_link_body.count || address.count >= device_link_url.count {
+        DeviceLinkFail("device_link_failed")
+        return
+    }
+    unused CopyCString(body, device_link_body[:])
+    device_link_body[body.count] = cast(u8)0
+    unused CopyCString(address, device_link_url[:])
+    device_link_url[address.count] = cast(u8)0
+    transport := PairingTransport()
+    started := transport.start(transport.context, HttpRequest.{.method = "POST",
+            .url = TextUntilNul(device_link_url[:]), .content_type = "application/json",
+            .accept = "application/json", .body = TextUntilNul(device_link_body[:])},
+        device_link_output[:])
+    if !started {
+        if request != DEVICE_LINK_CLOSE { DeviceLinkFail("device_link_offline") }
+        return
+    }
+    device_link.request = request
+    device_link.request_active = true
+}
+
+// Handles a finished request. status is the HTTP status, 0 for no response.
+DeviceLinkFinished :: (status: s32) {
+    request := device_link.request
+    response := TextUntilNul(device_link_output[:])
+    polling := request == DEVICE_LINK_GET_REQUEST || request == DEVICE_LINK_GET_RESPONSE
+    // A poll that gets no answer, or reaches a node that is restarting or
+    // busy (5xx, 429), is retried until the link expires.
+    if polling && (status == 0 || status == 429 || status >= 500) {
+        return
+    }
+    if status == 0 {
+        DeviceLinkFailAt("device_link_offline", "no response", status)
+        return
+    }
+    if request == DEVICE_LINK_PUT_REQUEST {
+        if status != 200 { DeviceLinkFailAt("device_link_failed", "sending the key", status) }
+        return
+    }
+    if request == DEVICE_LINK_PUT_RESPONSE {
+        if status != 200 {
+            DeviceLinkFailAt("device_link_failed", "sending the account", status)
+            return
+        }
+        // Both devices now hold the account; the receiver closes the link.
+        DeviceLinkForget(*device_link.keys)
+        device_link.stage = cast(DeviceLinkStage)DeviceLinkConnected
+        return
+    }
+    if request == DEVICE_LINK_CLOSE || status == 404 {
+        return
+    }
+    if status != 200 {
+        DeviceLinkFailAt("device_link_failed", "polling", status)
+        return
+    }
+    length := ReadStringText(response, FieldAt(response, 0, "data"), device_link_message_in[:])
+    if length < 0 || length >= device_link_message_in.count {
+        DeviceLinkFail("device_link_failed")
+        return
+    }
+    message := TextFromBytes(device_link_message_in[:length])
+    if request == DEVICE_LINK_GET_REQUEST {
+        // The scanner's key: compare digits before sending the account.
+        if length != DEVICE_LINK_KEY * 2 || HexToBytes(message, *device_link.other[0], DEVICE_LINK_KEY) == 0 {
+            DeviceLinkFailAt("device_link_failed", "reading the key", status)
+            return
+        }
+        device_link.confirmation = DeviceLinkConfirmation(*device_link.keys.public[0], *device_link.other[0])
+        device_link.stage = cast(DeviceLinkStage)DeviceLinkConfirm
+        return
+    }
+    // The sealed account. A scanner accepts only the key from the code.
+    expected: *u8 = null
+    if !device_link.shows { expected = *device_link.other[0] }
+    device_link_pending = DeviceLinkOpen(message, TextUntilNul(device_link.id[:]), *device_link.keys,
+        device_link.shows, expected)
+    DeviceLinkForget(*device_link.keys)
+    if !device_link_pending.valid {
+        DeviceLinkFailAt("device_link_failed", "opening the account", status)
+        return
+    }
+    device_link.stage = cast(DeviceLinkStage)DeviceLinkReceived
+    device_link.close_next = true
+}
+
+// The received account for the screen to import.
+DeviceLinkAccountReceived :: () -> *AccountKeys {
+    if device_link.stage != cast(DeviceLinkStage)DeviceLinkReceived || !device_link_pending.valid {
+        return null
+    }
+    return *device_link_pending.account
+}
+
+DeviceLinkImported :: () {
+    SecureWipe(*device_link_pending.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*device_link_pending.context[0], device_link_pending.context.count)
+    device_link_pending = DeviceLinkAccount.{}
+    if device_link.stage == cast(DeviceLinkStage)DeviceLinkReceived {
+        device_link.stage = cast(DeviceLinkStage)DeviceLinkConnected
+    }
+}
+
+// Advances the session; call once a frame while it is active.
+DeviceLinkPump :: () {
+    if device_link.request_active {
+        transport := PairingTransport()
+        status: s32 = 0
+        state := transport.poll(transport.context, *status)
+        if state < 0 {
+            return
+        }
+        device_link.request_active = false
+        if device_link.stage != cast(DeviceLinkStage)DeviceLinkIdle {
+            DeviceLinkFinished(ifx state == 0 then 0 else status)
+        }
+        return
+    }
+    if device_link.close_next {
+        device_link.close_next = false
+        DeviceLinkSend(DEVICE_LINK_CLOSE)
+        return
+    }
+    stage := device_link.stage
+    waiting := stage == cast(DeviceLinkStage)DeviceLinkShowing || stage == cast(DeviceLinkStage)DeviceLinkWaiting
+    if !waiting {
+        return
+    }
+    now := DeviceLinkClock()
+    if now > device_link.expires_at {
+        DeviceLinkFail("device_link_expired")
+        return
+    }
+    if now < device_link.next_poll {
+        return
+    }
+    device_link.next_poll = now + DEVICE_LINK_POLL
+    if stage == cast(DeviceLinkStage)DeviceLinkShowing && device_link.sends {
+        DeviceLinkSend(DEVICE_LINK_GET_REQUEST)
+    } else {
+        DeviceLinkSend(DEVICE_LINK_GET_RESPONSE)
+    }
+}
+

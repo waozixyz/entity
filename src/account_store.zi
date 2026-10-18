@@ -1,0 +1,207 @@
+// Standalone Self keeps its own private account key. Common preferences are
+// shared only through the verified account's public profile directory.
+#import "model"
+#import "management"
+#import "native_management"
+#import "native_files"
+#import "recovery"
+#import "pairing"
+#import "pairing_client"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "daochi_client/client"
+Auth :: #import "daochi_client/auth";
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/byte_text_linux"
+#import "std/file"
+
+account_profile: SelfState;
+account_recovery: Recovery;
+account_provider: ManagementProvider;
+account_alias: [40]u8;
+account_pairing_delivered: bool;
+account_standalone_ready: bool;
+
+AccountStorePath :: (name: string, output: []u8) -> string {
+    root: [4096]u8
+    return NativeJoin(output, NativeRoot(root[:]), name)
+}
+AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    path: [4096]u8
+    return RecoveryEncode(recovery, "", text[:]) && NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:]))
+}
+AccountStoreSaveProfile :: (state: SelfState) -> bool {
+    if TextUntilNul(state.owner_id[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { return false }
+    document := SelfEncode(state)
+    defer { SelfFree(document) }
+    path: [4096]u8
+    if !NativeWrite(AccountStorePath("self.json", path[:]), document) { return false }
+    if !SharedProfileSave(TextUntilNul(state.owner_id[:]), state) { return false }
+    account_profile = state
+    return true
+}
+AccountStoreAliasPath :: (output: []u8) -> string {
+    owner := TextUntilNul(account_recovery.keys.public_id[:])
+    if !NativeAccountId(owner) { return "" }
+    name: Vec(u8)
+    BuilderPrint(*name, "alias.%.txt", owner)
+    filename := BuilderFinish(name)
+    defer { SelfFree(filename) }
+    return AccountStorePath(filename, output)
+}
+AccountStoreReadAlias :: () {
+    account_alias = .{}
+    path: [4096]u8
+    text: [40]u8
+    if NativeRead(AccountStoreAliasPath(path[:]), text[:]) > 0 && ProviderAliasValid(TextUntilNul(text[:])) { account_alias = text }
+}
+AccountStoreLoad :: (context: *void, output: *Recovery) -> bool {
+    if !account_standalone_ready { return false }
+    output.* = account_recovery
+    return true
+}
+AccountStoreServer :: (context: *void, output: []u8) -> bool {
+    return CopyCString(TextUntilNul(account_profile.nodes[account_profile.preferred][:]), output)
+}
+AccountStoreSnapshot :: (context: *void, output: *Management) {
+    output.available = true
+    output.account = account_standalone_ready
+    output.public_id = account_recovery.keys.public_id
+    output.alias = account_alias
+    output.capabilities = ACCOUNT_CREATE | ACCOUNT_IMPORT | ACCOUNT_SWITCH | ACCOUNT_LINK
+    if account_standalone_ready { output.capabilities |= ACCOUNT_BACKUP | ACCOUNT_ALIAS | ACCOUNT_LOGOUT | ACCOUNT_CLEAR_REMOTE }
+    output.node_count = account_profile.node_count
+    for index: 0..output.node_count - 1 {
+        output.nodes[index].address = account_profile.nodes[index]
+        // Standalone Self shares public preferences locally; it does not
+        // claim a sync connection or storage quota it has not fetched.
+        output.nodes[index].active = false
+    }
+    unused CopyCString(ifx account_standalone_ready then "Account connected on this device" else "Connect an account to share your profile", output.status[:])
+    output.link_stage = cast(s32)device_link.stage
+    unused CopyCString(DeviceLinkCodeShown(), output.link_code[:])
+    if output.link_stage == 2 || output.link_stage == 3 {
+        digits: Vec(u8)
+        BuilderPrint(*digits, "Compare this number on both devices: %", device_link.confirmation)
+        message := BuilderFinish(digits)
+        unused CopyCString(message, output.link_message[:])
+        SelfFree(message)
+    } else if output.link_stage == 4 {
+        unused CopyCString("Send this device your account key?", output.link_message[:])
+    } else if output.link_stage == 7 {
+        unused CopyCString("The connection could not finish. Start a new code to try again.", output.link_message[:])
+    }
+}
+AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
+    id := TextUntilNul(recovery.keys.public_id[:])
+    same := id == TextUntilNul(account_recovery.keys.public_id[:])
+    local_data := account_profile.name[0] != cast(u8)0 || account_profile.intention[0] != cast(u8)0
+    if !same && local_data && choice == 0 { return 2 }
+    previous := account_recovery
+    defer { RecoveryClear(*previous) }
+    next := SelfDefault()
+    if same || choice == 1 { next = account_profile }
+    unused CopyCString(id, next.owner_id[:])
+    unused SharedProfileLoad(id, *next)
+    candidate := recovery.*
+    defer { RecoveryClear(*candidate) }
+    if same && candidate.context[0] == cast(u8)0 { candidate.context = account_recovery.context }
+    if !AccountStoreSaveKey(*candidate) { return 0 }
+    account_recovery = candidate
+    if !AccountStoreSaveProfile(next) {
+        account_recovery = previous
+        if previous.keys.public_id[0] != cast(u8)0 { unused AccountStoreSaveKey(*previous) }
+        else { path: [4096]u8; unused RemoveFile(AccountStorePath("account.key", path[:])) }
+        return 0
+    }
+    account_standalone_ready = true
+    AccountStoreReadAlias()
+    return 1
+}
+AccountStoreDigest :: (body: string, output: []u8) -> bool {
+    if output.count < 65 { return false }
+    descriptor := cast(*TextDescriptor)(*body)
+    Sha256Hex(descriptor.data, body.count, *output[0])
+    return true
+}
+AccountStoreClient :: (context: *void, output: *Client) -> bool {
+    if !account_standalone_ready { return false }
+    output.server_url = TextUntilNul(account_profile.nodes[account_profile.preferred][:])
+    output.app_id = "self"
+    output.identity = Auth.Identity.{.account_id = TextUntilNul(account_recovery.keys.public_id[:]),
+        .public_key = TextUntilNul(account_recovery.keys.public_key_hex[:]), .client_id = "self",
+        .signing_context = cast(*void)*account_recovery.keys}
+    output.digest = AccountStoreDigest
+    output.signer = SignAccountMessage
+    return true
+}
+AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
+    operation := TextUntilNul(request.operation[:])
+    if operation == "logout" || operation == "remote_cleared" {
+        path: [4096]u8
+        address := AccountStorePath("account.key", path[:])
+        if PathExists(address) && !RemoveFile(address) { return 0 }
+        DeviceLinkCancel()
+        RecoveryClear(*account_recovery)
+        account_standalone_ready = false
+        account_alias = .{}
+        account_profile.owner_id = .{}
+        return ifx AccountStoreSaveProfile(account_profile) then 1 else 0
+    }
+    if operation == "alias_saved" {
+        path: [4096]u8
+        alias := TextUntilNul(request.value[:])
+        if !ProviderAliasValid(alias) || !NativeWrite(AccountStoreAliasPath(path[:]), alias) { return 0 }
+        unused CopyCString(alias, account_alias[:])
+        return 1
+    }
+    if operation == "link_show" { account_pairing_delivered = false; return ifx DeviceLinkShow() then 1 else 0 }
+    if operation == "link_join" { account_pairing_delivered = false; return ifx DeviceLinkScan(TextUntilNul(request.value[:])) then 1 else 0 }
+    if operation == "link_confirm" { DeviceLinkAccept(); return 1 }
+    if operation == "link_cancel" { DeviceLinkCancel(); return 1 }
+    return 0
+}
+AccountStoreStart :: () -> bool {
+    root: [4096]u8
+    if !NativeDirectory(NativeRoot(root[:])) { return false }
+    account_profile = SelfDefault()
+    path: [4096]u8
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if NativeRead(AccountStorePath("account.key", path[:]), text[:]) > 0 {
+        if !RecoveryDecode(TextUntilNul(text[:]), "", *account_recovery) { return false }
+        account_standalone_ready = true
+    }
+    if NativeRead(AccountStorePath("self.json", path[:]), text[:]) > 0 {
+        loaded: SelfState
+        if !SelfDecode(TextUntilNul(text[:]), *loaded) { return false }
+        if TextUntilNul(loaded.owner_id[:]) == TextUntilNul(account_recovery.keys.public_id[:]) { account_profile = loaded }
+    }
+    unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])
+    unused SharedProfileLoad(TextUntilNul(account_recovery.keys.public_id[:]), *account_profile)
+    account_provider = ManagementProvider.{.snapshot = AccountStoreSnapshot, .load = AccountStoreLoad,
+        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient}
+    AccountStoreReadAlias()
+    pairing_load = AccountStoreLoad
+    pairing_server = AccountStoreServer
+    return true
+}
+AccountStorePump :: () {
+    ProviderPump(*account_provider)
+    DeviceLinkPump()
+    if cast(s32)device_link.stage == 8 && !account_pairing_delivered {
+        account_provider.incoming.keys = device_link_pending.account
+        account_provider.incoming.context = device_link_pending.context
+        account_provider.incoming_owner = account_recovery.keys.public_id
+        account_provider.has_incoming = true
+        account_pairing_delivered = true
+        // Completion is attached to the originating pairing intent, and a
+        // new identity still requires the same merge/replace choice.
+        ProviderApplyIncoming(*account_provider, 0)
+        DeviceLinkImported()
+    }
+}

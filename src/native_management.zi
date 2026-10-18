@@ -1,0 +1,271 @@
+// One account workflow for native Self providers. The UI sends bounded
+// intentions; this module owns staged recovery, file access and completion.
+#import "management"
+#import "model"
+#import "recovery"
+#import "native_files"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/date_time_linux"
+#import "std/net_http"
+#import "daochi_client/keys"
+#import "daochi_client/client"
+Auth :: #import "daochi_client/auth";
+#import "daochi_client/async_client"
+#import "daochi_client/async_account"
+#import "daochi_client/social"
+#import "kryon/http_transfer"
+
+ProviderSnapshot :: #type (context: *void, output: *Management) -> void;
+ProviderLoad :: #type (context: *void, output: *Recovery) -> bool;
+// 0 failed, 1 applied, 2 requires the person's merge/replace decision.
+ProviderApply :: #type (context: *void, value: *Recovery, choice: s32) -> s32;
+ProviderAction :: #type (context: *void, request: *ManagementRequest) -> s32;
+ProviderClient :: #type (context: *void, output: *Client) -> bool;
+ProviderFile :: #type (context: *void, save: bool, output: []u8) -> s32;
+ProviderDeliver :: #type (context: *void, path: string) -> bool;
+
+ManagementProvider :: struct {
+    context: *void
+    snapshot: ProviderSnapshot
+    load: ProviderLoad
+    apply: ProviderApply
+    action: ProviderAction
+    client: ProviderClient
+    choose_file: ProviderFile
+    deliver_file: ProviderDeliver
+    queue: ManagementQueue
+    incoming: Recovery
+    has_incoming: bool
+    incoming_owner: [65]u8
+    document: string
+    transfer: HttpTransfer
+    pending_request: PendingRequest
+    pending_deletion: PendingDeletion
+    session: Auth.Session
+    response: [4096]u8
+    request_body: [512]u8
+    request_node: [512]u8
+    network_operation: s32
+    asynchronous: bool
+    delegated: bool
+}
+
+ProviderState :: (provider: *ManagementProvider) -> Management {
+    state: Management
+    if provider.snapshot != null { provider.snapshot(provider.context, *state) }
+    state.busy = state.busy || provider.asynchronous
+    if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
+    ManagementApplyQueue(*state, *provider.queue)
+    return state
+}
+
+ProviderRefresh :: (provider: *ManagementProvider) {
+    SelfFree(provider.document)
+    provider.document = ManagementEncode(ProviderState(provider))
+}
+
+ProviderOwnerMatches :: (provider: *ManagementProvider, request: *ManagementRequest) -> bool {
+    state := ProviderState(provider)
+    return TextUntilNul(state.public_id[:]) == TextUntilNul(request.owner_id[:])
+}
+
+ProviderEnqueue :: (provider: *ManagementProvider, text: string) -> bool {
+    request: ManagementRequest
+    if !ManagementRequestDecode(text, *request) || !ProviderOwnerMatches(provider, *request) { return false }
+    state := ProviderState(provider)
+    return ManagementEnqueue(*provider.queue, text, state.capabilities)
+}
+
+ProviderFinish :: (provider: *ManagementProvider, result: string, message: string) {
+    provider.delegated = false
+    ManagementFinish(*provider.queue, result, message)
+}
+
+ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
+    if !provider.has_incoming || provider.apply == null { ProviderFinish(provider, "error", "No account is ready to import"); return }
+    state := ProviderState(provider)
+    if TextUntilNul(provider.incoming_owner[:]) != TextUntilNul(state.public_id[:]) {
+        RecoveryClear(*provider.incoming)
+        provider.has_incoming = false
+        ProviderFinish(provider, "error", "The account changed; import the key again")
+        return
+    }
+    result := provider.apply(provider.context, *provider.incoming, choice)
+    if result == 2 { ProviderFinish(provider, "switch", "Choose what to do with the local records"); return }
+    if result != 1 { ProviderFinish(provider, "error", "Could not save the account"); return }
+    RecoveryClear(*provider.incoming)
+    provider.has_incoming = false
+    ProviderFinish(provider, "ok", "Account connected")
+}
+
+ProviderSelectFile :: (provider: *ManagementProvider, save: bool, output: []u8) -> s32 {
+    if provider.choose_file != null { return provider.choose_file(provider.context, save, output) }
+    return NativeChooseFile(save, output)
+}
+
+ProviderImport :: (provider: *ManagementProvider, passphrase: string) {
+    path: [4096]u8
+    chosen := ProviderSelectFile(provider, false, path[:])
+    if chosen == 0 { ProviderFinish(provider, "cancelled", "Import cancelled"); return }
+    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the key file chooser"); return }
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if NativeRead(TextUntilNul(path[:]), text[:]) <= 0 { ProviderFinish(provider, "error", "Could not read the account key"); return }
+    incoming: Recovery
+    defer { RecoveryClear(*incoming) }
+    if !RecoveryDecode(TextUntilNul(text[:]), passphrase, *incoming) {
+        ProviderFinish(provider, "error", "The account key or passphrase is not valid")
+        return
+    }
+    RecoveryClear(*provider.incoming)
+    provider.incoming = incoming
+    provider.has_incoming = true
+    state := ProviderState(provider)
+    provider.incoming_owner = state.public_id
+    ProviderApplyIncoming(provider, 0)
+}
+
+ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    if provider.load == null || !provider.load(provider.context, *recovery) {
+        ProviderFinish(provider, "error", "No account key is available on this device")
+        return
+    }
+    path: [4096]u8
+    chosen := ProviderSelectFile(provider, true, path[:])
+    if chosen == 0 { ProviderFinish(provider, "cancelled", "Backup cancelled"); return }
+    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the backup chooser"); return }
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if !RecoveryEncode(*recovery, passphrase, text[:]) || !NativeWrite(TextUntilNul(path[:]), TextUntilNul(text[:])) {
+        ProviderFinish(provider, "error", "Could not save the account key backup")
+        return
+    }
+    if provider.deliver_file != null && !provider.deliver_file(provider.context, TextUntilNul(path[:])) {
+        ProviderFinish(provider, "error", "Could not deliver the account key backup")
+        return
+    }
+    ProviderFinish(provider, "ok", "Account key backup saved")
+}
+
+ProviderStartTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    provider := cast(*ManagementProvider)context
+    return HttpTransferStart(*provider.transfer, request, output, 15000)
+}
+
+ProviderPollTransfer :: (context: *void, status: *s32) -> s32 {
+    provider := cast(*ManagementProvider)context
+    return HttpTransferPoll(*provider.transfer, status)
+}
+
+ProviderCancelTransfer :: (context: *void) {
+    provider := cast(*ManagementProvider)context
+    HttpTransferCancel(*provider.transfer)
+}
+
+ProviderTransport :: (provider: *ManagementProvider) -> AsyncTransport {
+    return AsyncTransport.{.context = cast(*void)provider, .start = ProviderStartTransfer,
+        .poll = ProviderPollTransfer, .cancel = ProviderCancelTransfer}
+}
+
+ProviderAliasValid :: (alias: string) -> bool {
+    if alias.count < 4 || alias.count > 32 { return false }
+    for byte: alias {
+        if !((byte >= cast(u8)97 && byte <= cast(u8)122) || (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)95) { return false }
+    }
+    return true
+}
+
+ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) { ProviderFinish(provider, "error", "The account is unavailable"); return }
+    if !CopyCString(client.server_url, provider.request_node[:]) { ProviderFinish(provider, "error", "The node address is not valid"); return }
+    // Requests retain their original endpoint even if another window changes
+    // the preferred node while a challenge/login is in progress.
+    client.server_url = TextUntilNul(provider.request_node[:])
+    started := false
+    if deleting {
+        provider.network_operation = 2
+        started = BeginDeletion(*provider.pending_deletion, client, ProviderTransport(provider))
+    } else {
+        alias_buffer: [1024]u8
+        for index: 0..alias_buffer.count - 1 { alias_buffer[index] = provider.queue.request.value[index] }
+        alias := TextUntilNul(alias_buffer[:])
+        if !ProviderAliasValid(alias) || !BuildAliasBody(client.identity.account_id, alias, provider.request_body[:]) {
+            ProviderFinish(provider, "error", "Use 4–32 lowercase letters, numbers or underscores")
+            return
+        }
+        provider.network_operation = 1
+        extra_headers: [0]HttpHeader
+        started = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+            ProviderTransport(provider), "POST", "/api/v1/account/alias", TextUntilNul(provider.request_body[:]), provider.response[:], extra_headers[:])
+    }
+    provider.asynchronous = started
+    if !started { ProviderFinish(provider, "error", "Could not start the account request") }
+}
+
+ProviderPump :: (provider: *ManagementProvider) {
+    if !provider.queue.pending { return }
+    if !ProviderOwnerMatches(provider, *provider.queue.request) {
+        if provider.asynchronous { ProviderCancelTransfer(cast(*void)provider) }
+        provider.asynchronous = false
+        ProviderFinish(provider, "error", "The account changed; open its current profile again")
+        return
+    }
+    if provider.delegated { return }
+    if provider.asynchronous {
+        finished := ifx provider.network_operation == 2 then PollDeletion(*provider.pending_deletion) else PollRequest(*provider.pending_request)
+        if !finished { return }
+        succeeded := ifx provider.network_operation == 2 then provider.pending_deletion.result == Auth.AuthResult.AUTH_OK else provider.pending_request.result == Auth.AuthResult.AUTH_OK
+        provider.asynchronous = false
+        if !succeeded { ProviderFinish(provider, "error", "The node could not complete the account request"); return }
+        current: Client
+        if provider.client == null || !provider.client(provider.context, *current) || current.server_url != TextUntilNul(provider.request_node[:]) {
+            ProviderFinish(provider, "error", "The original node completed the request; the current node changed")
+            return
+        }
+        request := provider.queue.request
+        unused CopyCString(ifx provider.network_operation == 2 then "remote_cleared" else "alias_saved", request.operation[:])
+        if provider.action == null || provider.action(provider.context, *request) != 1 {
+            ProviderFinish(provider, "error", "The node updated the account, but its local state could not be saved")
+            return
+        }
+        ProviderFinish(provider, "ok", ifx provider.network_operation == 2 then "Remote account data cleared" else "Account alias saved")
+        return
+    }
+    operation_buffer: [32]u8
+    for index: 0..operation_buffer.count - 1 { operation_buffer[index] = provider.queue.request.operation[index] }
+    operation := TextUntilNul(operation_buffer[:])
+    if operation == "create" {
+        RecoveryClear(*provider.incoming)
+        provider.has_incoming = CreateAccountKeys(*provider.incoming.keys) != 0
+        state := ProviderState(provider)
+        provider.incoming_owner = state.public_id
+        ProviderApplyIncoming(provider, 0)
+    } else if operation == "import" {
+        passphrase: [1024]u8
+        for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
+        ProviderImport(provider, TextUntilNul(passphrase[:]))
+        SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "backup" {
+        passphrase: [1024]u8
+        for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
+        ProviderBackup(provider, TextUntilNul(passphrase[:]))
+        SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "switch_apply" {
+        ProviderApplyIncoming(provider, provider.queue.request.choice)
+    } else if operation == "switch_cancel" {
+        RecoveryClear(*provider.incoming)
+        provider.has_incoming = false
+        ProviderFinish(provider, "cancelled", "Account switch cancelled")
+    } else if operation == "alias" || operation == "clear_remote" {
+        ProviderStartNetwork(provider, operation == "clear_remote")
+    } else {
+        result := ifx provider.action == null then 0 else provider.action(provider.context, *provider.queue.request)
+        if result == 1 { ProviderFinish(provider, "ok", "") }
+        else if result == 2 { provider.delegated = true; return }
+        else { ProviderFinish(provider, "error", "Could not complete this action") }
+    }
+}

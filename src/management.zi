@@ -1,0 +1,260 @@
+// Public management state and requests. Private keys and file paths never
+// appear in snapshots; native providers own operations and their results.
+#import "model"
+#import "node_url"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+Json :: #import "std/json_scan";
+
+ACCOUNT_CREATE :: 1
+ACCOUNT_IMPORT :: 2
+ACCOUNT_BACKUP :: 4
+ACCOUNT_ALIAS :: 8
+ACCOUNT_SYNC :: 16
+ACCOUNT_LINK :: 32
+ACCOUNT_SCAN :: 64
+ACCOUNT_LOGOUT :: 128
+ACCOUNT_CLEAR_REMOTE :: 256
+ACCOUNT_SWITCH :: 512
+NODE_MEDIA :: 1024
+
+ManagementNode :: struct {
+    address: [256]u8
+    label: [128]u8
+    active: bool
+    known: bool
+    used: s64
+    limit: s64
+    full: bool
+    media_supported: bool
+    media: bool
+}
+
+Management :: struct {
+    available: bool
+    account: bool
+    busy: bool
+    enabled: bool
+    capabilities: s32
+    sequence: s32
+    completed: s32
+    result: [32]u8
+    message: [256]u8
+    public_id: [65]u8
+    alias: [40]u8
+    status: [256]u8
+    queued: s32
+    link_stage: s32
+    link_code: [1024]u8
+    link_message: [256]u8
+    candidate_id: [65]u8
+    nodes: [SELF_NODE_LIMIT]ManagementNode
+    node_count: s32
+}
+
+ManagementRequest :: struct {
+    sequence: s32
+    owner_id: [65]u8
+    operation: [32]u8
+    target: [256]u8
+    value: [1024]u8
+    choice: s32
+}
+
+ManagementQueue :: struct {
+    pending: bool
+    request: ManagementRequest
+    sequence: s32
+    completed: s32
+    result: [32]u8
+    message: [256]u8
+}
+
+ManagementOperation :: (operation: string) -> s32 {
+    if operation == "create" { return ACCOUNT_CREATE }
+    if operation == "import" { return ACCOUNT_IMPORT }
+    if operation == "backup" { return ACCOUNT_BACKUP }
+    if operation == "alias" { return ACCOUNT_ALIAS }
+    if operation == "sync" || operation == "set_sync" { return ACCOUNT_SYNC }
+    if operation == "link_show" || operation == "link_join" ||
+    operation == "link_confirm" || operation == "link_cancel" { return ACCOUNT_LINK }
+    if operation == "link_scan" { return ACCOUNT_SCAN }
+    if operation == "logout" { return ACCOUNT_LOGOUT }
+    if operation == "clear_remote" { return ACCOUNT_CLEAR_REMOTE }
+    if operation == "switch_apply" || operation == "switch_cancel" { return ACCOUNT_SWITCH }
+    if operation == "media" { return NODE_MEDIA }
+    return 0
+}
+
+ManagementRequestEncode :: (request: ManagementRequest) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"sequence\":%,\"operation\":", request.sequence)
+    SelfQuote(*out, TextUntilNul(request.operation[:]))
+    BuilderPrint(*out, ",\"owner_id\":")
+    SelfQuote(*out, TextUntilNul(request.owner_id[:]))
+    BuilderPrint(*out, ",\"target\":")
+    SelfQuote(*out, TextUntilNul(request.target[:]))
+    BuilderPrint(*out, ",\"value\":")
+    SelfQuote(*out, TextUntilNul(request.value[:]))
+    BuilderPrint(*out, ",\"choice\":%}", request.choice)
+    return BuilderFinish(out)
+}
+
+ManagementRequestDecode :: (text: string, output: *ManagementRequest) -> bool {
+    if text.count == 0 || text.count > 4096 { return false }
+    end := Json.ValueEnd(text, Json.Space(text, 0), 0)
+    if end < 0 || Json.Space(text, end) != text.count { return false }
+    keys: [6]string = .["version", "sequence", "operation", "target", "value", "choice"]
+    at: [6]s32
+    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || SelfNumber(text, at[0], 1, 1) != 1 { return false }
+    request: ManagementRequest
+    request.sequence = SelfNumber(text, at[1], 1, 2147483646)
+    request.choice = SelfNumber(text, at[5], 0, 2)
+    if request.sequence < 1 || request.choice < 0 ||
+    Json.ReadStringText(text, at[2], request.operation[:]) <= 0 ||
+    Json.ReadStringText(text, at[3], request.target[:]) < 0 ||
+    Json.ReadStringText(text, at[4], request.value[:]) < 0 ||
+    ManagementOperation(TextUntilNul(request.operation[:])) == 0 { return false }
+    if Json.ReadStringText(text, Json.FieldAt(text, 0, "owner_id"), request.owner_id[:]) < 0 { return false }
+    output.* = request
+    return true
+}
+
+// The host calls this during the VM run, then executes the copied request
+// after return. An accepted request is never executed twice.
+ManagementEnqueue :: (queue: *ManagementQueue, text: string, capabilities: s32) -> bool {
+    request: ManagementRequest
+    if !ManagementRequestDecode(text, *request) { return false }
+    operation := TextUntilNul(request.operation[:])
+    if (ManagementOperation(operation) & capabilities) == 0 { return false }
+    if request.sequence == queue.sequence {
+        return TextUntilNul(request.operation[:]) == TextUntilNul(queue.request.operation[:]) &&
+        TextUntilNul(request.owner_id[:]) == TextUntilNul(queue.request.owner_id[:]) &&
+        TextUntilNul(request.target[:]) == TextUntilNul(queue.request.target[:]) &&
+        TextUntilNul(request.value[:]) == TextUntilNul(queue.request.value[:]) && request.choice == queue.request.choice
+    }
+    if queue.pending || queue.sequence >= 2147483646 || request.sequence != queue.sequence + 1 { return false }
+    queue.request = request
+    queue.sequence = request.sequence
+    queue.pending = true
+    unused CopyCString("queued", queue.result[:])
+    queue.message[0] = cast(u8)0
+    return true
+}
+
+ManagementFinish :: (queue: *ManagementQueue, result: string, message: string) {
+    queue.pending = false
+    queue.completed = queue.sequence
+    unused CopyCString(result, queue.result[:])
+    unused CopyCString(message, queue.message[:])
+    // Transient passphrases do not remain in the provider's request cache.
+    for index: 0..queue.request.value.count - 1 { queue.request.value[index] = cast(u8)0 }
+}
+
+ManagementApplyQueue :: (state: *Management, queue: *ManagementQueue) {
+    state.sequence = queue.sequence
+    state.completed = queue.completed
+    state.result = queue.result
+    state.message = queue.message
+}
+
+ManagementEncode :: (state: Management) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"available\":%,\"account\":%,\"busy\":%,\"enabled\":%,\"capabilities\":%,\"sequence\":%,\"completed\":%,\"queued\":%,\"link_stage\":%",
+        ifx state.available then 1 else 0, ifx state.account then 1 else 0,
+        ifx state.busy then 1 else 0, ifx state.enabled then 1 else 0,
+        state.capabilities, state.sequence, state.completed, state.queued, state.link_stage)
+    strings: [8]string = .[TextUntilNul(state.result[:]), TextUntilNul(state.message[:]),
+    TextUntilNul(state.public_id[:]), TextUntilNul(state.alias[:]), TextUntilNul(state.status[:]),
+    TextUntilNul(state.link_code[:]), TextUntilNul(state.link_message[:]), TextUntilNul(state.candidate_id[:])]
+    names: [8]string = .["result", "message", "public_id", "alias", "status", "link_code", "link_message", "candidate_id"]
+    for index: 0..7 {
+        BuilderPrint(*out, ",\"%\":", names[index])
+        SelfQuote(*out, strings[index])
+    }
+    BuilderPrint(*out, ",\"nodes\":[")
+    for index: 0..state.node_count - 1 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        node := state.nodes[index]
+        BuilderPrint(*out, "{\"address\":")
+        SelfQuote(*out, TextUntilNul(node.address[:]))
+        BuilderPrint(*out, ",\"label\":")
+        SelfQuote(*out, TextUntilNul(node.label[:]))
+        BuilderPrint(*out, ",\"active\":%,\"known\":%,\"used\":%,\"limit\":%,\"full\":%,\"media_supported\":%,\"media\":%}",
+            ifx node.active then 1 else 0, ifx node.known then 1 else 0,
+            node.used, node.limit, ifx node.full then 1 else 0,
+            ifx node.media_supported then 1 else 0, ifx node.media then 1 else 0)
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
+
+ManagementReadText :: (text: string, name: string, output: []u8) -> bool {
+    return Json.ReadStringText(text, Json.FieldAt(text, 0, name), output) >= 0
+}
+
+ManagementReadNumber :: (text: string, name: string, minimum: s32, maximum: s32) -> s32 {
+    return SelfNumber(text, Json.FieldAt(text, 0, name), minimum, maximum)
+}
+
+ManagementReadBytes :: (text: string, at: s32) -> s64 {
+    number := Json.ReadNumber(text, at)
+    if !number.valid || number.value < 0.0 || number.value > 9007199254740991.0 { return -1 }
+    bytes := cast(s64)number.value
+    return ifx number.value == cast(float64)bytes then bytes else -1
+}
+
+ManagementDecode :: (text: string, output: *Management) -> bool {
+    if text.count == 0 || text.count > 16384 { return false }
+    end := Json.ValueEnd(text, Json.Space(text, 0), 0)
+    if end < 0 || Json.Space(text, end) != text.count || ManagementReadNumber(text, "version", 1, 1) != 1 { return false }
+    state: Management
+    available := ManagementReadNumber(text, "available", 0, 1)
+    account := ManagementReadNumber(text, "account", 0, 1)
+    busy := ManagementReadNumber(text, "busy", 0, 1)
+    enabled := ManagementReadNumber(text, "enabled", 0, 1)
+    state.capabilities = ManagementReadNumber(text, "capabilities", 0, 2047)
+    state.sequence = ManagementReadNumber(text, "sequence", 0, 2147483646)
+    state.completed = ManagementReadNumber(text, "completed", 0, 2147483646)
+    state.queued = ManagementReadNumber(text, "queued", 0, 2147483646)
+    state.link_stage = ManagementReadNumber(text, "link_stage", 0, 9)
+    if available < 0 || account < 0 || busy < 0 || enabled < 0 || state.capabilities < 0 ||
+    state.sequence < 0 || state.completed < 0 || state.completed > state.sequence || state.queued < 0 || state.link_stage < 0 { return false }
+    state.available = available == 1
+    state.account = account == 1
+    state.busy = busy == 1
+    state.enabled = enabled == 1
+    if !ManagementReadText(text, "result", state.result[:]) || !ManagementReadText(text, "message", state.message[:]) ||
+    !ManagementReadText(text, "public_id", state.public_id[:]) || !ManagementReadText(text, "alias", state.alias[:]) ||
+    !ManagementReadText(text, "status", state.status[:]) || !ManagementReadText(text, "link_code", state.link_code[:]) ||
+    !ManagementReadText(text, "link_message", state.link_message[:]) || !ManagementReadText(text, "candidate_id", state.candidate_id[:]) { return false }
+    positions: [SELF_NODE_LIMIT]s32
+    state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])
+    if state.node_count < 0 || state.node_count > SELF_NODE_LIMIT { return false }
+    for index: 0..state.node_count - 1 {
+        at := positions[index]
+        node := *state.nodes[index]
+        if Json.ReadStringText(text, Json.FieldAt(text, at, "address"), node.address[:]) <= 0 ||
+        Json.ReadStringText(text, Json.FieldAt(text, at, "label"), node.label[:]) < 0 { return false }
+        if NodeOrigin(TextUntilNul(node.address[:])) == "" { return false }
+        active := SelfNumber(text, Json.FieldAt(text, at, "active"), 0, 1)
+        known := SelfNumber(text, Json.FieldAt(text, at, "known"), 0, 1)
+        full := SelfNumber(text, Json.FieldAt(text, at, "full"), 0, 1)
+        media_supported := SelfNumber(text, Json.FieldAt(text, at, "media_supported"), 0, 1)
+        media := SelfNumber(text, Json.FieldAt(text, at, "media"), 0, 1)
+        node.used = ManagementReadBytes(text, Json.FieldAt(text, at, "used"))
+        node.limit = ManagementReadBytes(text, Json.FieldAt(text, at, "limit"))
+        if active < 0 || known < 0 || full < 0 || media_supported < 0 || media < 0 || node.used < 0 || node.limit < 0 { return false }
+        node.active = active == 1
+        node.known = known == 1
+        node.full = full == 1
+        node.media_supported = media_supported == 1
+        node.media = media == 1
+        for previous: 0..index - 1 {
+            if TextUntilNul(node.address[:]) == TextUntilNul(state.nodes[previous].address[:]) { return false }
+        }
+    }
+    output.* = state
+    return true
+}

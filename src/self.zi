@@ -1,7 +1,10 @@
 // One profile UI. Hosts supply self.json through the ordinary scoped store
 // interface; extension replies name only routes supplied by that host.
 #import "model"
+#import "achievement_view"
+#import "management"
 #import "node_url"
+#import "qrcode/qrcode"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
@@ -10,6 +13,7 @@
 #import "session"
 #import "geometry"
 #import "text_props"
+#import "text_align"
 #import "text_widget"
 #import "text_input_props"
 #import "text_field_widget"
@@ -24,11 +28,13 @@
 #import "drawing_props"
 #import "box_props"
 #import "box_widget"
+#import "toggle_widget"
+#import "toggle_props"
 
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: SelfState;
 loaded: bool;
-fields: [3]Field;
+fields: [6]Field;
 node_text: [256]u8;
 scroll_offset: s32;
 choosing_picture: bool;
@@ -38,6 +44,18 @@ scale: float32;
 asset_root: [4096]u8;
 focused_top: float32;
 focused_bottom: float32;
+management: Management;
+management_tick: s32;
+management_waiting: s32;
+management_seen: s32;
+management_page: s32;
+management_scroll: s32;
+account_alias: [40]u8;
+account_passphrase: [512]u8;
+account_code: [1024]u8;
+qr_code: QrCode;
+qr_text: [1024]u8;
+qr_valid: bool;
 
 Label :: (key: string, fallback: string) -> string {
     value := AppLocale(key)
@@ -50,10 +68,10 @@ TextLine :: (key: u64, text: string, x: float32, y: float32, width: float32, fon
             .wrap = TextWrap.TextWrapEllipsis})
 }
 
-Action :: (id: s32, label: string, bounds: Rectangle, selected: bool = false) -> bool {
+Action :: (id: s32, label: string, bounds: Rectangle, selected: bool = false, danger: bool = false) -> bool {
     return Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
             .bounds = bounds, .label = label, .selected = selected,
-            .tone = ifx selected then ButtonTone.ButtonToneAccent else ButtonTone.ButtonToneNeutral,
+            .tone = ifx danger then ButtonTone.ButtonToneDanger else ifx selected then ButtonTone.ButtonToneAccent else ButtonTone.ButtonToneNeutral,
             .emphasis = ifx selected then ButtonEmphasis.ButtonEmphasisFilled else ButtonEmphasis.ButtonEmphasisSoft,
             .fit_content = true}) != 0
 }
@@ -69,16 +87,17 @@ Save :: () -> bool {
     return true
 }
 
-EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximum: s32) -> bool {
+EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximum: s32, secure: bool = false) -> bool {
     field := *fields[index]
-    snapshot: [256]u8
+    snapshot: [1024]u8
     for byte: 0..buffer.count - 1 { snapshot[byte] = buffer[byte] }
     props := TextFieldProps.{.key = cast(u64)(100 + index), .focus_id = 100 + index,
         .bounds = bounds, .label = label, .scale = scale,
         .placeholder = ifx index == 0 then Label("self.name_placeholder", "Your name") else label,
         .value = TextUntilNul(snapshot[:]), .cursor = field.cursor,
         .anchor = field.anchor, .scroll_x = field.scroll_x, .focused = field.focused,
-        .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum}
+        .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum, .secure = secure}
+    if secure && snapshot[0] != cast(u8)0 { props.display_value = "••••••••" }
     if field.focused { props.input = AppFieldInput() }
     result := TextField(session, props)
     if result.focused {
@@ -105,6 +124,361 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
     finished := result.committed || (field.focused && !result.focused)
     field.* = Field.{result.cursor, result.anchor, result.scroll_x, result.focused && !result.escaped}
     return finished
+}
+
+Paragraph :: (key: u64, text: string, x: float32, y: float32, width: float32, height: float32, font: s32 = 14) {
+    Text(session, TextProps.{.key = key, .text = text,
+            .bounds = Rectangle.{x, y, width, height * scale},
+            .font = cast(s32)(cast(float32)font * scale), .wrap = TextWrap.TextWrapAuto})
+}
+
+PollManagement :: () {
+    management_tick += 1
+    if management_tick != 1 && management_tick % 15 != 0 { return }
+    next: Management
+    if !ManagementDecode(AppService("self.management", ""), *next) { return }
+    result_changed := TextUntilNul(next.result[:]) != TextUntilNul(management.result[:])
+    owner_changed := TextUntilNul(next.public_id[:]) != TextUntilNul(management.public_id[:])
+    management = next
+    if owner_changed && loaded { loaded = false; fields = .{} }
+    if !fields[3].focused { account_alias = management.alias }
+    if management.completed > management_seen || (result_changed && management.completed > 0) {
+        management_seen = management.completed
+        message: Vec(u8)
+        BuilderPrint(*message, "%", TextUntilNul(management.message[:]))
+        notice = BuilderFinish(message)
+        if management_waiting <= management.completed {
+            management_waiting = 0
+            if TextUntilNul(management.result[:]) == "switch" { management_page = 6; management_scroll = 0 }
+            else if TextUntilNul(management.result[:]) == "ok" {
+                loaded = false
+                if management_page == 2 || management_page == 3 || management_page == 6 { management_page = 1; management_scroll = 0 }
+            }
+        }
+    }
+}
+
+CanManage :: (capability: s32) -> bool {
+    return management.available && (management.capabilities & capability) != 0
+}
+
+Manage :: (operation: string, value: string = "", target: string = "", choice: s32 = 0) {
+    if management_waiting > management.completed || !CanManage(ManagementOperation(operation)) { return }
+    if TextUntilNul(state.owner_id[:]) != TextUntilNul(management.public_id[:]) {
+        loaded = false
+        notice = Label("self.account_changed", "The account changed; open its current profile again")
+        return
+    }
+    if !Save() { return }
+    request := ManagementRequest.{.sequence = management.sequence + 1, .choice = choice}
+    request.owner_id = management.public_id
+    if !CopyCString(operation, request.operation[:]) || !CopyCString(value, request.value[:]) || !CopyCString(target, request.target[:]) { return }
+    reply := AppService("self.management", ManagementRequestEncode(request))
+    if reply == "queued" {
+        management_waiting = request.sequence
+        management.sequence = request.sequence
+        management_tick = 0
+        notice = ""
+        for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
+        fields[4] = Field.{}
+    } else {
+        notice = Label("self.action_error", "Could not start this action")
+    }
+}
+
+OpenManagement :: (page: s32) {
+    if !Save() { return }
+    management_page = page
+    management_scroll = 0
+    notice = ""
+    fields = .{}
+}
+
+AccountSummary :: (x: float32, y: *float32, width: float32) {
+    title := Label("self.no_account", "No account connected")
+    if management.account {
+        title = TextUntilNul(management.alias[:])
+        if title == "" { title = Label("self.account", "Account") }
+    }
+    TextLine(700, title, x, y.*, width, 20)
+    y.* += 34.0 * scale
+    status := TextUntilNul(management.status[:])
+    if status == "" { status = Label("self.account_local", "Your data stays on this device until you connect") }
+    Paragraph(701, status, x, y.*, width, 42.0)
+    y.* += 46.0 * scale
+    if Action(702, Label(ifx management.account then "self.manage_account" else "self.connect_account",
+        ifx management.account then "Manage account" else "Connect an account"), Rectangle.{x, y.*, width, 44.0 * scale}) {
+        OpenManagement(1)
+    }
+    y.* += 64.0 * scale
+}
+
+ManagementNodeAt :: (address: string) -> s32 {
+    for index: 0..management.node_count - 1 {
+        if TextUntilNul(management.nodes[index].address[:]) == address { return cast(s32)index }
+    }
+    return -1
+}
+
+NodeDetailsHeight :: (address: string) -> float32 {
+    index := ManagementNodeAt(address)
+    if index < 0 { return 0.0 }
+    node := management.nodes[index]
+    height: float32 = 0.0
+    if node.active { height += 28.0 }
+    if node.known || management.account { height += 36.0 }
+    if node.media_supported { height += 52.0 }
+    return height * scale
+}
+
+ByteLabel :: (bytes: s64) -> string {
+    out: Vec(u8)
+    if bytes >= 1073741824 { BuilderPrint(*out, "% GB", bytes / 1073741824) }
+    else if bytes >= 1048576 { BuilderPrint(*out, "% MB", bytes / 1048576) }
+    else if bytes >= 1024 { BuilderPrint(*out, "% KB", bytes / 1024) }
+    else { BuilderPrint(*out, "% B", bytes) }
+    return BuilderFinish(out)
+}
+
+NodeDetails :: (address: string, x: float32, y: *float32, width: float32) {
+    index := ManagementNodeAt(address)
+    if index < 0 { return }
+    node := management.nodes[index]
+    if node.active {
+        TextLine(cast(u64)(720 + index), Label("self.active_node", "Active node"), x + 12.0 * scale, y.*, width, 12)
+        y.* += 28.0 * scale
+    }
+    if node.known || management.account {
+        value := Label("self.storage_unknown", "Storage usage not reported yet")
+        if node.known {
+            out: Vec(u8)
+            BuilderPrint(*out, "%", ByteLabel(node.used))
+            if node.limit > 0 { BuilderPrint(*out, " / %", ByteLabel(node.limit)) }
+            if node.full { BuilderPrint(*out, " · %", Label("self.storage_full", "Storage full")) }
+            value = BuilderFinish(out)
+        }
+        TextLine(cast(u64)(740 + index), value, x + 12.0 * scale, y.*, width - 24.0 * scale, 13)
+        y.* += 36.0 * scale
+    }
+    if node.media_supported {
+        TextLine(cast(u64)(760 + index), Label("self.node_media", "Upload photos and videos"), x + 12.0 * scale, y.* + 8.0 * scale, width - 84.0 * scale, 13)
+        result := Toggle(session, ToggleProps.{.key = cast(u64)(780 + index), .id = 780 + cast(s32)index,
+                .bounds = Rectangle.{x + width - 64.0 * scale, y.*, 52.0 * scale, 40.0 * scale},
+                .label = Label("self.node_media", "Upload photos and videos"), .value = node.media,
+                .disabled = management.busy || management_waiting > management.completed})
+        if result.changed { Manage("media", "", address, ifx result.value then 1 else 0) }
+        y.* += 52.0 * scale
+    }
+}
+
+DrawConnectionCode :: (text: string, x: float32, y: float32, width: float32) {
+    if text != TextUntilNul(qr_text[:]) {
+        qr_valid = CopyCString(text, qr_text[:]) && QrEncodeText(text, QrEcc.QrEccMedium, *qr_code)
+    }
+    if !qr_valid { return }
+    modules := qr_code.size + 8
+    limit := cast(s32)width
+    if limit > cast(s32)(240.0 * scale) { limit = cast(s32)(240.0 * scale) }
+    cell := limit / modules
+    if cell < 1 { return }
+    side := cell * modules
+    left := cast(s32)(x + (width - cast(float32)side) * 0.5)
+    top := cast(s32)y
+    Box(session, BoxProps.{.key = cast(u64)19000,
+            .bounds = Rectangle.{cast(float32)left, y, cast(float32)side, cast(float32)side}, .fill = Color.{255, 255, 255, 255}})
+    for row: 0..qr_code.size - 1 {
+        column: s32 = 0
+        while column < qr_code.size {
+            if !QrModule(*qr_code, column, row) { column += 1; continue }
+            start := column
+            while column < qr_code.size && QrModule(*qr_code, column, row) { column += 1 }
+            Box(session, BoxProps.{.key = cast(u64)(20000 + row * QR_SIZE_MAX + start),
+                    .bounds = Rectangle.{cast(float32)(left + (start + 4) * cell), cast(float32)(top + (row + 4) * cell),
+                        cast(float32)((column - start) * cell), cast(float32)cell}, .fill = Color.{0, 0, 0, 255}})
+        }
+    }
+}
+
+DrawAccount :: () {
+    session = AppSession()
+    scale = AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    area := AppBounds()
+    if focused_bottom > area.y + area.height - 16.0 * scale {
+        management_scroll += cast(s32)(focused_bottom - area.y - area.height + 16.0 * scale)
+    } else if focused_bottom > 0.0 && focused_top < area.y + 16.0 * scale {
+        management_scroll -= cast(s32)(area.y + 16.0 * scale - focused_top)
+        if management_scroll < 0 { management_scroll = 0 }
+    }
+    focused_top = 0.0
+    focused_bottom = 0.0
+    width := area.width - 80.0 * scale
+    if width > 512.0 * scale { width = 512.0 * scale }
+    if width < 160.0 * scale { return }
+    height: float32 = 244.0
+    if management_page == 1 {
+        if management.account {
+            height += 228.0
+            if CanManage(ACCOUNT_ALIAS) { height += 100.0 }
+            if CanManage(ACCOUNT_SYNC) { height += 112.0 }
+            if CanManage(ACCOUNT_BACKUP) { height += 56.0 }
+            if CanManage(ACCOUNT_LOGOUT) { height += 56.0 }
+            if CanManage(ACCOUNT_CLEAR_REMOTE) { height += 56.0 }
+        } else if CanManage(ACCOUNT_CREATE) { height += 56.0 }
+        if CanManage(ACCOUNT_IMPORT) { height += 56.0 }
+        if CanManage(ACCOUNT_LINK) {
+            height += 224.0
+            if management.link_code[0] != cast(u8)0 { height += 320.0 }
+            if management.link_message[0] != cast(u8)0 { height += 52.0 }
+            if CanManage(ACCOUNT_SCAN) { height += 56.0 }
+            if management.link_stage == 2 || management.link_stage == 4 { height += 56.0 }
+            if management.link_stage != 0 { height += 56.0 }
+        }
+    }
+    Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
+            .fill = ColorFromPacked(ifx AppDark() then 0x142724ff else 0xeef4f2ff)})
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)1, .bounds = area,
+            .content_height = cast(s32)((height + 48.0) * scale), .scroll_offset = management_scroll, .scale = scale})
+    management_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    x := scroll.content.x + (scroll.content.width - width) * 0.5
+    y := scroll.content.y + 48.0 * scale
+    if Action(800, Label("self.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) {
+        if management_page == 1 { management_page = 0 }
+        else { management_page = 1 }
+        management_scroll = 0
+        for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
+        fields = .{}
+    }
+    y += 64.0 * scale
+    title := Label("self.account", "Account")
+    if management_page == 2 { title = Label("self.import_key", "Import account key") }
+    if management_page == 3 { title = Label("self.backup_key", "Back up account key") }
+    if management_page == 4 { title = Label("self.logout", "Log out on this device") }
+    if management_page == 5 { title = Label("self.clear_remote", "Clear remote account data") }
+    if management_page == 6 { title = Label("self.switch_account", "Switch account") }
+    TextLine(801, title, x, y, width, 26)
+    y += 52.0 * scale
+    if management_page == 2 || management_page == 3 {
+        Paragraph(802, Label("self.key_file_help", "Choose a key file. A passphrase protects the backup and is needed again when importing it."), x, y, width, 64.0)
+        y += 72.0 * scale
+        unused EditField(4, account_passphrase[:], Label("self.passphrase", "Passphrase (optional)"), Rectangle.{x, y, width, 44.0 * scale}, 160, true)
+        y += 60.0 * scale
+        if Action(803, Label("self.choose_file", "Choose file"), Rectangle.{x, y, width, 44.0 * scale}, true) {
+            passphrase: [512]u8
+            for index: 0..account_passphrase.count - 1 { passphrase[index] = account_passphrase[index] }
+            {
+                value := TextUntilNul(passphrase[:])
+                Manage(ifx management_page == 2 then "import" else "backup", value)
+            }
+            for index: 0..passphrase.count - 1 { passphrase[index] = cast(u8)0 }
+        }
+        y += 56.0 * scale
+    } else if management_page >= 4 {
+        explanation := Label("self.logout_help", "Your local records stay on this device. Keep a key backup so you can connect again.")
+        if management_page == 5 { explanation = Label("self.clear_remote_help", "This removes this account's remote data. Local records stay on this device.") }
+        if management_page == 6 { explanation = Label("self.switch_help", "Choose whether to keep and merge the local records or replace them for the incoming account.") }
+        Paragraph(804, explanation, x, y, width, 80.0)
+        y += 92.0 * scale
+        if management_page == 6 {
+            if Action(805, Label("self.merge", "Keep and merge local data"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_apply", "", "", 1) }
+            y += 56.0 * scale
+            if Action(806, Label("self.replace", "Replace local data"), Rectangle.{x, y, width, 44.0 * scale}, false, true) { Manage("switch_apply", "", "", 2) }
+            y += 56.0 * scale
+            if Action(807, Label("self.cancel", "Cancel"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_cancel"); management_page = 1 }
+        } else if Action(808, title, Rectangle.{x, y, width, 44.0 * scale}, true, true) {
+            Manage(ifx management_page == 4 then "logout" else "clear_remote")
+            management_page = 1
+        }
+        y += 56.0 * scale
+    } else {
+        if management.account {
+            TextLine(810, TextUntilNul(management.alias[:]), x, y, width, 20)
+            y += 32.0 * scale
+            Paragraph(811, TextUntilNul(management.public_id[:]), x, y, width, 48.0, 13)
+            y += 52.0 * scale
+            if Action(812, Label("self.copy_id", "Copy public ID"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.public_id[:]), 0) }
+            y += 56.0 * scale
+            Paragraph(813, TextUntilNul(management.status[:]), x, y, width, 48.0)
+            y += 52.0 * scale
+            if CanManage(ACCOUNT_SYNC) {
+                out: Vec(u8)
+                BuilderPrint(*out, "%: %", Label("self.queued", "Queued changes"), management.queued)
+                TextLine(814, BuilderFinish(out), x, y, width, 14)
+                y += 36.0 * scale
+            }
+            if CanManage(ACCOUNT_ALIAS) {
+                unused EditField(3, account_alias[:], Label("self.alias", "Account alias"), Rectangle.{x, y, width - 84.0 * scale, 44.0 * scale}, 39)
+                if Action(815, Label("self.save", "Save"), Rectangle.{x + width - 72.0 * scale, y, 72.0 * scale, 44.0 * scale}) { Manage("alias", TextUntilNul(account_alias[:])) }
+                y += 100.0 * scale
+            }
+            if CanManage(ACCOUNT_SYNC) {
+                TextLine(816, Label("self.sync", "Sync"), x, y + 8.0 * scale, width - 80.0 * scale, 16)
+                result := Toggle(session, ToggleProps.{.key = cast(u64)817, .id = 817,
+                        .bounds = Rectangle.{x + width - 64.0 * scale, y, 64.0 * scale, 40.0 * scale},
+                        .label = Label("self.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
+                if result.changed { Manage("set_sync", "", "", ifx result.value then 1 else 0) }
+                y += 56.0 * scale
+                if Action(818, Label("self.sync_now", "Sync now"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("sync") }
+                y += 56.0 * scale
+            }
+            if CanManage(ACCOUNT_BACKUP) {
+                if Action(819, Label("self.backup_key", "Back up account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(3) }
+                y += 56.0 * scale
+            }
+        } else if CanManage(ACCOUNT_CREATE) {
+            if Action(820, Label("self.create_account", "Create account"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("create") }
+            y += 56.0 * scale
+        }
+        if CanManage(ACCOUNT_IMPORT) {
+            if Action(821, Label("self.import_key", "Import account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(2) }
+            y += 56.0 * scale
+        }
+        if CanManage(ACCOUNT_LINK) {
+            TextLine(822, Label("self.connect_device", "Connect another device"), x, y, width, 20)
+            y += 40.0 * scale
+            if management.link_code[0] != cast(u8)0 {
+                DrawConnectionCode(TextUntilNul(management.link_code[:]), x, y, width)
+                y += 252.0 * scale
+                if Action(823, Label("self.copy_code", "Copy connection code"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.link_code[:]), 0) }
+                y += 64.0 * scale
+            }
+            if management.link_message[0] != cast(u8)0 {
+                Paragraph(824, TextUntilNul(management.link_message[:]), x, y, width, 48.0)
+                y += 52.0 * scale
+            }
+            unused EditField(5, account_code[:], Label("self.connection_code", "Connection code"), Rectangle.{x, y, width, 44.0 * scale}, 1023)
+            y += 56.0 * scale
+            if Action(825, Label("self.connect", "Connect"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_join", TextUntilNul(account_code[:])) }
+            y += 56.0 * scale
+            if Action(826, Label("self.show_code", "Show connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_show") }
+            y += 56.0 * scale
+            if CanManage(ACCOUNT_SCAN) {
+                if Action(827, Label("self.scan_code", "Scan connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_scan") }
+                y += 56.0 * scale
+            }
+            if management.link_stage == 2 || management.link_stage == 4 {
+                if Action(828, Label("self.confirm_device", "The digits match — connect"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("link_confirm") }
+                y += 56.0 * scale
+            }
+            if management.link_stage != 0 {
+                if Action(829, Label("self.cancel_connection", "Cancel connection"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_cancel") }
+                y += 56.0 * scale
+            }
+        }
+        if management.account && CanManage(ACCOUNT_LOGOUT) {
+            if Action(830, Label("self.logout", "Log out on this device"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(4) }
+            y += 56.0 * scale
+        }
+        if management.account && CanManage(ACCOUNT_CLEAR_REMOTE) {
+            if Action(831, Label("self.clear_remote", "Clear remote account data"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(5) }
+            y += 56.0 * scale
+        }
+    }
+    if notice != "" { Paragraph(840, notice, x, y, width, 64.0) }
+    if management_waiting > management.completed { TextLine(841, Label("self.working", "Working…"), x, y + 68.0 * scale, width, 14) }
+    unused End(session)
+    AppKeyboard(fields[3].focused || fields[4].focused || fields[5].focused)
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
@@ -169,6 +543,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
             }
         }
         y.* += 56.0 * scale
+        NodeDetails(TextUntilNul(node[:]), x, y, width)
     }
     y.* += 8.0 * scale
     submitted := EditField(2, node_text[:], Label("self.node_address", "Node address"),
@@ -209,15 +584,18 @@ Nodes :: (x: float32, y: *float32, width: float32) {
 }
 
 Draw :: () {
+    if AchievementViewFrame() { return }
+    PollManagement()
     if !loaded {
         state = SelfDefault()
         assets := AppService("self.assets", "")
         if assets.count > 0 && assets[0] == cast(u8)47 { unused CopyCString(assets, asset_root[:]) }
-        bytes: [8193]u8
+        bytes: [16385]u8
         count := ReadStore("self.json", bytes[:])
         if count > 0 { unused SelfDecode(TextUntilNul(bytes[:]), *state) }
         loaded = true
     }
+    if management_page != 0 { DrawAccount(); return }
     session = AppSession()
     scale = AppScale()
     if scale <= 0.0 { scale = 1.0 }
@@ -242,12 +620,18 @@ Draw :: () {
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     height := 352.0 * scale
     if (state.controls & SELF_NODES) != 0 { height += cast(float32)(112 + state.node_count * 56) * scale }
+    if management.available { height += 144.0 * scale }
+    for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) }
     if (state.controls & SELF_INTENTION) != 0 { height += 100.0 * scale }
     if (state.controls & SELF_APPEARANCE) != 0 { height += 100.0 * scale }
     if (state.controls & SELF_ACCENT) != 0 { height += 68.0 * scale + 2.0 * ((width - 56.0 * scale) / 8.0) }
     if (state.controls & SELF_WIDGETS) != 0 { height += 100.0 * scale }
     if choosing_picture { height += picker_height }
-    height += cast(float32)(state.extension_count * 52) * scale
+    for index: 0..state.extension_count - 1 {
+        entry := state.extensions[index]
+        if management.available && TextUntilNul(entry.id[:]) == "account" { continue }
+        height += (ifx entry.summary[0] != cast(u8)0 then 104.0 else 52.0) * scale
+    }
     if notice != "" { height += 48.0 * scale }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
             .fill = ColorFromPacked(ifx AppDark() then 0x142724ff else 0xeef4f2ff)})
@@ -303,6 +687,7 @@ Draw :: () {
         if EditField(1, state.intention[:], Label("self.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
         y += 100.0 * scale
     }
+    if management.available { AccountSummary(x, *y, width) }
     if (state.controls & SELF_NODES) != 0 { Nodes(x, *y, width) }
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
@@ -348,11 +733,31 @@ Draw :: () {
     }
     for index: 0..state.extension_count - 1 {
         entry := state.extensions[index]
-        if Action(500 + cast(s32)index, TextUntilNul(entry.label[:]), Rectangle.{x, y, width, 44.0 * scale}) {
-            Save()
-            AppReply(TextUntilNul(entry.id[:]))
+        route := TextUntilNul(entry.id[:])
+        if management.available && route == "account" { continue }
+        detailed := entry.summary[0] != cast(u8)0
+        row_height := (ifx detailed then 92.0 else 44.0) * scale
+        if detailed {
+            Box(session, BoxProps.{.key = cast(u64)(900 + index), .bounds = Rectangle.{x, y, width, row_height},
+                    .fill = ColorFromPacked(ifx AppDark() then 0x263f3aff else 0xf0f6f4ff), .radius = 10.0 * scale})
+            TextLine(cast(u64)(920 + index), TextUntilNul(entry.label[:]), x + 12.0 * scale, y + 8.0 * scale, width - 24.0 * scale, 16)
+            Paragraph(cast(u64)(940 + index), TextUntilNul(entry.summary[:]), x + 12.0 * scale, y + 36.0 * scale, width - 24.0 * scale, 44.0, 13)
+            if entry.badge[0] != cast(u8)0 {
+                Text(session, TextProps.{.key = cast(u64)(960 + index), .text = TextUntilNul(entry.badge[:]),
+                        .bounds = Rectangle.{x + width * 0.5, y + 8.0 * scale, width * 0.5 - 12.0 * scale, 28.0 * scale},
+                        .font = cast(s32)(12.0 * scale), .align = TextAlign.TextAlignEnd})
+            }
         }
-        y += 52.0 * scale
+        clicked := false
+        if detailed {
+            clicked = Button(session, ButtonProps.{.key = cast(u64)(500 + index), .id = 500 + cast(s32)index,
+                    .bounds = Rectangle.{x, y, width, row_height}, .label = TextUntilNul(entry.label[:]), .invisible = true}) != 0
+        } else { clicked = Action(500 + cast(s32)index, TextUntilNul(entry.label[:]), Rectangle.{x, y, width, row_height}) }
+        if clicked && Save() {
+            if route == "account" && management.available { OpenManagement(1) }
+            else if !AchievementOpenRoute(route) { AppReply(route) }
+        }
+        y += row_height + (ifx detailed then 12.0 else 8.0) * scale
     }
     unused End(session)
     AppKeyboard(fields[0].focused || fields[1].focused || fields[2].focused)
@@ -366,10 +771,19 @@ Main :: () -> s64 {
         AppDescribe("Self", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
         return APP_PROTOCOL
     }
+    if mode == APP_COMMAND && AchievementCommand(AppCommand()) { return 0 }
     if mode == APP_FRAME { Draw() }
     if mode == APP_COMMAND && AppCommand() == "reload" {
         loaded = false
         fields = .{}
+    }
+    if mode == APP_COMMAND && AppCommand() == "account" { management_page = 1; management_scroll = 0 }
+    if mode == APP_COMMAND && AppCommand() == "back" && management_page != 0 {
+        management_page = ifx management_page == 1 then 0 else 1
+        management_scroll = 0
+        for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
+        fields = .{}
+        AppReply("handled")
     }
     if mode == APP_SAVE && loaded { return ifx Save() then 0 else 1 }
     return 0

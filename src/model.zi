@@ -21,9 +21,13 @@ SELF_DEFAULT_NODE :: "https://api.waozi.xyz"
 SelfExtension :: struct {
     id: [40]u8
     label: [128]u8
+    summary: [256]u8
+    badge: [64]u8
+    icon: [32]u8
 }
 
 SelfState :: struct {
+    owner_id: [65]u8
     name: [64]u8
     intention: [128]u8
     picture: s32
@@ -74,7 +78,9 @@ SelfQuote :: (out: *Vec(u8), text: string) {
 
 SelfEncode :: (state: SelfState) -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "{\"version\":1,\"name\":")
+    BuilderPrint(*out, "{\"version\":1,\"owner_id\":")
+    SelfQuote(*out, TextUntilNul(state.owner_id[:]))
+    BuilderPrint(*out, ",\"name\":")
     SelfQuote(*out, TextUntilNul(state.name[:]))
     BuilderPrint(*out, ",\"intention\":")
     SelfQuote(*out, TextUntilNul(state.intention[:]))
@@ -91,6 +97,12 @@ SelfEncode :: (state: SelfState) -> string {
         SelfQuote(*out, TextUntilNul(state.extensions[index].id[:]))
         BuilderPrint(*out, ",\"label\":")
         SelfQuote(*out, TextUntilNul(state.extensions[index].label[:]))
+        BuilderPrint(*out, ",\"summary\":")
+        SelfQuote(*out, TextUntilNul(state.extensions[index].summary[:]))
+        BuilderPrint(*out, ",\"badge\":")
+        SelfQuote(*out, TextUntilNul(state.extensions[index].badge[:]))
+        BuilderPrint(*out, ",\"icon\":")
+        SelfQuote(*out, TextUntilNul(state.extensions[index].icon[:]))
         BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]}")
@@ -107,7 +119,7 @@ SelfNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
 }
 
 SelfDecode :: (text: string, output: *SelfState) -> bool {
-    if text.count == 0 || text.count > 8192 { return false }
+    if text.count == 0 || text.count > 16384 { return false }
     end := Json.ValueEnd(text, Json.Space(text, 0), 0)
     if end < 0 || Json.Space(text, end) != text.count { return false }
     keys: [11]string = .["version", "name", "intention", "picture", "theme", "accent", "material", "controls", "preferred", "nodes", "extensions"]
@@ -116,6 +128,15 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
         return false
     }
     state: SelfState
+    owner_at := Json.FieldAt(text, 0, "owner_id")
+    if owner_at >= 0 && Json.ReadStringText(text, owner_at, state.owner_id[:]) < 0 { return false }
+    if state.owner_id[0] != cast(u8)0 {
+        owner := TextUntilNul(state.owner_id[:])
+        if owner.count != 64 { return false }
+        for byte: owner {
+            if !((byte >= cast(u8)48 && byte <= cast(u8)57) || (byte >= cast(u8)97 && byte <= cast(u8)102)) { return false }
+        }
+    }
     if Json.ReadStringText(text, at[1], state.name[:]) < 0 ||
     Json.ReadStringText(text, at[2], state.intention[:]) < 0 { return false }
     state.picture = SelfNumber(text, at[3], 0, 27)
@@ -153,6 +174,15 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
         if !Json.ObjectPositions(text, extensions[index], fields[:], offsets[:]) ||
         Json.ReadStringText(text, offsets[0], state.extensions[index].id[:]) <= 0 ||
         Json.ReadStringText(text, offsets[1], state.extensions[index].label[:]) <= 0 { return false }
+        extra: [3]string = .["summary", "badge", "icon"]
+        extra_at: [3]s32
+        unused Json.ObjectPositions(text, extensions[index], extra[:], extra_at[:])
+        if extra_at[0] >= 0 && Json.ReadStringText(text, extra_at[0], state.extensions[index].summary[:]) < 0 { return false }
+        if extra_at[1] >= 0 && Json.ReadStringText(text, extra_at[1], state.extensions[index].badge[:]) < 0 { return false }
+        if extra_at[2] >= 0 && Json.ReadStringText(text, extra_at[2], state.extensions[index].icon[:]) < 0 { return false }
+        for previous: 0..index - 1 {
+            if TextUntilNul(state.extensions[index].id[:]) == TextUntilNul(state.extensions[previous].id[:]) { return false }
+        }
     }
     output.* = state
     return true
@@ -164,4 +194,15 @@ SelfAddExtension :: (state: *SelfState, id: string, label: string) {
     if CopyCString(id, entry.id[:]) && CopyCString(label, entry.label[:]) {
         state.extension_count += 1
     }
+}
+
+SelfDescribeExtension :: (state: *SelfState, id: string, summary: string, badge: string, icon: string) -> bool {
+    for index: 0..state.extension_count - 1 {
+        entry := state.extensions[index]
+        if TextUntilNul(entry.id[:]) != id { continue }
+        if !CopyCString(summary, entry.summary[:]) || !CopyCString(badge, entry.badge[:]) || !CopyCString(icon, entry.icon[:]) { return false }
+        state.extensions[index] = entry
+        return true
+    }
+    return false
 }

@@ -1,0 +1,157 @@
+// Shared native storage. Hosts keep private account stores; public profile
+// preferences meet here only when their verified account IDs are equal.
+#import "model"
+#import "std/file"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/vec"
+#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(PLAN9_BUILD) {
+    Dialog :: #import "kryon/file_dialog_linux";
+}
+
+libc :: #system_library "libc";
+FileEnvironment :: (name: *u8) -> *u8 #foreign libc "getenv";
+#if #defined(_WIN32) {
+    FileProcessId :: () -> s32 #foreign libc "_getpid";
+} else {
+    FileProcessId :: () -> s32 #foreign libc "getpid";
+}
+native_write_sequence: s64;
+
+NativeEnvironment :: (name: string) -> string {
+    key: [128]u8
+    if !CopyCString(name, key[:]) { return "" }
+    value := FileEnvironment(*key[0])
+    return ifx value == null then "" else TextFromCString(value)
+}
+
+NativeJoin :: (output: []u8, first: string, second: string) -> string {
+    if first == "" || first.count + second.count + 2 > output.count { return "" }
+    for index: 0..first.count - 1 { output[index] = first[index] }
+    output[first.count] = cast(u8)47
+    for index: 0..second.count - 1 { output[first.count + 1 + index] = second[index] }
+    output[first.count + second.count + 1] = cast(u8)0
+    return TextUntilNul(output)
+}
+
+NativeDirectory :: (path: string) -> bool {
+    if path == "" || path.count > 4095 || path[0] != cast(u8)47 { return false }
+    for index: 1..path.count {
+        if index == path.count || path[index] == cast(u8)47 {
+            if PathIsLink(path[:index]) || !CreatePrivateDirectory(path[:index]) { return false }
+        }
+    }
+    return true
+}
+
+NativeRead :: (path: string, output: []u8) -> s32 {
+    if output.count < 2 { return -1 }
+    file := OpenRead(path)
+    if !file.valid { return -1 }
+    defer { unused CloseFile(file) }
+    size := FileSize(file)
+    if size < 0 || size >= output.count || ReadAt(file, output[:size], 0) != size { return -1 }
+    output[size] = cast(u8)0
+    return cast(s32)size
+}
+
+NativeWrite :: (path: string, text: string) -> bool {
+    if path == "" || path.count > 4000 { return false }
+    native_write_sequence += 1
+    builder: Vec(u8)
+    BuilderPrint(*builder, "%.%.%.new", path, FileProcessId(), native_write_sequence)
+    next := BuilderFinish(builder)
+    defer { SelfFree(next) }
+    unused RemoveFile(next)
+    file := OpenExclusivePrivate(next)
+    if !file.valid { return false }
+    written := WriteTextAt(file, text, 0) == text.count && SyncFile(file)
+    closed := CloseFile(file)
+    if !written || !closed { unused RemoveFile(next); return false }
+    moved := RenamePath(next, path)
+    if !moved { unused RemoveFile(next) }
+    return moved
+}
+
+NativeRoot :: (output: []u8) -> string {
+    override := NativeEnvironment("SELF_DATA")
+    if override != "" { return ifx CopyCString(override, output) then TextUntilNul(output) else "" }
+    base := NativeEnvironment("XDG_DATA_HOME")
+    fallback: [4096]u8
+    if base == "" { base = NativeJoin(fallback[:], NativeEnvironment("HOME"), ".local/share") }
+    return NativeJoin(output, base, "self")
+}
+
+NativeAccountId :: (id: string) -> bool {
+    if id.count != 64 { return false }
+    for byte: id {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) || (byte >= cast(u8)97 && byte <= cast(u8)102)) { return false }
+    }
+    return true
+}
+
+SharedProfilePath :: (id: string, output: []u8) -> string {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) || #defined(PLAN9_BUILD) || #defined(_WIN32) {
+        return ""
+    }
+    if !NativeAccountId(id) { return "" }
+    root: [4096]u8
+    profiles: [4096]u8
+    own: [4096]u8
+    folder := NativeJoin(own[:], NativeJoin(profiles[:], NativeRoot(root[:]), "profiles"), id)
+    if !NativeDirectory(folder) { return "" }
+    return NativeJoin(output, folder, "profile.json")
+}
+
+SharedProfileLoad :: (id: string, state: *SelfState) -> bool {
+    path: [4096]u8
+    document: [16385]u8
+    address := SharedProfilePath(id, path[:])
+    if address == "" || NativeRead(address, document[:]) < 0 { return false }
+    shared: SelfState
+    if !SelfDecode(TextUntilNul(document[:]), *shared) { return false }
+    if TextUntilNul(shared.owner_id[:]) != id { return false }
+    unused CopyCString(id, state.owner_id[:])
+    state.name = shared.name
+    state.intention = shared.intention
+    if (state.pictures & (1 << shared.picture)) != 0 { state.picture = shared.picture }
+    state.nodes = shared.nodes
+    state.node_count = shared.node_count
+    state.preferred = shared.preferred
+    return true
+}
+
+SharedProfileSave :: (id: string, state: SelfState) -> bool {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) || #defined(PLAN9_BUILD) || #defined(_WIN32) {
+        return true
+    }
+    path: [4096]u8
+    address := SharedProfilePath(id, path[:])
+    if address == "" { return !NativeAccountId(id) }
+    shared := SelfDefault()
+    unused CopyCString(id, shared.owner_id[:])
+    shared.name = state.name
+    shared.intention = state.intention
+    shared.picture = state.picture
+    shared.nodes = state.nodes
+    shared.node_count = state.node_count
+    shared.preferred = state.preferred
+    document := SelfEncode(shared)
+    defer { SelfFree(document) }
+    return NativeWrite(address, document)
+}
+
+// The selected path stays native. Tests supply a callback to the provider;
+// this chooser never accepts a path from a portable app request.
+NativeChooseFile :: (save: bool, output: []u8) -> s32 {
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(PLAN9_BUILD) {
+        patterns: [2]string = .["*.key", "*.json"]
+        props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
+            .filename = ifx save then "self-account.key" else "", .save = save,
+            .filter_name = "Account keys", .patterns = patterns[:]}
+        selected := Dialog.FileDialog(props, output)
+        if !selected.available { return -1 }
+        return ifx selected.accepted then 1 else 0
+    } else { return -1 }
+}

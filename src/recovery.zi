@@ -1,0 +1,107 @@
+// Native key recovery uses Daochi's existing plain and passphrase-protected
+// formats. The optional, authenticated context keeps app recovery material
+// (such as a record vault) with the key without exposing it to the UI bundle.
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+
+Recovery :: struct {
+    keys: AccountKeys
+    context: [128]u8
+}
+
+RecoveryClear :: (value: *Recovery) {
+    SecureWipe(*value.keys.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+    SecureWipe(*value.context[0], value.context.count)
+    value.* = Recovery.{}
+}
+
+RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
+    if output.count < ACCOUNT_EXPORT_TEXT_SIZE || AccountKeysText(*value.keys, *output[0], output.count) == 0 { return false }
+    context := TextUntilNul(value.context[:])
+    if context == "" { return true }
+    cursor := TextUntilNul(output).count
+    if !AccountTextAppend(*output[0], output.count, *cursor, "self_context=") ||
+    !AccountAppendHex(*output[0], output.count, *cursor, *value.context[0], context.count) ||
+    !AccountTextAppend(*output[0], output.count, *cursor, "\n") { return false }
+    return true
+}
+
+RecoveryEncode :: (value: *Recovery, passphrase: string, output: []u8) -> bool {
+    if value == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase.count > 511 { return false }
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    salt: [AccountEncryptedSaltBytes]u8
+    nonce: [AccountEncryptedNonceBytes]u8
+    key: [32]u8
+    sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    defer {
+        SecureWipe(*plaintext[0], plaintext.count)
+        SecureWipe(*key[0], key.count)
+        SecureWipe(*sealed[0], sealed.count)
+    }
+    if !RecoveryPlain(value, plaintext[:]) { return false }
+    length := TextUntilNul(plaintext[:]).count
+    if passphrase == "" { return CopyCString(TextUntilNul(plaintext[:]), output) }
+    if length + AccountEncryptedTagBytes >= sealed.count ||
+    SecureRandom(*salt[0], salt.count) == 0 || SecureRandom(*nonce[0], nonce.count) == 0 ||
+    !AccountDerivePassphraseKey(passphrase, *salt[0], *key[0], ACCOUNT_PASSPHRASE_ITERATIONS) ||
+    ChaCha20Poly1305Seal(*key[0], *nonce[0], *plaintext[0], length, null, 0, *sealed[0], sealed.count) == 0 { return false }
+    cursor: s64 = 0
+    return AccountTextAppend(*output[0], output.count, *cursor,
+        "ksync-account-key-v2\nalgorithm=ML-DSA-44\nkdf=PBKDF2-SHA256\niterations=600000\nsalt=") &&
+    AccountAppendHex(*output[0], output.count, *cursor, *salt[0], salt.count) &&
+    AccountTextAppend(*output[0], output.count, *cursor, "\nnonce=") &&
+    AccountAppendHex(*output[0], output.count, *cursor, *nonce[0], nonce.count) &&
+    AccountTextAppend(*output[0], output.count, *cursor, "\nciphertext=") &&
+    AccountAppendHex(*output[0], output.count, *cursor, *sealed[0], length + AccountEncryptedTagBytes)
+}
+
+RecoveryReadPlain :: (text: string, output: *Recovery) -> bool {
+    candidate: Recovery
+    defer { RecoveryClear(*candidate) }
+    if ParseAccountKeys(text, *candidate.keys) == 0 { return false }
+    context := AccountEncryptedLineValue(text, "self_context=")
+    if context != "" {
+        if context.count % 2 != 0 || context.count / 2 >= candidate.context.count ||
+        HexToBytes(context, *candidate.context[0], context.count / 2) == 0 { return false }
+        for index: 0..context.count / 2 - 1 {
+            if candidate.context[index] < cast(u8)32 || candidate.context[index] == cast(u8)127 { return false }
+        }
+    }
+    output.* = candidate
+    return true
+}
+
+RecoveryDecode :: (input: string, passphrase: string, output: *Recovery) -> bool {
+    if output == null { return false }
+    output.* = Recovery.{}
+    if input.count == 0 || input.count >= ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase.count > 511 { return false }
+    start: s64 = 0
+    if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
+    text := input[start:]
+    if !AccountStartsWith(text, AccountEncryptedHeader) { return RecoveryReadPlain(text, output) }
+    if passphrase == "" { return false }
+    iterations := AccountParseIterations(AccountEncryptedLineValue(text, "iterations="))
+    salt_text := AccountEncryptedLineValue(text, "salt=")
+    nonce_text := AccountEncryptedLineValue(text, "nonce=")
+    sealed_text := AccountEncryptedLineValue(text, "ciphertext=")
+    if iterations == 0 || salt_text.count != AccountEncryptedSaltBytes * 2 || nonce_text.count != AccountEncryptedNonceBytes * 2 ||
+    sealed_text.count <= AccountEncryptedTagBytes * 2 || sealed_text.count % 2 != 0 || sealed_text.count / 2 >= ACCOUNT_EXPORT_TEXT_SIZE { return false }
+    salt: [AccountEncryptedSaltBytes]u8
+    nonce: [AccountEncryptedNonceBytes]u8
+    key: [32]u8
+    sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    defer {
+        SecureWipe(*plaintext[0], plaintext.count)
+        SecureWipe(*key[0], key.count)
+        SecureWipe(*sealed[0], sealed.count)
+    }
+    sealed_length := sealed_text.count / 2
+    if HexToBytes(salt_text, *salt[0], salt.count) == 0 || HexToBytes(nonce_text, *nonce[0], nonce.count) == 0 ||
+    HexToBytes(sealed_text, *sealed[0], sealed_length) == 0 || !AccountDerivePassphraseKey(passphrase, *salt[0], *key[0], iterations) ||
+    ChaCha20Poly1305Open(*key[0], *nonce[0], *sealed[0], sealed_length, null, 0, *plaintext[0], plaintext.count) == 0 { return false }
+    plaintext[sealed_length - AccountEncryptedTagBytes] = cast(u8)0
+    return RecoveryReadPlain(TextUntilNul(plaintext[:]), output)
+}

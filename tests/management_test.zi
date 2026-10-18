@@ -1,0 +1,144 @@
+#import "model"
+#import "daochi_client/keys"
+#import "account_store"
+#import "management"
+#import "native_management"
+#import "native_files"
+#import "recovery"
+#import "pairing"
+#import "std/c_string"
+#import "std/text_buffer"
+
+fixture: Recovery;
+current_id: [65]u8;
+action_count: s32;
+apply_count: s32;
+choose_result: s32;
+
+Snapshot :: (context: *void, output: *Management) {
+    output.available = true
+    output.account = current_id[0] != cast(u8)0
+    output.public_id = current_id
+    output.capabilities = 2047
+}
+Apply :: (context: *void, incoming: *Recovery, choice: s32) -> s32 {
+    apply_count += 1
+    if choice == 0 { return 2 }
+    current_id = incoming.keys.public_id
+    return 1
+}
+Action :: (context: *void, request: *ManagementRequest) -> s32 {
+    action_count += 1
+    return 2
+}
+Choose :: (context: *void, save: bool, output: []u8) -> s32 {
+    return choose_result
+}
+Request :: (provider: *ManagementProvider, operation: string, value: string = "", choice: s32 = 0) -> bool {
+    request: ManagementRequest
+    request.sequence = provider.queue.sequence + 1
+    request.owner_id = current_id
+    request.choice = choice
+    unused CopyCString(operation, request.operation[:])
+    unused CopyCString(value, request.value[:])
+    encoded := ManagementRequestEncode(request)
+    defer { SelfFree(encoded) }
+    return ProviderEnqueue(provider, encoded)
+}
+
+#program_export
+Check :: () -> s32 {
+    if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
+    defer { RecoveryClear(*fixture) }
+    unused CopyCString("{\"werkzeug_vault\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}", fixture.context[:])
+    backup: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    opened: Recovery
+    defer { RecoveryClear(*opened) }
+    if !RecoveryEncode(*fixture, "", backup[:]) || !RecoveryDecode(TextUntilNul(backup[:]), "", *opened) { return 2 }
+    if TextUntilNul(opened.context[:]) != TextUntilNul(fixture.context[:]) ||
+    TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 3 }
+    legacy: AccountKeys
+    if ParseAccountKeys(TextUntilNul(backup[:]), *legacy) == 0 { return 4 }
+    if !RecoveryEncode(*fixture, "fixture passphrase", backup[:]) { return 5 }
+    if RecoveryDecode(TextUntilNul(backup[:]), "wrong", *opened) { return 6 }
+    if !RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) ||
+    TextUntilNul(opened.context[:]) != TextUntilNul(fixture.context[:]) { return 7 }
+    if ParseEncryptedAccountKeys(TextUntilNul(backup[:]), "fixture passphrase", *legacy) == 0 { return 8 }
+    length := TextUntilNul(backup[:]).count
+    backup[length - 2] = ifx backup[length - 2] == cast(u8)48 then cast(u8)49 else cast(u8)48
+    if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }
+    if opened.keys.private_key_hex[0] != cast(u8)0 { return 10 }
+
+    // The existing QR wire format transfers verified keys in either direction.
+    first: DeviceLinkKeys
+    second: DeviceLinkKeys
+    if !DeviceLinkNewKeys(*first) || !DeviceLinkNewKeys(*second) { return 11 }
+    defer { DeviceLinkForget(*first); DeviceLinkForget(*second) }
+    id := "0123456789abcdef0123456789abcdef"
+    code_text := DeviceLinkCodeText(id, *first, true, "https://api.waozi.xyz")
+    defer { SelfFree(code_text) }
+    if !DeviceLinkParse(code_text).valid || DeviceLinkParse("https://example.com").valid { return 12 }
+    sealed := DeviceLinkSeal(*fixture.keys, "https://api.waozi.xyz", id, *first, *second.public[0], true)
+    defer { SelfFree(sealed) }
+    received := DeviceLinkOpen(sealed, id, *second, false, *first.public[0])
+    if !received.valid || TextUntilNul(received.account.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 13 }
+    if DeviceLinkOpen(sealed, "fedcba9876543210fedcba9876543210", *second, false, *first.public[0]).valid { return 14 }
+    protected := DeviceLinkSeal(*fixture.keys, "https://api.waozi.xyz", id, *first, *second.public[0], true, TextUntilNul(fixture.context[:]))
+    defer { SelfFree(protected) }
+    recovered := DeviceLinkOpen(protected, id, *second, false, *first.public[0])
+    if !recovered.valid || TextUntilNul(recovered.context[:]) != TextUntilNul(fixture.context[:]) { return 30 }
+    if DeviceLinkParse(DeviceLinkCodeText(id, *first, true, "https://user:password@example.com")).valid { return 15 }
+
+    provider := ManagementProvider.{.snapshot = Snapshot, .apply = Apply, .action = Action, .choose_file = Choose}
+    if !Request(*provider, "sync") { return 16 }
+    ProviderPump(*provider)
+    ProviderPump(*provider)
+    if action_count != 1 || !provider.queue.pending { return 17 }
+    ProviderFinish(*provider, "ok", "")
+    if !Request(*provider, "import", "fixture transient secret") { return 18 }
+    choose_result = 0
+    ProviderPump(*provider)
+    if provider.queue.pending || TextUntilNul(provider.queue.result[:]) != "cancelled" ||
+    provider.queue.request.value[0] != cast(u8)0 || apply_count != 0 { return 19 }
+    provider.incoming = fixture
+    provider.has_incoming = true
+    if !Request(*provider, "switch_apply", "", 0) { return 20 }
+    ProviderPump(*provider)
+    if TextUntilNul(provider.queue.result[:]) != "switch" || !provider.has_incoming || current_id[0] != cast(u8)0 { return 21 }
+    if !Request(*provider, "switch_cancel") { return 22 }
+    ProviderPump(*provider)
+    if provider.has_incoming || current_id[0] != cast(u8)0 { return 23 }
+    if !Request(*provider, "create") { return 24 }
+    current_id = fixture.keys.public_id
+    ProviderPump(*provider)
+    if provider.queue.pending || TextUntilNul(provider.queue.result[:]) != "error" || apply_count != 1 { return 25 }
+
+    // Shared preferences only meet at the same verified identity.
+    state := SelfDefault()
+    unused CopyCString("Fixture profile", state.name[:])
+    if !SharedProfileSave(TextUntilNul(current_id[:]), state) { return 26 }
+    loaded := SelfDefault()
+    loaded.theme = 2
+    SelfAddExtension(*loaded, "inbe", "Inner Breeze")
+    if !SharedProfileLoad(TextUntilNul(current_id[:]), *loaded) || TextUntilNul(loaded.name[:]) != "Fixture profile" || loaded.theme != 2 || loaded.extension_count != 1 { return 27 }
+    if SharedProfileLoad("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *loaded) { return 28 }
+    path: [4096]u8
+    folder: [4096]u8
+    document: [16385]u8
+    root: [4096]u8
+    address := NativeJoin(path[:], NativeRoot(root[:]), "atomic.txt")
+    if !NativeWrite(address, "old") || !NativeWrite(address, "new") || NativeRead(address, document[:]) != 3 || TextUntilNul(document[:]) != "new" { return 29 }
+    if !AccountStoreStart() { return 31 }
+    unused CopyCString("Before switch", account_profile.name[:])
+    if AccountStoreApply(null, *fixture, 0) != 2 || account_standalone_ready { return 32 }
+    if AccountStoreApply(null, *fixture, 1) != 1 || TextUntilNul(account_profile.name[:]) != "Fixture profile" { return 33 }
+    if !AccountStoreStart() || !account_standalone_ready || TextUntilNul(account_recovery.context[:]) != TextUntilNul(fixture.context[:]) { return 34 }
+    action := ManagementRequest.{}
+    unused CopyCString("alias_saved", action.operation[:])
+    unused CopyCString("fixture_alias", action.value[:])
+    if AccountStoreAction(null, *action) != 1 || !AccountStoreStart() || TextUntilNul(account_alias[:]) != "fixture_alias" { return 37 }
+    unused CopyCString("logout", action.operation[:])
+    if AccountStoreAction(null, *action) != 1 || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 35 }
+    if !AccountStoreStart() || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 36 }
+    return 0
+}
