@@ -27,6 +27,7 @@ SelfState :: struct {
     name: [64]u8
     intention: [128]u8
     picture: s32
+    pictures: s32
     theme: s32
     accent: s32
     material: bool
@@ -40,7 +41,8 @@ SelfState :: struct {
 
 SelfDefault :: () -> SelfState {
     state := SelfState.{.material = true,
-        .controls = SELF_IDENTITY | SELF_APPEARANCE | SELF_ACCENT | SELF_WIDGETS | SELF_NODES,
+        .pictures = 268435455,
+        .controls = SELF_IDENTITY | SELF_NODES,
         .node_count = 1}
     unused CopyCString(SELF_DEFAULT_NODE, state.nodes[0][:])
     return state
@@ -76,8 +78,8 @@ SelfEncode :: (state: SelfState) -> string {
     SelfQuote(*out, TextUntilNul(state.name[:]))
     BuilderPrint(*out, ",\"intention\":")
     SelfQuote(*out, TextUntilNul(state.intention[:]))
-    BuilderPrint(*out, ",\"picture\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
-        state.picture, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
+    BuilderPrint(*out, ",\"picture\":%,\"pictures\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
+        state.picture, state.pictures, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
     for index: 0..state.node_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
         SelfQuote(*out, TextUntilNul(state.nodes[index][:]))
@@ -106,6 +108,8 @@ SelfNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
 
 SelfDecode :: (text: string, output: *SelfState) -> bool {
     if text.count == 0 || text.count > 8192 { return false }
+    end := Json.ValueEnd(text, Json.Space(text, 0), 0)
+    if end < 0 || Json.Space(text, end) != text.count { return false }
     keys: [11]string = .["version", "name", "intention", "picture", "theme", "accent", "material", "controls", "preferred", "nodes", "extensions"]
     at: [11]s32
     if !Json.ObjectPositions(text, 0, keys[:], at[:]) || SelfNumber(text, at[0], 1, 1) != 1 {
@@ -115,6 +119,12 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
     if Json.ReadStringText(text, at[1], state.name[:]) < 0 ||
     Json.ReadStringText(text, at[2], state.intention[:]) < 0 { return false }
     state.picture = SelfNumber(text, at[3], 0, 27)
+    if state.picture < 0 { return false }
+    picture_keys: [1]string = .["pictures"]
+    picture_at: [1]s32
+    unused Json.ObjectPositions(text, 0, picture_keys[:], picture_at[:])
+    state.pictures = ifx picture_at[0] < 0 then 268435455 else SelfNumber(text, picture_at[0], 1, 268435455)
+    if state.pictures < 1 || (state.pictures & (1 << state.picture)) == 0 { return false }
     state.theme = SelfNumber(text, at[4], 0, 2)
     state.accent = SelfNumber(text, at[5], 0, 15)
     material := SelfNumber(text, at[6], 0, 1)

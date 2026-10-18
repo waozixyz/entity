@@ -1,0 +1,24 @@
+Mode: built-in image_gen, generate, ui-mockup
+Output: design/self-reference.png
+Input role: earlier private-display Self screenshot, functionality reference.
+
+Use case: ui-mockup.
+Asset type: one high fidelity design reference sheet for Self, a native personal
+profile app, showing the same UI desktop and narrow side by side.
+The reference image is for functionality only; completely improve the design.
+Main subject: a calm, beautifully proportioned profile card.
+Keep exactly: change picture, Name, see/select Nodes, add address, remove a node
+if there is more than one. No new features, stats, menus, cloud badges,
+notifications, social feeds, marketing, fake connectivity, or extra settings.
+Small SELF eyebrow, understated Your profile title, compact circular bamboo
+avatar and quiet change action, clean inset Name field, distinct Nodes group
+with understated preferred row and outlined check rather than a giant filled
+bar, readable URL, compact entry and jade Add action.
+Soft rounded white card on pale cool mist, desktop 560-unit column and 20–24
+units of padding, responsive narrow layout.
+Palette: #dde9e5 #a8c8d2 #2e7d68 #1e4a40 #6e4c36 and a tiny amount of #f2a65e.
+Accessible pine text, humanist sans, thin borders. No gradients, glow, glass,
+skeuomorphism, or giant illustration.
+Exact text: SELF; Your profile; Name; Waozi; Change picture; Nodes;
+https://api.waozi.xyz; Node address; Add.
+Flat front-facing screenshot, no devices, perspective, or surrounding scene.
