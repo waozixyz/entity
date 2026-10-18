@@ -23,7 +23,7 @@ pairing_client = "src/pairing_client.zi"
 
 [dependencies.qrcode]
 git = "https://github.com/ziranlang/qrcode.git"
-ref = "51fa84aedaa6ae4f6734e0fcca9bfc35a184d297"
+ref = "master"
 
 [dependencies.daochi_client]
 git = "https://github.com/ziranlang/daochi-client.git"
@@ -31,5 +31,5 @@ ref = "master"
 
 [dependencies.monocypher]
 git = "https://github.com/LoupVaillant/Monocypher.git"
-ref = "e65d27722a43e9ed88da1987f3ad5675503c8cad"
+ref = "master"
 source = true
