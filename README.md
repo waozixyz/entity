@@ -50,7 +50,8 @@ The optional `self.management` service provides bounded public account status,
 node usage/media preferences, and a capability mask. Requests carry a strictly
 increasing sequence and the current verified owner ID. Providers enqueue them
 during the VM run and execute them afterward. They reject stale identities and
-never replay deferred actions. Private keys, native file paths and record-vault
+never replay deferred actions. Native hosts supply their own file chooser callback, including deferred mobile
+pickers, and resume it after a platform result. Private keys, native file paths and record-vault
 material stay in the native host. See `management.zi` and `native_management.zi`.
 
 The shared UI includes account IDs and aliases, encrypted key backup/import,

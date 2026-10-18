@@ -26,7 +26,7 @@ output.mkdir(parents=True, exist_ok=True)
 generated = output / 'generated'
 shutil.rmtree(generated, ignore_errors=True)
 paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(std_root / 'std'),
-         '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/ui'),
+         '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/backend'), '--module-path', str(kryon / 'src/ui'),
          '--module-path', f'daochi_client={daochi}', '--module-path', str(daochi),
          '--module-path', f'oqs={oqs / "src"}']
 subprocess.run([ZIRAN, 'build', '--target=c', '--root', str(ROOT), *paths,

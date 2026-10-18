@@ -16,6 +16,7 @@ Auth :: #import "daochi_client/auth";
 #import "std/vec"
 #import "std/byte_text_linux"
 #import "std/file"
+Dialog :: #import "file_dialog_linux";
 
 account_profile: SelfState;
 account_recovery: Recovery;
@@ -27,6 +28,15 @@ account_standalone_ready: bool;
 AccountStorePath :: (name: string, output: []u8) -> string {
     root: [4096]u8
     return NativeJoin(output, NativeRoot(root[:]), name)
+}
+AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
+    patterns: [2]string = .["*.key", "*.json"]
+    props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
+        .filename = ifx save then "self-account.key" else "", .save = save,
+        .filter_name = "Account keys", .patterns = patterns[:]}
+    selected := Dialog.FileDialog(props, output)
+    if !selected.available { return -1 }
+    return ifx selected.accepted then 1 else 0
 }
 AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -184,7 +194,7 @@ AccountStoreStart :: () -> bool {
     unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])
     unused SharedProfileLoad(TextUntilNul(account_recovery.keys.public_id[:]), *account_profile)
     account_provider = ManagementProvider.{.snapshot = AccountStoreSnapshot, .load = AccountStoreLoad,
-        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient}
+        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient, .choose_file = AccountStoreChooseFile}
     AccountStoreReadAlias()
     pairing_load = AccountStoreLoad
     pairing_server = AccountStoreServer

@@ -96,7 +96,11 @@ Check :: () -> s32 {
     if action_count != 1 || !provider.queue.pending { return 17 }
     ProviderFinish(*provider, "ok", "")
     if !Request(*provider, "import", "fixture transient secret") { return 18 }
+    choose_result = 2
+    ProviderPump(*provider)
+    if !provider.delegated || !provider.queue.pending { return 38 }
     choose_result = 0
+    provider.delegated = false
     ProviderPump(*provider)
     if provider.queue.pending || TextUntilNul(provider.queue.result[:]) != "cancelled" ||
     provider.queue.request.value[0] != cast(u8)0 || apply_count != 0 { return 19 }

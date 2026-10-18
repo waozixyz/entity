@@ -6,9 +6,7 @@
 #import "std/text_buffer"
 #import "std/byte_text_linux"
 #import "std/vec"
-#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(PLAN9_BUILD) {
-    Dialog :: #import "kryon/file_dialog_linux";
-}
+
 
 libc :: #system_library "libc";
 FileEnvironment :: (name: *u8) -> *u8 #foreign libc "getenv";
@@ -140,18 +138,4 @@ SharedProfileSave :: (id: string, state: SelfState) -> bool {
     document := SelfEncode(shared)
     defer { SelfFree(document) }
     return NativeWrite(address, document)
-}
-
-// The selected path stays native. Tests supply a callback to the provider;
-// this chooser never accepts a path from a portable app request.
-NativeChooseFile :: (save: bool, output: []u8) -> s32 {
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(PLAN9_BUILD) {
-        patterns: [2]string = .["*.key", "*.json"]
-        props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
-            .filename = ifx save then "self-account.key" else "", .save = save,
-            .filter_name = "Account keys", .patterns = patterns[:]}
-        selected := Dialog.FileDialog(props, output)
-        if !selected.available { return -1 }
-        return ifx selected.accepted then 1 else 0
-    } else { return -1 }
 }

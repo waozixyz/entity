@@ -22,6 +22,8 @@ ProviderLoad :: #type (context: *void, output: *Recovery) -> bool;
 ProviderApply :: #type (context: *void, value: *Recovery, choice: s32) -> s32;
 ProviderAction :: #type (context: *void, request: *ManagementRequest) -> s32;
 ProviderClient :: #type (context: *void, output: *Client) -> bool;
+// 1 selected, 0 cancelled, -1 unavailable/error, 2 awaiting a platform picker.
+// A host resumes a pending picker by clearing delegated before its next pump.
 ProviderFile :: #type (context: *void, save: bool, output: []u8) -> s32;
 ProviderDeliver :: #type (context: *void, path: string) -> bool;
 
@@ -101,12 +103,13 @@ ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
 
 ProviderSelectFile :: (provider: *ManagementProvider, save: bool, output: []u8) -> s32 {
     if provider.choose_file != null { return provider.choose_file(provider.context, save, output) }
-    return NativeChooseFile(save, output)
+    return -1
 }
 
 ProviderImport :: (provider: *ManagementProvider, passphrase: string) {
     path: [4096]u8
     chosen := ProviderSelectFile(provider, false, path[:])
+    if chosen == 2 { provider.delegated = true; return }
     if chosen == 0 { ProviderFinish(provider, "cancelled", "Import cancelled"); return }
     if chosen < 0 { ProviderFinish(provider, "error", "Could not open the key file chooser"); return }
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -135,6 +138,7 @@ ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
     }
     path: [4096]u8
     chosen := ProviderSelectFile(provider, true, path[:])
+    if chosen == 2 { provider.delegated = true; return }
     if chosen == 0 { ProviderFinish(provider, "cancelled", "Backup cancelled"); return }
     if chosen < 0 { ProviderFinish(provider, "error", "Could not open the backup chooser"); return }
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
