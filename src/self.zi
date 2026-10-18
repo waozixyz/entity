@@ -1,0 +1,285 @@
+// One profile UI. Hosts supply self.json through the ordinary scoped store
+// interface; extension replies name only routes supplied by that host.
+#import "model"
+#import "node_url"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "kryon/app_context"
+#import "kryon/app_protocol"
+#import "session"
+#import "geometry"
+#import "text_props"
+#import "text_widget"
+#import "text_input_props"
+#import "text_field_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "image_props"
+#import "image_widget"
+#import "drawing_props"
+
+Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
+state: SelfState;
+loaded: bool;
+fields: [3]Field;
+node_text: [256]u8;
+scroll_offset: s32;
+choosing_picture: bool;
+notice: string;
+session: Session;
+scale: float32;
+
+Label :: (key: string, fallback: string) -> string {
+    value := AppLocale(key)
+    return ifx value == "" || value == key then fallback else value
+}
+
+TextLine :: (key: u64, text: string, x: float32, y: float32, width: float32, font: s32 = 16) {
+    Text(session, TextProps.{.key = key, .text = text,
+            .bounds = Rectangle.{x, y, width, 28.0 * scale}, .font = cast(s32)(cast(float32)font * scale),
+            .wrap = TextWrap.TextWrapEllipsis})
+}
+
+Action :: (id: s32, label: string, bounds: Rectangle, selected: bool = false) -> bool {
+    return Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+            .bounds = bounds, .label = label, .selected = selected,
+            .tone = ifx selected then ButtonTone.ButtonToneAccent else ButtonTone.ButtonToneNeutral,
+            .emphasis = ifx selected then ButtonEmphasis.ButtonEmphasisFilled else ButtonEmphasis.ButtonEmphasisSoft,
+            .fit_content = true}) != 0
+}
+
+Save :: () {
+    document := SelfEncode(state)
+    if !WriteStore("self.json", document) {
+        notice = Label("self.save_error", "Could not save changes")
+    } else {
+        notice = ""
+    }
+}
+
+EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximum: s32) -> bool {
+    field := *fields[index]
+    snapshot: [256]u8
+    for byte: 0..buffer.count - 1 { snapshot[byte] = buffer[byte] }
+    props := TextFieldProps.{.key = cast(u64)(100 + index), .focus_id = 100 + index,
+        .bounds = bounds, .label = label, .value = TextUntilNul(snapshot[:]), .cursor = field.cursor,
+        .anchor = field.anchor, .scroll_x = field.scroll_x, .focused = field.focused,
+        .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum}
+    if field.focused { props.input = AppFieldInput() }
+    result := TextField(session, props)
+    if result.edit.changed {
+        edit := result.edit
+        length: s64 = 0
+        while length < buffer.count && buffer[length] != cast(u8)0 { length += 1 }
+        new_length := length - (edit.end - edit.start) + edit.replacement.count
+        if edit.start >= 0 && edit.end >= edit.start && edit.end <= length && new_length < buffer.count {
+            tail := length - edit.end
+            if new_length > length {
+                for offset: 0..tail { buffer[new_length - offset] = buffer[length - offset] }
+            } else {
+                for offset: 0..tail { buffer[edit.start + edit.replacement.count + offset] = buffer[edit.end + offset] }
+            }
+            for offset: 0..edit.replacement.count - 1 { buffer[edit.start + offset] = edit.replacement[offset] }
+            buffer[new_length] = cast(u8)0
+        }
+    }
+    if result.clipboard_write { unused ClipboardCopy(result.clipboard_text, 0) }
+    finished := result.committed || (field.focused && !result.focused)
+    field.* = Field.{result.cursor, result.anchor, result.scroll_x, result.focused && !result.escaped}
+    return finished
+}
+
+Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
+    image := ImageProps.{.asset_path = "assets/pfp.png", .alt_text = Label("self.picture", "Profile picture"),
+        .bounds = bounds, .source = Rectangle.{cast(float32)(index % 5) * 64.0, cast(float32)(index / 5) * 64.0, 64.0, 64.0}}
+    if index == 9 {
+        image.asset_path = "assets/flowers.png"
+        image.source = Rectangle.{}
+        image.fit = ImageFit.ImageFitContain
+    }
+    return image
+}
+
+Nodes :: (x: float32, y: *float32, width: float32) {
+    TextLine(400, Label("self.nodes", "Nodes"), x, y.*, width, 20)
+    y.* += 36.0 * scale
+    for index: 0..state.node_count - 1 {
+        preferred := state.preferred == index
+        if Action(410 + cast(s32)index, TextUntilNul(state.nodes[index][:]),
+            Rectangle.{x, y.*, width - 48.0 * scale, 44.0 * scale}, preferred) {
+            state.preferred = cast(s32)index
+            Save()
+        }
+        remove := ButtonProps.{.key = cast(u64)(430 + index), .id = 430 + cast(s32)index,
+            .bounds = Rectangle.{x + width - 40.0 * scale, y.*, 40.0 * scale, 44.0 * scale},
+            .label = Label("self.remove", "Remove node"), .icon_only = true,
+            .icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17",
+            .disabled = state.node_count <= 1}
+        if Button(session, remove) != 0 && state.node_count > 1 {
+            for next: index..state.node_count - 2 { state.nodes[next] = state.nodes[next + 1] }
+            state.node_count -= 1
+            if state.preferred >= index && state.preferred > 0 { state.preferred -= 1 }
+            Save()
+            break
+        }
+        y.* += 52.0 * scale
+    }
+    submitted := EditField(2, node_text[:], Label("self.node_address", "Node address"),
+        Rectangle.{x, y.*, width - 88.0 * scale, 44.0 * scale}, 255)
+    add := Action(450, Label("self.add", "Add"),
+        Rectangle.{x + width - 80.0 * scale, y.*, 80.0 * scale, 44.0 * scale})
+    clear_node: bool = false
+    if submitted || add {
+        snapshot := node_text
+        origin := NodeOrigin(TextUntilNul(snapshot[:]))
+        if origin == "" {
+            notice = Label("self.node_invalid", "Enter a valid HTTPS node address")
+        } else {
+            existing: s32 = -1
+            for index: 0..state.node_count - 1 {
+                if TextUntilNul(state.nodes[index][:]) == origin { existing = cast(s32)index }
+            }
+            if existing >= 0 {
+                state.preferred = existing
+                Save()
+                clear_node = true
+            } else if state.node_count < SELF_NODE_LIMIT {
+                unused CopyCString(origin, state.nodes[state.node_count][:])
+                state.preferred = state.node_count
+                state.node_count += 1
+                Save()
+                clear_node = true
+            } else { notice = Label("self.node_limit", "Eight nodes are already saved") }
+        }
+    }
+    if clear_node {
+        node_text[0] = cast(u8)0
+        fields[2] = Field.{}
+    }
+    y.* += 68.0 * scale
+}
+
+Draw :: () {
+    if !loaded {
+        state = SelfDefault()
+        bytes: [8193]u8
+        count := ReadStore("self.json", bytes[:])
+        if count > 0 { unused SelfDecode(TextUntilNul(bytes[:]), *state) }
+        loaded = true
+    }
+    session = AppSession()
+    scale = AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    area := AppBounds()
+    width := area.width - 32.0 * scale
+    if width > 480.0 * scale { width = 480.0 * scale }
+    if width < 160.0 * scale { return }
+    height := 208 + state.node_count * 52 + 104 + state.extension_count * 52
+    if (state.controls & SELF_INTENTION) != 0 { height += 88 }
+    if (state.controls & SELF_APPEARANCE) != 0 { height += 100 }
+    if (state.controls & SELF_ACCENT) != 0 { height += 144 }
+    if (state.controls & SELF_WIDGETS) != 0 { height += 100 }
+    if choosing_picture { height += 304 }
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)1,
+            .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y, width, area.height},
+            .content_height = cast(s32)(cast(float32)height * scale), .scroll_offset = scroll_offset, .scale = scale})
+    scroll_offset = scroll.scroll_offset
+    if !scroll.opened { return }
+    x := scroll.content.x
+    y := scroll.content.y + 16.0 * scale
+    width = scroll.content.width - 12.0 * scale
+    Image(session, Picture(state.picture, Rectangle.{x, y, 88.0 * scale, 88.0 * scale}))
+    if Action(10, Label(ifx choosing_picture then "self.done" else "self.change_picture",
+        ifx choosing_picture then "Done" else "Change picture"),
+        Rectangle.{x + 104.0 * scale, y + 24.0 * scale, width - 104.0 * scale, 40.0 * scale}) {
+        choosing_picture = !choosing_picture
+    }
+    y += 108.0 * scale
+    if choosing_picture {
+        size := 44.0 * scale
+        gap := (width - 6.0 * size) / 5.0
+        for index: 0..27 {
+            choice := ButtonProps.{.key = cast(u64)(200 + index), .id = 200 + cast(s32)index,
+                .label = Label("self.picture", "Profile picture"), .icon_only = true,
+                .bounds = Rectangle.{x + cast(float32)(index % 6) * (size + gap),
+                    y + cast(float32)(index / 6) * (size + 8.0 * scale), size, size},
+                .image = Picture(cast(s32)index, Rectangle.{}), .selected = state.picture == index}
+            if Button(session, choice) != 0 { state.picture = cast(s32)index; Save() }
+        }
+        y += 280.0 * scale
+    }
+    TextLine(20, Label("self.name", "Name"), x, y, width)
+    if EditField(0, state.name[:], Label("self.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
+    y += 92.0 * scale
+    if (state.controls & SELF_INTENTION) != 0 {
+        TextLine(21, Label("self.intention", "Intention"), x, y, width)
+        if EditField(1, state.intention[:], Label("self.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
+        y += 92.0 * scale
+    }
+    if (state.controls & SELF_NODES) != 0 { Nodes(x, *y, width) }
+    if notice != "" { TextLine(22, notice, x, y, width, 14); y += 36.0 * scale }
+    if (state.controls & SELF_APPEARANCE) != 0 {
+        TextLine(30, Label("self.appearance", "Appearance"), x, y, width, 20)
+        y += 36.0 * scale
+        modes: [3]string = .[Label("self.system", "System"), Label("self.light", "Light"), Label("self.dark", "Dark")]
+        third := (width - 16.0 * scale) / 3.0
+        for index: 0..2 {
+            if Action(50 + cast(s32)index, modes[index], Rectangle.{x + cast(float32)index * (third + 8.0 * scale), y, third, 40.0 * scale}, state.theme == index) {
+                state.theme = cast(s32)index
+                Save()
+            }
+        }
+        y += 64.0 * scale
+    }
+    if (state.controls & SELF_ACCENT) != 0 {
+        TextLine(31, Label("self.accent", "Accent"), x, y, width, 20)
+        y += 36.0 * scale
+        colors: [16]u32 = .[0x7355d9ff, 0x2563ebff, 0x059669ff, 0xdb2777ff, 0xd97706ff, 0x0891b2ff, 0xdc2626ff, 0x7c3aedff,
+        0x4f46e5ff, 0x0d9488ff, 0x65a30dff, 0xc026d3ff, 0xea580cff, 0x0284c7ff, 0x9333eaff, 0x475569ff]
+        size := (width - 7.0 * 8.0 * scale) / 8.0
+        for index: 0..15 {
+            if Button(session, ButtonProps.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
+                    .bounds = Rectangle.{x + cast(float32)(index % 8) * (size + 8.0 * scale), y + cast(float32)(index / 8) * (size + 8.0 * scale), size, size},
+                    .label = Label("self.accent", "Accent"), .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
+                state.accent = cast(s32)index
+                Save()
+            }
+        }
+        y += 2.0 * (size + 8.0 * scale) + 16.0 * scale
+    }
+    if (state.controls & SELF_WIDGETS) != 0 {
+        TextLine(32, Label("self.widgets", "Widgets"), x, y, width, 20)
+        y += 36.0 * scale
+        half := (width - 8.0 * scale) * 0.5
+        if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
+        if Action(61, "Classic", Rectangle.{x + half + 8.0 * scale, y, half, 40.0 * scale}, !state.material) { state.material = false; Save() }
+        y += 64.0 * scale
+    }
+    for index: 0..state.extension_count - 1 {
+        entry := state.extensions[index]
+        if Action(500 + cast(s32)index, TextUntilNul(entry.label[:]), Rectangle.{x, y, width, 44.0 * scale}) {
+            Save()
+            AppReply(TextUntilNul(entry.id[:]))
+        }
+        y += 52.0 * scale
+    }
+    unused End(session)
+    AppKeyboard(fields[0].focused || fields[1].focused || fields[2].focused)
+}
+
+#program_export
+Main :: () -> s64 {
+    mode := AppMode()
+    if mode == APP_IDENTIFY {
+        AppIdentity("self")
+        AppDescribe("Self", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
+        return APP_PROTOCOL
+    }
+    if mode == APP_FRAME { Draw() }
+    if mode == APP_SAVE && loaded { Save() }
+    return 0
+}

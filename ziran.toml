@@ -1,0 +1,16 @@
+[package]
+name = "Self"
+entry = "src/self.zi"
+module_roots = ["src"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "master"
+
+[dependencies.kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "master"
+
+[exports]
+model = "src/model.zi"
+node_url = "src/node_url.zi"

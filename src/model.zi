@@ -1,0 +1,157 @@
+// Self's public document contains profile preferences, never account keys.
+// Hosts map it to their existing storage and provide their own extension routes.
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text"
+#import "std/text_buffer"
+#import "std/vec"
+Json :: #import "std/json_scan";
+#import "node_url"
+
+SELF_IDENTITY :: 1
+SELF_INTENTION :: 2
+SELF_APPEARANCE :: 4
+SELF_ACCENT :: 8
+SELF_WIDGETS :: 16
+SELF_NODES :: 32
+SELF_NODE_LIMIT :: 8
+SELF_EXTENSION_LIMIT :: 8
+SELF_DEFAULT_NODE :: "https://api.waozi.xyz"
+
+SelfExtension :: struct {
+    id: [40]u8
+    label: [128]u8
+}
+
+SelfState :: struct {
+    name: [64]u8
+    intention: [128]u8
+    picture: s32
+    theme: s32
+    accent: s32
+    material: bool
+    controls: s32
+    nodes: [SELF_NODE_LIMIT][256]u8
+    node_count: s32
+    preferred: s32
+    extensions: [SELF_EXTENSION_LIMIT]SelfExtension
+    extension_count: s32
+}
+
+SelfDefault :: () -> SelfState {
+    state := SelfState.{.material = true,
+        .controls = SELF_IDENTITY | SELF_APPEARANCE | SELF_ACCENT | SELF_WIDGETS | SELF_NODES,
+        .node_count = 1}
+    unused CopyCString(SELF_DEFAULT_NODE, state.nodes[0][:])
+    return state
+}
+
+SelfFree :: (text: string) {
+    if text.count == 0 { return }
+    descriptor := cast(*TextDescriptor)(*text)
+    FreeBytes(descriptor.data)
+}
+libc :: #system_library "libc";
+FreeBytes :: (bytes: *u8) #foreign libc "free";
+
+SelfQuote :: (out: *Vec(u8), text: string) {
+    BuilderPrint(out, "\"")
+    for byte: text {
+        if byte == cast(u8)34 { BuilderPrint(out, "\\\"") }
+        else if byte == cast(u8)92 { BuilderPrint(out, "\\\\") }
+        else if byte == cast(u8)10 { BuilderPrint(out, "\\n") }
+        else if byte == cast(u8)13 { BuilderPrint(out, "\\r") }
+        else if byte == cast(u8)9 { BuilderPrint(out, "\\t") }
+        else if byte >= cast(u8)32 {
+            bytes: [1]u8 = .[byte]
+            BuilderPrint(out, "%", TextView(bytes[:]))
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+SelfEncode :: (state: SelfState) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"name\":")
+    SelfQuote(*out, TextUntilNul(state.name[:]))
+    BuilderPrint(*out, ",\"intention\":")
+    SelfQuote(*out, TextUntilNul(state.intention[:]))
+    BuilderPrint(*out, ",\"picture\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
+        state.picture, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
+    for index: 0..state.node_count - 1 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        SelfQuote(*out, TextUntilNul(state.nodes[index][:]))
+    }
+    BuilderPrint(*out, "],\"extensions\":[")
+    for index: 0..state.extension_count - 1 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "{\"id\":")
+        SelfQuote(*out, TextUntilNul(state.extensions[index].id[:]))
+        BuilderPrint(*out, ",\"label\":")
+        SelfQuote(*out, TextUntilNul(state.extensions[index].label[:]))
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
+
+SelfNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
+    number := Json.ReadNumber(text, at)
+    value := cast(s32)number.value
+    if !number.valid || number.value != cast(float64)value || value < minimum || value > maximum {
+        return -1
+    }
+    return value
+}
+
+SelfDecode :: (text: string, output: *SelfState) -> bool {
+    if text.count == 0 || text.count > 8192 { return false }
+    keys: [11]string = .["version", "name", "intention", "picture", "theme", "accent", "material", "controls", "preferred", "nodes", "extensions"]
+    at: [11]s32
+    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || SelfNumber(text, at[0], 1, 1) != 1 {
+        return false
+    }
+    state: SelfState
+    if Json.ReadStringText(text, at[1], state.name[:]) < 0 ||
+    Json.ReadStringText(text, at[2], state.intention[:]) < 0 { return false }
+    state.picture = SelfNumber(text, at[3], 0, 27)
+    state.theme = SelfNumber(text, at[4], 0, 2)
+    state.accent = SelfNumber(text, at[5], 0, 15)
+    material := SelfNumber(text, at[6], 0, 1)
+    state.controls = SelfNumber(text, at[7], 0, 63)
+    state.preferred = SelfNumber(text, at[8], 0, SELF_NODE_LIMIT - 1)
+    if state.picture < 0 || state.theme < 0 || state.accent < 0 || material < 0 || state.controls < 0 || state.preferred < 0 { return false }
+    state.material = material == 1
+    positions: [SELF_NODE_LIMIT]s32
+    state.node_count = Json.ArrayPositions(text, at[9], positions[:])
+    if state.node_count < 1 || state.node_count > SELF_NODE_LIMIT || state.preferred >= state.node_count { return false }
+    for index: 0..state.node_count - 1 {
+        value: [256]u8
+        if Json.ReadStringText(text, positions[index], value[:]) <= 0 { return false }
+        normalized := NodeOrigin(TextUntilNul(value[:]))
+        if normalized == "" || !CopyCString(normalized, state.nodes[index][:]) { return false }
+        for previous: 0..index - 1 {
+            if TextUntilNul(state.nodes[previous][:]) == normalized { return false }
+        }
+    }
+    extensions: [SELF_EXTENSION_LIMIT]s32
+    state.extension_count = Json.ArrayPositions(text, at[10], extensions[:])
+    if state.extension_count < 0 || state.extension_count > SELF_EXTENSION_LIMIT { return false }
+    for index: 0..state.extension_count - 1 {
+        fields: [2]string = .["id", "label"]
+        offsets: [2]s32
+        if !Json.ObjectPositions(text, extensions[index], fields[:], offsets[:]) ||
+        Json.ReadStringText(text, offsets[0], state.extensions[index].id[:]) <= 0 ||
+        Json.ReadStringText(text, offsets[1], state.extensions[index].label[:]) <= 0 { return false }
+    }
+    output.* = state
+    return true
+}
+
+SelfAddExtension :: (state: *SelfState, id: string, label: string) {
+    if state.extension_count >= SELF_EXTENSION_LIMIT { return }
+    entry := *state.extensions[state.extension_count]
+    if CopyCString(id, entry.id[:]) && CopyCString(label, entry.label[:]) {
+        state.extension_count += 1
+    }
+}
