@@ -1,0 +1,301 @@
+// Optional, host-neutral achievement collection. Hosts supply bounded pages
+// and accept only the alert preference; this UI never writes progress or awards.
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/vec"
+#import "kryon/app_context"
+#import "session"
+#import "geometry"
+#import "drawing_props"
+#import "text_props"
+#import "text_widget"
+#import "model"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "toggle_props"
+#import "toggle_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "box_props"
+#import "box_widget"
+#import "tree"
+
+// The portable VM owns its allocations. Only a native host releases the
+// ordinary owned strings returned by BuilderFinish.
+AchievementRelease :: (value: string) {
+    #if !#defined(KRYON_HOSTED_UI) {
+        SelfFree(value)
+    }
+}
+
+AchievementPageSize :: 20
+AchievementRow :: struct {
+    group: [256]u8
+    title: [512]u8
+    description: [2048]u8
+    progress: [256]u8
+    date: [128]u8
+    earned: bool
+}
+AchievementPage :: struct {
+    owner: [97]u8
+    rows: [AchievementPageSize]AchievementRow
+    count: s32
+    page: s32
+    pages: s32
+    total: s32
+    earned: s32
+    alerts: bool
+}
+
+achievement_open: bool;
+achievement_page: AchievementPage;
+achievement_requested: s32;
+achievement_scroll: s32;
+achievement_ticks: s32;
+achievement_ready: bool;
+achievement_error: bool;
+
+AchievementPageDecode :: (document: string, output: *AchievementPage) -> bool {
+    if document.count < 2 || document.count >= 65536 { return false }
+    end := ValueEnd(document, Space(document, 0), 0)
+    if end < 0 || Space(document, end) != document.count { return false }
+    next: AchievementPage
+    version := ReadNumber(document, FieldAt(document, 0, "version"))
+    if !version.valid || version.value != 1 ||
+    ReadStringText(document, FieldAt(document, 0, "owner"), next.owner[:]) < 1 { return false }
+    keys: [5]string = .["page", "pages", "total", "earned", "alerts"]
+    values: [5]s32
+    for index: 0..4 {
+        value := ReadNumber(document, FieldAt(document, 0, keys[index]))
+        if !value.valid || value.value < 0 || value.value > 1000000 ||
+        value.value != cast(float64)cast(s32)value.value { return false }
+        values[index] = cast(s32)value.value
+    }
+    if values[1] < 1 || values[0] >= values[1] || values[3] > values[2] || values[4] > 1 { return false }
+    next.page = values[0]
+    next.pages = values[1]
+    next.total = values[2]
+    next.earned = values[3]
+    next.alerts = values[4] == 1
+    at := FieldAt(document, 0, "rows")
+    next.count = ArrayCount(document, at)
+    if next.count < 0 || next.count > AchievementPageSize { return false }
+    for index: cast(s32)0..next.count - 1 {
+        row := *next.rows[index]
+        element := ElementAt(document, at, index)
+        if ReadStringText(document, FieldAt(document, element, "group"), row.group[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, element, "title"), row.title[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, element, "description"), row.description[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, element, "progress"), row.progress[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, element, "date"), row.date[:]) < 0 { return false }
+        earned := ReadNumber(document, FieldAt(document, element, "earned"))
+        if !earned.valid || (earned.value != 0 && earned.value != 1) { return false }
+        row.earned = earned.value == 1
+    }
+    output.* = next
+    return true
+}
+
+AchievementOpenRoute :: (route: string) -> bool {
+    if route != "achievements" { return false }
+    achievement_open = true
+    achievement_requested = 0
+    achievement_scroll = 0
+    achievement_ticks = 0
+    achievement_ready = false
+    achievement_error = false
+    return true
+}
+
+AchievementCommand :: (command: string) -> bool {
+    if command == "reload" {
+        achievement_open = false
+        achievement_ready = false
+        return false
+    }
+    if command != "back" || !achievement_open { return false }
+    achievement_open = false
+    achievement_ready = false
+    AppReply("handled")
+    return true
+}
+
+AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: float32) -> float32 {
+    request: Vec(u8)
+    BuilderPrint(*request, "{\"width\":%,\"font\":%,\"scale\":%,\"text\":", cast(s32)width, font, scale)
+    SelfQuote(*request, value)
+    BuilderPrint(*request, "}")
+    document := BuilderFinish(request)
+    response := AppService("self.text_height", document)
+    AchievementRelease(document)
+    measured := ReadNumber(response, Space(response, 0))
+    if measured.valid && measured.value >= cast(float64)font && measured.value <= 1000000 {
+        return cast(float32)measured.value
+    }
+    // Older hosts have no measurement service. Reserve conservative space;
+    // standard Text still owns wrapping and all glyph rendering.
+    columns := cast(s32)(width / (cast(float32)font * 2.0))
+    if columns < 1 { columns = 1 }
+    lines := (cast(s32)value.count + columns - 1) / columns + 1
+    return cast(float32)(lines * (font + cast(s32)(4.0 * scale)))
+
+}
+
+AchievementText :: (session: Session, key: u64, value: string, bounds: Rectangle, font: s32) {
+    Text(session, TextProps.{.key = key, .text = value, .bounds = bounds,
+            .font = font, .wrap = TextWrap.TextWrapAuto})
+}
+
+AchievementViewFrame :: () -> bool {
+    if !achievement_open { return false }
+    achievement_ticks += 1
+    if !achievement_ready || achievement_ticks % 30 == 0 {
+        path: Vec(u8)
+        BuilderPrint(*path, "achievements/page.%.json", achievement_requested)
+        key := BuilderFinish(path)
+        buffer: [65536]u8
+        count := ReadStore(key, buffer[:])
+        AchievementRelease(key)
+        next: AchievementPage
+        valid := count > 0 && count < buffer.count && AchievementPageDecode(TextUntilNul(buffer[:]), *next)
+        if valid {
+            if achievement_ready && TextUntilNul(next.owner[:]) != TextUntilNul(achievement_page.owner[:]) {
+                achievement_requested = 0
+                achievement_scroll = 0
+            }
+            achievement_page = next
+            achievement_requested = next.page
+            achievement_ready = true
+        }
+        achievement_error = !valid
+    }
+    session := AppSession()
+    scale := AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    area := AppBounds()
+    width := area.width - 32.0 * scale
+    if width > 720.0 * scale { width = 720.0 * scale }
+    if width < 120.0 * scale { return true }
+    font := cast(s32)(14.0 * scale)
+    title_font := cast(s32)(18.0 * scale)
+    label_width := width - 64.0 * scale
+    help := AppLocale("achievement_alerts_help")
+    help_height := AchievementWrappedHeight(help, width, font, scale)
+    heights: [AchievementPageSize]float32
+    title_heights: [AchievementPageSize]float32
+    description_heights: [AchievementPageSize]float32
+    height := 240.0 * scale + help_height
+    previous: [256]u8
+    for index: cast(s32)0..achievement_page.count - 1 {
+        row := achievement_page.rows[index]
+        group := TextUntilNul(row.group[:])
+        if group != TextUntilNul(previous[:]) { height += 52.0 * scale }
+        unused CopyCString(group, previous[:])
+        title_heights[index] = AchievementWrappedHeight(TextUntilNul(row.title[:]), label_width, title_font, scale)
+        description_heights[index] = AchievementWrappedHeight(TextUntilNul(row.description[:]), label_width, font, scale)
+        heights[index] = title_heights[index] + description_heights[index] + 92.0 * scale
+        height += heights[index]
+    }
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)50000, .bounds = area,
+            .content_height = cast(s32)height, .scroll_offset = achievement_scroll, .scale = scale})
+    achievement_scroll = scroll.scroll_offset
+    if !scroll.opened { return true }
+    x := scroll.content.x + (scroll.content.width - width) * 0.5
+    y := scroll.content.y + 16.0 * scale
+    if Button(session, ButtonProps.{.key = cast(u64)50001, .id = 50001,
+            .label = AppLocale("achievement_back"), .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 {
+        achievement_open = false
+    }
+    y += 56.0 * scale
+    AchievementText(session, 50002, AppLocale("achievements_title"), Rectangle.{x, y, width, 32.0 * scale}, cast(s32)(24.0 * scale))
+    y += 40.0 * scale
+    if achievement_ready {
+        summary: Vec(u8)
+        BuilderPrint(*summary, "% / %", achievement_page.earned, achievement_page.total)
+        text := BuilderFinish(summary)
+        AchievementText(session, 50003, text, Rectangle.{x, y, width, 28.0 * scale}, font)
+        AchievementRelease(text)
+    }
+    y += 36.0 * scale
+    toggle_label := AppLocale("achievement_alerts_label")
+    AchievementText(session, 50004, toggle_label, Rectangle.{x, y + 8.0 * scale, label_width, 36.0 * scale}, font)
+    toggle := Toggle(session, ToggleProps.{.key = cast(u64)50005, .id = 50005,
+            .bounds = Rectangle.{x + width - 56.0 * scale, y, 56.0 * scale, 44.0 * scale},
+            .label = toggle_label, .value = achievement_page.alerts, .disabled = !achievement_ready})
+    if toggle.changed {
+        request: Vec(u8)
+        BuilderPrint(*request, "{\"version\":1,\"owner\":\"%\",\"alerts\":%}", TextUntilNul(achievement_page.owner[:]), ifx toggle.value then 1 else 0)
+        setting := BuilderFinish(request)
+        saved := WriteStore("achievements/settings.json", setting)
+        AchievementRelease(setting)
+        if saved {
+            achievement_page.alerts = toggle.value
+            achievement_error = false
+        } else { achievement_error = true }
+    }
+    y += 52.0 * scale
+    AchievementText(session, 50006, help, Rectangle.{x, y, width, help_height}, font)
+    y += help_height + 16.0 * scale
+    if achievement_error {
+        error := AppLocale("achievement_save_error")
+        error_height := AchievementWrappedHeight(error, width, font, scale)
+        AchievementText(session, 50007, error, Rectangle.{x, y, width, error_height}, font)
+        y += error_height + 12.0 * scale
+    }
+    previous[0] = cast(u8)0
+    for index: cast(s32)0..achievement_page.count - 1 {
+        row := achievement_page.rows[index]
+        group := TextUntilNul(row.group[:])
+        key := cast(u64)(51000 + index * 12)
+        if group != TextUntilNul(previous[:]) {
+            y += 16.0 * scale
+            AchievementText(session, key, group, Rectangle.{x, y, width, 36.0 * scale}, title_font)
+            y += 36.0 * scale
+        }
+        unused CopyCString(group, previous[:])
+        visible := y + heights[index] >= area.y && y <= area.y + area.height
+        if visible {
+            center := Vector2.{x + 22.0 * scale, y + 28.0 * scale}
+            color := ColorFromPacked(ifx row.earned then (ifx AppDark() then 0x7ab5a5ff else 0x347c6cff) else (ifx AppDark() then 0x737c7aff else 0x9caaa6ff))
+            Box(session, BoxProps.{.key = key + 1,
+                    .bounds = Rectangle.{center.x - 18.0 * scale, center.y - 18.0 * scale, 36.0 * scale, 36.0 * scale},
+                    .radius = 18.0 * scale, .fill = color})
+            if row.earned {
+                Box(session, BoxProps.{.key = key + 2,
+                        .bounds = Rectangle.{center.x - 6.0 * scale, center.y - 6.0 * scale, 12.0 * scale, 12.0 * scale},
+                        .radius = 6.0 * scale, .fill = Color.{255, 255, 255, 255}})
+            }
+            label_x := x + 56.0 * scale
+            AchievementText(session, key + 4, TextUntilNul(row.title[:]), Rectangle.{label_x, y, label_width, title_heights[index]}, title_font)
+            description_y := y + title_heights[index] + 8.0 * scale
+            AchievementText(session, key + 5, TextUntilNul(row.description[:]), Rectangle.{label_x, description_y, label_width, description_heights[index]}, font)
+            status_y := description_y + description_heights[index] + 8.0 * scale
+            AchievementText(session, key + 6, AppLocale(ifx row.earned then "achievement_earned" else "achievement_locked"), Rectangle.{label_x, status_y, label_width, 24.0 * scale}, font)
+            AchievementText(session, key + 7, TextUntilNul(row.progress[:]), Rectangle.{label_x, status_y + 24.0 * scale, label_width, 24.0 * scale}, font)
+            if row.earned && row.date[0] != cast(u8)0 {
+                AchievementText(session, key + 8, TextUntilNul(row.date[:]), Rectangle.{label_x, status_y + 48.0 * scale, label_width, 24.0 * scale}, font)
+            }
+        }
+        y += heights[index]
+    }
+    half := (width - 12.0 * scale) * 0.5
+    if achievement_page.pages > 1 {
+        for direction: cast(s32)0..1 {
+            disabled := ifx direction == 0 then achievement_page.page == 0 else achievement_page.page + 1 >= achievement_page.pages
+            if Button(session, ButtonProps.{.key = cast(u64)(52000 + direction), .id = 52000 + direction,
+                    .bounds = Rectangle.{x + cast(float32)direction * (half + 12.0 * scale), y, half, 44.0 * scale},
+                    .label = AppLocale(ifx direction == 0 then "achievement_previous" else "achievement_next"), .disabled = disabled}) != 0 {
+                achievement_requested = achievement_page.page + (ifx direction == 0 then -1 else 1)
+                achievement_ready = false
+                achievement_scroll = 0
+            }
+        }
+    }
+    unused End(session)
+    AppKeyboard(false)
+    return true
+}

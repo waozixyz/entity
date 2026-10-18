@@ -1,0 +1,20 @@
+#import "achievement_view"
+
+ValidPage :: #string JSON
+{"version":1,"owner":"profile-a","page":0,"pages":1,"total":2,"earned":1,"alerts":0,"rows":[{"group":"Diary","title":"First page","description":"Save a nonempty diary day.","progress":"1 / 1","date":"Earlier activity","earned":1},{"group":"Diary","title":"Seven pages","description":"Save seven diary days.","progress":"1 / 7","date":"","earned":0}]}
+JSON
+
+#program_export
+Answer :: () -> s32 {
+    page: AchievementPage
+    if !AchievementPageDecode(ValidPage, *page) { return 1 }
+    if page.count != 2 || page.total != 2 || page.earned != 1 || page.alerts { return 2 }
+    if !page.rows[0].earned || page.rows[1].earned { return 3 }
+    if AchievementPageDecode("{}", *page) { return 4 }
+    if AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":1,\"pages\":1,\"total\":0,\"earned\":0,\"alerts\":1,\"rows\":[]}", *page) { return 5 }
+    if AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":0,\"earned\":1,\"alerts\":1,\"rows\":[]}", *page) { return 6 }
+    if AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":0,\"earned\":0,\"alerts\":2,\"rows\":[]}", *page) { return 7 }
+    if AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":1,\"earned\":0,\"alerts\":1,\"rows\":[{\"title\":\"Missing fields\"}]}", *page) { return 8 }
+    if !AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":0,\"earned\":0,\"alerts\":1,\"rows\":[]}", *page) { return 9 }
+    return 42
+}
