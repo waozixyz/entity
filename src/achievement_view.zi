@@ -22,6 +22,11 @@
 #import "scroll_widget"
 #import "box_props"
 #import "box_widget"
+#import "kryon/svg_icon_props"
+#import "kryon/svg_icon_widget"
+#import "kryon/tab_bar_props"
+#import "kryon/tab_bar_widget"
+#import "kryon/text_align"
 #import "tree"
 
 // The portable VM owns its allocations. Only a native host releases the
@@ -40,6 +45,12 @@ AchievementRow :: struct {
     progress: [256]u8
     date: [128]u8
     earned: bool
+    badge: [1024]u8
+    tier: s32
+}
+AchievementApp :: struct {
+    id: [97]u8
+    title: [256]u8
 }
 AchievementPage :: struct {
     owner: [97]u8
@@ -50,6 +61,9 @@ AchievementPage :: struct {
     total: s32
     earned: s32
     alerts: bool
+    apps: [32]AchievementApp
+    app_count: s32
+    app: [97]u8
 }
 
 achievement_open: bool;
@@ -59,6 +73,8 @@ achievement_scroll: s32;
 achievement_ticks: s32;
 achievement_ready: bool;
 achievement_error: bool;
+achievement_filter: [97]u8;
+achievement_tab_scroll: s32;
 
 AchievementPageDecode :: (document: string, output: *AchievementPage) -> bool {
     if document.count < 2 || document.count >= 65536 { return false }
@@ -82,6 +98,21 @@ AchievementPageDecode :: (document: string, output: *AchievementPage) -> bool {
     next.total = values[2]
     next.earned = values[3]
     next.alerts = values[4] == 1
+    app_at := FieldAt(document, 0, "app")
+    if app_at >= 0 && ReadStringText(document, app_at, next.app[:]) < 0 { return false }
+    apps_at := FieldAt(document, 0, "apps")
+    if apps_at >= 0 {
+        next.app_count = ArrayCount(document, apps_at)
+        if next.app_count < 0 || next.app_count > 32 { return false }
+        for index: cast(s32)0..next.app_count - 1 {
+            element := ElementAt(document, apps_at, index)
+            if ReadStringText(document, FieldAt(document, element, "id"), next.apps[index].id[:]) < 1 ||
+            ReadStringText(document, FieldAt(document, element, "title"), next.apps[index].title[:]) < 1 { return false }
+            for prior: cast(s32)0..index - 1 {
+                if TextUntilNul(next.apps[prior].id[:]) == TextUntilNul(next.apps[index].id[:]) { return false }
+            }
+        }
+    }
     at := FieldAt(document, 0, "rows")
     next.count = ArrayCount(document, at)
     if next.count < 0 || next.count > AchievementPageSize { return false }
@@ -96,6 +127,11 @@ AchievementPageDecode :: (document: string, output: *AchievementPage) -> bool {
         earned := ReadNumber(document, FieldAt(document, element, "earned"))
         if !earned.valid || (earned.value != 0 && earned.value != 1) { return false }
         row.earned = earned.value == 1
+        badge_at := FieldAt(document, element, "badge")
+        if badge_at >= 0 && ReadStringText(document, badge_at, row.badge[:]) < 0 { return false }
+        tier := ReadNumber(document, FieldAt(document, element, "badge_tier"))
+        if tier.valid && (tier.value < 1 || tier.value > 99 || tier.value != cast(float64)cast(s32)tier.value) { return false }
+        row.tier = ifx tier.valid then cast(s32)tier.value else 1
     }
     output.* = next
     return true
@@ -109,6 +145,8 @@ AchievementOpenRoute :: (route: string) -> bool {
     achievement_ticks = 0
     achievement_ready = false
     achievement_error = false
+    achievement_filter = .{}
+    achievement_tab_scroll = 0
     return true
 }
 
@@ -155,20 +193,33 @@ AchievementViewFrame :: () -> bool {
     if !achievement_open { return false }
     achievement_ticks += 1
     if !achievement_ready || achievement_ticks % 30 == 0 {
-        path: Vec(u8)
-        BuilderPrint(*path, "achievements/page.%.json", achievement_requested)
-        key := BuilderFinish(path)
-        buffer: [65536]u8
-        count := ReadStore(key, buffer[:])
-        AchievementRelease(key)
+        request: Vec(u8)
+        BuilderPrint(*request, "{\"page\":%,\"app\":", achievement_requested)
+        SelfQuote(*request, TextUntilNul(achievement_filter[:]))
+        BuilderPrint(*request, "}")
+        query := BuilderFinish(request)
+        response := AppService("self.achievements", query)
+        AchievementRelease(query)
         next: AchievementPage
-        valid := count > 0 && count < buffer.count && AchievementPageDecode(TextUntilNul(buffer[:]), *next)
+        valid := response.count > 0 && AchievementPageDecode(response, *next)
+        // Earlier hosts still supply the same bounded, unfiltered store page.
+        if !valid {
+            path: Vec(u8)
+            BuilderPrint(*path, "achievements/page.%.json", achievement_requested)
+            key := BuilderFinish(path)
+            buffer: [65536]u8
+            count := ReadStore(key, buffer[:])
+            AchievementRelease(key)
+            valid = count > 0 && count < buffer.count && AchievementPageDecode(TextUntilNul(buffer[:]), *next)
+        }
         if valid {
             if achievement_ready && TextUntilNul(next.owner[:]) != TextUntilNul(achievement_page.owner[:]) {
                 achievement_requested = 0
                 achievement_scroll = 0
+                achievement_filter = .{}
             }
             achievement_page = next
+            achievement_filter = next.app
             achievement_requested = next.page
             achievement_ready = true
         }
@@ -183,13 +234,14 @@ AchievementViewFrame :: () -> bool {
     if width < 120.0 * scale { return true }
     font := cast(s32)(14.0 * scale)
     title_font := cast(s32)(18.0 * scale)
-    label_width := width - 64.0 * scale
+    label_width := width - 80.0 * scale
     help := AppLocale("achievement_alerts_help")
     help_height := AchievementWrappedHeight(help, width, font, scale)
     heights: [AchievementPageSize]float32
     title_heights: [AchievementPageSize]float32
     description_heights: [AchievementPageSize]float32
     height := 240.0 * scale + help_height
+    if achievement_page.app_count > 0 { height += 60.0 * scale }
     previous: [256]u8
     for index: cast(s32)0..achievement_page.count - 1 {
         row := achievement_page.rows[index]
@@ -222,6 +274,30 @@ AchievementViewFrame :: () -> bool {
         AchievementRelease(text)
     }
     y += 36.0 * scale
+    if achievement_page.app_count > 0 {
+        tabs: [33]Tab
+        tabs[0] = Tab.{.key = cast(u64)53000, .label = AppLocale("achievement_all_apps")}
+        selected: s32 = 0
+        for index: cast(s32)0..achievement_page.app_count - 1 {
+            choice := *achievement_page.apps[index]
+            tabs[index + 1] = Tab.{.key = cast(u64)(53001 + index), .label = TextUntilNul(choice.title[:])}
+            if TextUntilNul(choice.id[:]) == TextUntilNul(achievement_filter[:]) { selected = index + 1 }
+        }
+        result := TabBar(session, TabBarProps.{.key = cast(u64)53040,
+                .bounds = Rectangle.{x, y, width, 44.0 * scale}, .selected_index = selected,
+                .min_tab_width = cast(s32)(88.0 * scale), .max_tab_width = cast(s32)(200.0 * scale),
+                .content_sized = true, .focus_selected = true, .scroll_offset = achievement_tab_scroll,
+                .scale = scale}, tabs[:achievement_page.app_count + 1])
+        achievement_tab_scroll = result.scroll_offset
+        if result.selected_index >= 0 && result.selected_index <= achievement_page.app_count && result.selected_index != selected {
+            achievement_filter = .{}
+            if result.selected_index > 0 { achievement_filter = achievement_page.apps[result.selected_index - 1].id }
+            achievement_requested = 0
+            achievement_scroll = 0
+            achievement_ready = false
+        }
+        y += 60.0 * scale
+    }
     toggle_label := AppLocale("achievement_alerts_label")
     AchievementText(session, 50004, toggle_label, Rectangle.{x, y + 8.0 * scale, label_width, 36.0 * scale}, font)
     toggle := Toggle(session, ToggleProps.{.key = cast(u64)50005, .id = 50005,
@@ -260,17 +336,21 @@ AchievementViewFrame :: () -> bool {
         unused CopyCString(group, previous[:])
         visible := y + heights[index] >= area.y && y <= area.y + area.height
         if visible {
-            center := Vector2.{x + 22.0 * scale, y + 28.0 * scale}
-            color := ifx row.earned then ThemeOr("accent", 0x7ab5a5ff, 0x347c6cff) else ThemeOr("border", 0x737c7aff, 0x9caaa6ff)
+            color := ifx row.earned then ThemeOr("accent", 0x7ab5a5ff, 0x347c6cff) else Color.{135, 143, 147, 255}
             Box(session, BoxProps.{.key = key + 1,
-                    .bounds = Rectangle.{center.x - 18.0 * scale, center.y - 18.0 * scale, 36.0 * scale, 36.0 * scale},
-                    .radius = 18.0 * scale, .fill = color})
-            if row.earned {
-                Box(session, BoxProps.{.key = key + 2,
-                        .bounds = Rectangle.{center.x - 6.0 * scale, center.y - 6.0 * scale, 12.0 * scale, 12.0 * scale},
-                        .radius = 6.0 * scale, .fill = Color.{255, 255, 255, 255}})
-            }
-            label_x := x + 56.0 * scale
+                    .bounds = Rectangle.{x, y + 4.0 * scale, 60.0 * scale, 76.0 * scale},
+                    .radius = 12.0 * scale, .fill = ThemeOr("surface", 0x24333aff, 0xf1f5f7ff), .border = color})
+            shape := TextUntilNul(row.badge[:])
+            if shape == "" { shape = "S1.6rr:M12 2L20 5V12L12 22L4 12V5ZM8 12L11 15L16 9" }
+            SvgIcon(session, SvgIconProps.{.bounds = Rectangle.{x + 4.0 * scale, y + 8.0 * scale, 52.0 * scale, 52.0 * scale},
+                    .shape = shape, .color = color})
+            tier: Vec(u8)
+            BuilderPrint(*tier, "%", row.tier)
+            tier_text := BuilderFinish(tier)
+            Text(session, TextProps.{.key = key + 2, .bounds = Rectangle.{x, y + 58.0 * scale, 60.0 * scale, 20.0 * scale},
+                    .text = tier_text, .font = cast(s32)(11.0 * scale), .align = TextAlign.TextAlignCenter})
+            AchievementRelease(tier_text)
+            label_x := x + 80.0 * scale
             AchievementText(session, key + 4, TextUntilNul(row.title[:]), Rectangle.{label_x, y, label_width, title_heights[index]}, title_font)
             description_y := y + title_heights[index] + 8.0 * scale
             AchievementText(session, key + 5, TextUntilNul(row.description[:]), Rectangle.{label_x, description_y, label_width, description_heights[index]}, font)

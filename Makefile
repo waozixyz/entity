@@ -25,13 +25,20 @@ build/self.zib: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry self:Main -o $@ src/self.zi
-test: build/self.zib native-test model-test
+test: build/self.zib native-test model-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry model_test:main -o build/model-test tests/model_test.zi
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/model-test $$(rg --files build/model-test -g '*.c') -o build/model-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/model-test/test
+
+.PHONY: achievement-view-test
+achievement-view-test:
+	mkdir -p build/achievement-view-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/achievement-view-test $$(rg --files build/achievement-view-test -g '*.c') -lm -o build/achievement-view-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/achievement-view-test/test
 build/liboqs/lib/liboqs.a: ziran.lock
 	cmake -S $(LIBOQS_DIR) -B build/liboqs -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=OFF \
 		-DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF -DOQS_DIST_BUILD=OFF -DOQS_OPT_TARGET=generic -DOQS_MINIMAL_BUILD=SIG_ml_dsa_44

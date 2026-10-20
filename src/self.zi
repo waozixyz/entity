@@ -31,6 +31,8 @@
 #import "box_widget"
 #import "toggle_widget"
 #import "toggle_props"
+#import "kryon/svg_icon_props"
+#import "kryon/svg_icon_widget"
 
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: SelfState;
@@ -318,6 +320,10 @@ DrawAccount :: () {
     if width < 160.0 * scale { return }
     height: float32 = 244.0
     if management_page == 1 {
+        if (state.controls & SELF_NODES) != 0 {
+            height += cast(float32)(112 + state.node_count * 56)
+            for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) / scale }
+        }
         if management.account {
             height += 228.0
             if CanManage(ACCOUNT_ALIAS) { height += 100.0 }
@@ -435,6 +441,7 @@ DrawAccount :: () {
             if Action(821, Label("self.import_key", "Import account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(2) }
             y += 56.0 * scale
         }
+        if (state.controls & SELF_NODES) != 0 { Nodes(x, *y, width) }
         if CanManage(ACCOUNT_LINK) {
             TextLine(822, Label("self.connect_device", "Connect another device"), x, y, width, 20)
             y += 40.0 * scale
@@ -510,7 +517,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         Box(session, BoxProps.{.key = cast(u64)(600 + index), .bounds = row,
                 .fill = ThemeOr("canvas", 0x263f3aff, 0xf0f6f4ff),
                 .border = ifx preferred then ThemeOr("accent", 0x9abdb1ff, 0x9abdb1ff)
-                    else ThemeOr("border", 0xdce6e2ff, 0xdce6e2ff), .radius = 10.0 * scale})
+                else ThemeOr("border", 0xdce6e2ff, 0xdce6e2ff), .radius = 10.0 * scale})
         choose := ButtonProps.{.key = cast(u64)(410 + index), .id = 410 + cast(s32)index,
             .bounds = row, .label = TextUntilNul(node[:]), .invisible = true,
             .selected = preferred}
@@ -524,7 +531,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         Box(session, BoxProps.{.key = cast(u64)(640 + index),
                 .bounds = Rectangle.{center.x - 10.0 * scale, center.y - 10.0 * scale, 20.0 * scale, 20.0 * scale},
                 .border = ifx preferred then ThemeOr("accent", 0x2e7d68ff, 0x2e7d68ff)
-                    else ThemeOr("border", 0xb8ccc5ff, 0xb8ccc5ff), .radius = 10.0 * scale})
+                else ThemeOr("border", 0xb8ccc5ff, 0xb8ccc5ff), .radius = 10.0 * scale})
         indicator := ButtonProps.{.key = cast(u64)(660 + index), .id = 660 + cast(s32)index,
             .bounds = Rectangle.{center.x - 12.0 * scale, center.y - 12.0 * scale, 24.0 * scale, 24.0 * scale},
             .label = TextUntilNul(node[:]), .icon_only = true, .circle = true,
@@ -586,6 +593,47 @@ Nodes :: (x: float32, y: *float32, width: float32) {
     y.* += 68.0 * scale
 }
 
+ExtensionShape :: (route: string) -> string {
+    if route == "achievements" { return "S1.7rr:M8 3H16V10C16 16 8 16 8 10ZM8 5H4V8L8 11M16 5H20V8L16 11M12 15V21M8 21H16" }
+    if route == "inbe" { return "S1.7rr:M3 13H7L10 5L14 20L17 11H21" }
+    if route == "friends" { return "S1.7rr:M9 3C4 3 4 11 9 11C14 11 14 3 9 3M2 21V18C2 12 16 12 16 18V21M17 4C22 4 22 11 17 11M19 14C22 15 22 18 22 21" }
+    if route == "telegram" { return "S1.7rr:M3 11L21 4L17 21L11 15L7 18L8 13L18 7L11 15" }
+    if route == "data" { return "S1.7rr:M4 5C4 1 20 1 20 5C20 9 4 9 4 5V18C4 22 20 22 20 18V5M4 11C4 15 20 15 20 11" }
+    return "S1.7rr:M5 5H19V19H5ZM9 9L15 15M9 15L15 9"
+}
+
+ExtensionRows :: (left: float32, top: *float32, width: float32) {
+    for index: 0..state.extension_count - 1 {
+        entry := state.extensions[index]
+        route := TextUntilNul(entry.id[:])
+        if management.available && route == "account" { continue }
+        detailed := entry.summary[0] != cast(u8)0
+        row_height := (ifx detailed then 76.0 else 60.0) * scale
+        row := Rectangle.{left, top.*, width, row_height}
+        color := ThemeOr("text", 0xe5eef3ff, 0x203b4bff)
+        SvgIcon(session, SvgIconProps.{.shape = ExtensionShape(route), .color = color,
+                .bounds = Rectangle.{left + 4.0 * scale, top.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
+        label_x := left + 44.0 * scale
+        TextLine(cast(u64)(920 + index), TextUntilNul(entry.label[:]), label_x,
+            top.* + (ifx detailed then 8.0 else 16.0) * scale, width - 76.0 * scale, 16)
+        if detailed {
+            TextLine(cast(u64)(940 + index), TextUntilNul(entry.summary[:]), label_x,
+                top.* + 36.0 * scale, width - 76.0 * scale, 13)
+        }
+        SvgIcon(session, SvgIconProps.{.shape = "S1.7rr:M9 5L16 12L9 19", .color = color,
+                .bounds = Rectangle.{left + width - 24.0 * scale, top.* + 18.0 * scale, 20.0 * scale, 20.0 * scale}})
+        if Button(session, ButtonProps.{.key = cast(u64)(500 + index), .id = 500 + cast(s32)index,
+                .bounds = row, .label = TextUntilNul(entry.label[:]), .invisible = true}) != 0 && Save() {
+            if !AchievementOpenRoute(route) { AppReply(route) }
+        }
+        Box(session, BoxProps.{.key = cast(u64)(900 + index),
+                .bounds = Rectangle.{label_x, top.* + row_height, width - 44.0 * scale, 1.0},
+                .fill = ThemeOr("border", 0x34514aff, 0xdde7e3ff)})
+        top.* += row_height + 8.0 * scale
+    }
+    top.* += 16.0 * scale
+}
+
 Draw :: () {
     if AchievementViewFrame() { return }
     PollManagement()
@@ -622,9 +670,11 @@ Draw :: () {
     for index: 0..27 { if (state.pictures & (1 << cast(s32)index)) != 0 { picture_count += 1 } }
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     height := 352.0 * scale
-    if (state.controls & SELF_NODES) != 0 { height += cast(float32)(112 + state.node_count * 56) * scale }
+    if (state.controls & SELF_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
     if management.available { height += 144.0 * scale }
-    for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) }
+    if !management.available {
+        for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) }
+    }
     if (state.controls & SELF_INTENTION) != 0 { height += 100.0 * scale }
     if (state.controls & SELF_APPEARANCE) != 0 { height += 100.0 * scale }
     if (state.controls & SELF_ACCENT) != 0 { height += 68.0 * scale + 2.0 * ((width - 56.0 * scale) / 8.0) }
@@ -633,7 +683,7 @@ Draw :: () {
     for index: 0..state.extension_count - 1 {
         entry := state.extensions[index]
         if management.available && TextUntilNul(entry.id[:]) == "account" { continue }
-        height += (ifx entry.summary[0] != cast(u8)0 then 104.0 else 52.0) * scale
+        height += (ifx entry.summary[0] != cast(u8)0 then 84.0 else 68.0) * scale
     }
     if notice != "" { height += 48.0 * scale }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
@@ -650,8 +700,6 @@ Draw :: () {
             .border = ThemeOr("border", 0x34514aff, 0xdde7e3ff), .radius = 20.0 * scale})
     x := panel_x + 24.0 * scale
     y := panel_y + 24.0 * scale
-    TextLine(4, "S E L F", x, y, width, 12)
-    y += 20.0 * scale
     TextLine(5, Label("self.title", "Your profile"), x, y, width, 30)
     y += 44.0 * scale
     center_x := x + width * 0.5
@@ -690,8 +738,9 @@ Draw :: () {
         if EditField(1, state.intention[:], Label("self.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
         y += 100.0 * scale
     }
+    ExtensionRows(x, *y, width)
     if management.available { AccountSummary(x, *y, width) }
-    if (state.controls & SELF_NODES) != 0 { Nodes(x, *y, width) }
+    if (state.controls & SELF_NODES) != 0 && !management.available { Nodes(x, *y, width) }
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
                 .bounds = Rectangle.{x, y, width, 40.0 * scale}, .font = cast(s32)(13.0 * scale), .wrap = TextWrap.TextWrapAuto})
@@ -733,34 +782,6 @@ Draw :: () {
         if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
         if Action(61, "Classic", Rectangle.{x + half + 8.0 * scale, y, half, 40.0 * scale}, !state.material) { state.material = false; Save() }
         y += 64.0 * scale
-    }
-    for index: 0..state.extension_count - 1 {
-        entry := state.extensions[index]
-        route := TextUntilNul(entry.id[:])
-        if management.available && route == "account" { continue }
-        detailed := entry.summary[0] != cast(u8)0
-        row_height := (ifx detailed then 92.0 else 44.0) * scale
-        if detailed {
-            Box(session, BoxProps.{.key = cast(u64)(900 + index), .bounds = Rectangle.{x, y, width, row_height},
-                    .fill = ThemeOr("canvas", 0x263f3aff, 0xf0f6f4ff), .radius = 10.0 * scale})
-            TextLine(cast(u64)(920 + index), TextUntilNul(entry.label[:]), x + 12.0 * scale, y + 8.0 * scale, width - 24.0 * scale, 16)
-            Paragraph(cast(u64)(940 + index), TextUntilNul(entry.summary[:]), x + 12.0 * scale, y + 36.0 * scale, width - 24.0 * scale, 44.0, 13)
-            if entry.badge[0] != cast(u8)0 {
-                Text(session, TextProps.{.key = cast(u64)(960 + index), .text = TextUntilNul(entry.badge[:]),
-                        .bounds = Rectangle.{x + width * 0.5, y + 8.0 * scale, width * 0.5 - 12.0 * scale, 28.0 * scale},
-                        .font = cast(s32)(12.0 * scale), .align = TextAlign.TextAlignEnd})
-            }
-        }
-        clicked := false
-        if detailed {
-            clicked = Button(session, ButtonProps.{.key = cast(u64)(500 + index), .id = 500 + cast(s32)index,
-                    .bounds = Rectangle.{x, y, width, row_height}, .label = TextUntilNul(entry.label[:]), .invisible = true}) != 0
-        } else { clicked = Action(500 + cast(s32)index, TextUntilNul(entry.label[:]), Rectangle.{x, y, width, row_height}) }
-        if clicked && Save() {
-            if route == "account" && management.available { OpenManagement(1) }
-            else if !AchievementOpenRoute(route) { AppReply(route) }
-        }
-        y += row_height + (ifx detailed then 12.0 else 8.0) * scale
     }
     unused End(session)
     AppKeyboard(fields[0].focused || fields[1].focused || fields[2].focused)
