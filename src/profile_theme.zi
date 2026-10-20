@@ -1,0 +1,10 @@
+// The profile in its host's theme: each part asks the host for a theme
+// token's colour and keeps the profile's own colour, dark or light, on a
+// host that has no theme to offer.
+#import "kryon/app_context"
+#import "kryon/app_theme"
+#import "drawing_props"
+
+ThemeOr :: (token: string, dark: u32, light: u32) -> Color {
+    return AppThemeColor(token, ColorFromPacked(ifx AppDark() then dark else light))
+}

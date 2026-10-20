@@ -6,6 +6,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "kryon/app_context"
+#import "profile_theme"
 #import "session"
 #import "geometry"
 #import "drawing_props"
@@ -260,7 +261,7 @@ AchievementViewFrame :: () -> bool {
         visible := y + heights[index] >= area.y && y <= area.y + area.height
         if visible {
             center := Vector2.{x + 22.0 * scale, y + 28.0 * scale}
-            color := ColorFromPacked(ifx row.earned then (ifx AppDark() then 0x7ab5a5ff else 0x347c6cff) else (ifx AppDark() then 0x737c7aff else 0x9caaa6ff))
+            color := ifx row.earned then ThemeOr("accent", 0x7ab5a5ff, 0x347c6cff) else ThemeOr("border", 0x737c7aff, 0x9caaa6ff)
             Box(session, BoxProps.{.key = key + 1,
                     .bounds = Rectangle.{center.x - 18.0 * scale, center.y - 18.0 * scale, 36.0 * scale, 36.0 * scale},
                     .radius = 18.0 * scale, .fill = color})

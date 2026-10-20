@@ -9,6 +9,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "kryon/app_context"
+#import "profile_theme"
 #import "kryon/app_protocol"
 #import "session"
 #import "geometry"
@@ -336,7 +337,7 @@ DrawAccount :: () {
         }
     }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
-            .fill = ColorFromPacked(ifx AppDark() then 0x142724ff else 0xeef4f2ff)})
+            .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
     scroll := Scroll(session, ScrollProps.{.key = cast(u64)1, .bounds = area,
             .content_height = cast(s32)((height + 48.0) * scale), .scroll_offset = management_scroll, .scale = scale})
     management_scroll = scroll.scroll_offset
@@ -507,8 +508,9 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         remove_width := ifx state.node_count > 1 then 44.0 * scale else 0.0
         row := Rectangle.{x, y.*, width - remove_width, 48.0 * scale}
         Box(session, BoxProps.{.key = cast(u64)(600 + index), .bounds = row,
-                .fill = ColorFromPacked(ifx AppDark() then 0x263f3aff else 0xf0f6f4ff),
-                .border = ColorFromPacked(ifx preferred then 0x9abdb1ff else 0xdce6e2ff), .radius = 10.0 * scale})
+                .fill = ThemeOr("canvas", 0x263f3aff, 0xf0f6f4ff),
+                .border = ifx preferred then ThemeOr("accent", 0x9abdb1ff, 0x9abdb1ff)
+                    else ThemeOr("border", 0xdce6e2ff, 0xdce6e2ff), .radius = 10.0 * scale})
         choose := ButtonProps.{.key = cast(u64)(410 + index), .id = 410 + cast(s32)index,
             .bounds = row, .label = TextUntilNul(node[:]), .invisible = true,
             .selected = preferred}
@@ -521,7 +523,8 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         center := Vector2.{row.x + row.width - 24.0 * scale, row.y + 24.0 * scale}
         Box(session, BoxProps.{.key = cast(u64)(640 + index),
                 .bounds = Rectangle.{center.x - 10.0 * scale, center.y - 10.0 * scale, 20.0 * scale, 20.0 * scale},
-                .border = ColorFromPacked(ifx preferred then 0x2e7d68ff else 0xb8ccc5ff), .radius = 10.0 * scale})
+                .border = ifx preferred then ThemeOr("accent", 0x2e7d68ff, 0x2e7d68ff)
+                    else ThemeOr("border", 0xb8ccc5ff, 0xb8ccc5ff), .radius = 10.0 * scale})
         indicator := ButtonProps.{.key = cast(u64)(660 + index), .id = 660 + cast(s32)index,
             .bounds = Rectangle.{center.x - 12.0 * scale, center.y - 12.0 * scale, 24.0 * scale, 24.0 * scale},
             .label = TextUntilNul(node[:]), .icon_only = true, .circle = true,
@@ -634,7 +637,7 @@ Draw :: () {
     }
     if notice != "" { height += 48.0 * scale }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
-            .fill = ColorFromPacked(ifx AppDark() then 0x142724ff else 0xeef4f2ff)})
+            .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
     scroll := Scroll(session, ScrollProps.{.key = cast(u64)1,
             .bounds = area, .content_height = cast(s32)(height + 48.0 * scale),
             .scroll_offset = scroll_offset, .scale = scale})
@@ -643,8 +646,8 @@ Draw :: () {
     panel_x := scroll.content.x + (scroll.content.width - panel_width) * 0.5
     panel_y := scroll.content.y + 24.0 * scale
     Box(session, BoxProps.{.key = cast(u64)3, .bounds = Rectangle.{panel_x, panel_y, panel_width, height},
-            .fill = ColorFromPacked(ifx AppDark() then 0x1c3330ff else 0xffffffff),
-            .border = ColorFromPacked(ifx AppDark() then 0x34514aff else 0xdde7e3ff), .radius = 20.0 * scale})
+            .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff),
+            .border = ThemeOr("border", 0x34514aff, 0xdde7e3ff), .radius = 20.0 * scale})
     x := panel_x + 24.0 * scale
     y := panel_y + 24.0 * scale
     TextLine(4, "S E L F", x, y, width, 12)
@@ -654,7 +657,7 @@ Draw :: () {
     center_x := x + width * 0.5
     Box(session, BoxProps.{.key = cast(u64)6,
             .bounds = Rectangle.{center_x - 40.0 * scale, y, 80.0 * scale, 80.0 * scale},
-            .radius = 40.0 * scale, .fill = ColorFromPacked(ifx AppDark() then 0x2a4540ff else 0xeaf1eaff)})
+            .radius = 40.0 * scale, .fill = ThemeOr("canvas", 0x2a4540ff, 0xeaf1eaff)})
     Image(session, Picture(state.picture, Rectangle.{center_x - 36.0 * scale, y + 4.0 * scale, 72.0 * scale, 72.0 * scale}))
     y += 88.0 * scale
     change := ButtonProps.{.key = cast(u64)10, .id = 10,
@@ -739,7 +742,7 @@ Draw :: () {
         row_height := (ifx detailed then 92.0 else 44.0) * scale
         if detailed {
             Box(session, BoxProps.{.key = cast(u64)(900 + index), .bounds = Rectangle.{x, y, width, row_height},
-                    .fill = ColorFromPacked(ifx AppDark() then 0x263f3aff else 0xf0f6f4ff), .radius = 10.0 * scale})
+                    .fill = ThemeOr("canvas", 0x263f3aff, 0xf0f6f4ff), .radius = 10.0 * scale})
             TextLine(cast(u64)(920 + index), TextUntilNul(entry.label[:]), x + 12.0 * scale, y + 8.0 * scale, width - 24.0 * scale, 16)
             Paragraph(cast(u64)(940 + index), TextUntilNul(entry.summary[:]), x + 12.0 * scale, y + 36.0 * scale, width - 24.0 * scale, 44.0, 13)
             if entry.badge[0] != cast(u8)0 {
