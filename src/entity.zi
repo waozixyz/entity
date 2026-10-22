@@ -196,11 +196,17 @@ OpenManagement :: (page: s32) {
 }
 
 AccountSummary :: (x: float32, y: *float32, width: float32) {
-    title := Label("entity.no_account", "No account connected")
     if management.account {
-        title = TextUntilNul(management.alias[:])
+        title := TextUntilNul(management.alias[:])
+        if title == "" { title = TextUntilNul(state.name[:]) }
         if title == "" { title = Label("entity.account", "Account") }
+        if Action(702, title, Rectangle.{x, y.*, width, 44.0 * scale}) {
+            OpenManagement(1)
+        }
+        y.* += 64.0 * scale
+        return
     }
+    title := Label("entity.no_account", "No account connected")
     TextLine(700, title, x, y.*, width, 20)
     y.* += 34.0 * scale
     status := TextUntilNul(management.status[:])
@@ -692,7 +698,7 @@ Draw :: () {
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     height := (ifx !state.host_navigation then 352.0 else 308.0) * scale
     if (state.controls & ENTITY_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
-    if management.available { height += 144.0 * scale }
+    if management.available { height += (ifx management.account then 64.0 else 144.0) * scale }
     if !management.available {
         for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) }
     }

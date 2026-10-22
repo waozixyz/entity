@@ -135,7 +135,7 @@ try:
     stop()
     start()
     assert profile()['owner_id'] == owner and profile()['name'] == 'Fixture Native'
-    click_word('Manage')
+    click_word('Fixture', last=True)
     click_word('out', True)
     capture('logout-confirm')
     click_filled()
