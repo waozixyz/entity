@@ -54,6 +54,7 @@ management_scroll: s32;
 account_alias: [40]u8;
 account_passphrase: [512]u8;
 account_code: [1024]u8;
+account_short_id: [16]u8;
 qr_code: QrCode;
 qr_text: [1024]u8;
 qr_valid: bool;
@@ -352,8 +353,10 @@ DrawAccount :: () {
     if management_page == 4 { title = Label("self.logout", "Log out on this device") }
     if management_page == 5 { title = Label("self.clear_remote", "Clear remote account data") }
     if management_page == 6 { title = Label("self.switch_account", "Switch account") }
-    TextLine(801, title, x, y, width, 26)
-    y += 52.0 * scale
+    if !state.host_navigation || management_page != 1 {
+        TextLine(801, title, x, y, width, 26)
+        y += 52.0 * scale
+    }
     if management_page == 2 || management_page == 3 {
         Paragraph(802, Label("self.key_file_help", "Choose a key file. A passphrase protects the backup and is needed again when importing it."), x, y, width, 64.0)
         y += 72.0 * scale
@@ -390,7 +393,14 @@ DrawAccount :: () {
         if management.account {
             TextLine(810, TextUntilNul(management.alias[:]), x, y, width, 20)
             y += 32.0 * scale
-            Paragraph(811, TextUntilNul(management.public_id[:]), x, y, width, 48.0, 13)
+            identity := TextUntilNul(management.public_id[:])
+            if identity.count > 8 {
+                unused CopyCString(identity[:4], account_short_id[:])
+                unused CopyCString("…", account_short_id[4:])
+                unused CopyCString(identity[identity.count - 4:], account_short_id[7:])
+                identity = TextUntilNul(account_short_id[:])
+            }
+            Paragraph(811, identity, x, y, width, 48.0, 13)
             y += 52.0 * scale
             if Action(812, Label("self.copy_id", "Copy public ID"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.public_id[:]), 0) }
             y += 56.0 * scale
