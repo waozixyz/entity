@@ -10,9 +10,11 @@ ref = "master"
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
 ref = "master"
+module_aliases = { FileDialogLinux = "file_dialog_linux" }
 
 [exports]
 model = "src/model.zi"
+dew_model = "src/dew_model.zi"
 node_url = "src/node_url.zi"
 management = "src/management.zi"
 recovery = "src/recovery.zi"

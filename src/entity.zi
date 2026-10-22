@@ -3,6 +3,9 @@
 #import "model"
 #import "achievement_view"
 #import "management"
+#import "dew_model"
+#import "std/json_scan"
+#import "std/number_text"
 #import "node_url"
 #import "qrcode/qrcode"
 #import "std/c_string"
@@ -646,7 +649,10 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
                 .bounds = Rectangle.{left + width - 24.0 * scale, top.* + 18.0 * scale, 20.0 * scale, 20.0 * scale}})
         if Button(session, ButtonProps.{.key = cast(u64)(500 + index), .id = 500 + cast(s32)index,
                 .bounds = row, .label = TextUntilNul(entry.label[:]), .invisible = true}) != 0 && Save() {
-            if !AchievementOpenRoute(route) { AppReply(route) }
+            if route == "dew" && AppSupports("entity.dew") {
+                dew_page = true
+                dew_refresh = true
+            } else if !AchievementOpenRoute(route) { AppReply(route) }
         }
         Box(session, BoxProps.{.key = cast(u64)(900 + index),
                 .bounds = Rectangle.{label_x, top.* + row_height, width - 44.0 * scale, 1.0},
@@ -658,6 +664,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
 
 Draw :: () {
     if AchievementViewFrame(!state.host_navigation) { return }
+    if dew_page { DrawDew(); return }
     PollManagement()
     if !loaded {
         state = EntityDefault()
@@ -811,6 +818,12 @@ Main :: () -> s64 {
         AppDescribe("Entity", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
         return APP_PROTOCOL
     }
+    if mode == APP_COMMAND && AppCommand() == "back" && dew_page {
+        dew_page = false
+        dew_confirmation = -1
+        AppReply("handled")
+        return 0
+    }
     if mode == APP_COMMAND && AchievementCommand(AppCommand()) { return 0 }
     if mode == APP_FRAME { Draw() }
     if mode == APP_COMMAND && AppCommand() == "reload" {
@@ -827,4 +840,128 @@ Main :: () -> s64 {
     }
     if mode == APP_SAVE && loaded { return ifx Save() then 0 else 1 }
     return 0
+}
+
+// One Dew page for native Entity providers. The host supplies verified node
+// state and queues explicit requests; balances are never computed locally.
+dew_page: bool;
+dew_refresh: bool;
+dew_confirmation: s32 = -1;
+dew_view_tick: s32;
+dew_view_json: [20000]u8;
+
+DewCommand :: (operation: string, sequence: s32, size: string = "", period: string = "") {
+    request: Vec(u8)
+    BuilderPrint(*request, "{\"owner\":\"%\",\"sequence\":%,\"operation\":\"%\",\"size\":\"%\",\"period\":\"%\"}",
+        TextUntilNul(management.public_id[:]), sequence + 1, operation, size, period)
+    document := BuilderFinish(request)
+    unused AppService("entity.dew", document)
+}
+
+DewDecimal :: (units: s64, divisor: s64, suffix: string) -> string {
+    text: Vec(u8)
+    fraction := units % divisor
+    BuilderPrint(*text, "%", units / divisor)
+    if fraction != 0 {
+        digits: [19]u8
+        places: s32 = 0
+        factor := divisor
+        while factor > 1 { places += 1; factor /= 10 }
+        value := fraction
+        index := places
+        while index > 0 { index -= 1; digits[index] = cast(u8)(48 + value % 10); value /= 10 }
+        last := places
+        while last > 0 && digits[last - 1] == cast(u8)48 { last -= 1 }
+        BuilderPrint(*text, ".%", TextView(digits[:last]))
+    }
+    BuilderPrint(*text, " %", suffix)
+    return BuilderFinish(text)
+}
+
+DrawDew :: () {
+    session = AppSession()
+    scale = AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    dew_view_tick += 1
+    if dew_view_tick % 15 == 1 || dew_refresh { unused CopyCString(AppService("entity.dew", ""), dew_view_json[:]) }
+    json := TextUntilNul(dew_view_json[:])
+    owner: [65]u8
+    unused ReadStringText(json, FieldAt(json, 0, "owner"), owner[:])
+    sequence := cast(s32)ReadNumber(json, FieldAt(json, 0, "sequence")).value
+    available := TextUntilNul(owner[:]) == TextUntilNul(management.public_id[:]) && MatchLiteral(json, FieldAt(json, 0, "available"), "true")
+    busy := MatchLiteral(json, FieldAt(json, 0, "busy"), "true")
+    if dew_refresh && available && !busy { DewCommand("refresh", sequence); dew_refresh = false }
+    area := AppBounds()
+    Box(session, BoxProps.{.key = cast(u64)45000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)45001, .bounds = area, .content_height = cast(s32)(1180.0 * scale), .scroll_offset = management_scroll})
+    management_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    defer { End(session) }
+    x := scroll.content.x + 24.0 * scale
+    y := scroll.content.y + 16.0 * scale
+    width := scroll.content.width - 48.0 * scale
+    if Action(45002, Label("entity.back", "Back"), Rectangle.{x, y, 76.0 * scale, 44.0 * scale}) { dew_page = false; dew_confirmation = -1 }
+    y += 56.0 * scale
+    TextLine(45003, "Dew", x, y, width, 28)
+    y += 48.0 * scale
+    if !available { Paragraph(45004, Label("entity.dew_connect", "Connect an account on the Waozi node to use Dew"), x, y, width, 70.0); return }
+    if busy { Paragraph(45005, Label("entity.working", "Working…"), x, y, width, 36.0); y += 42.0 * scale }
+    account: DewAccount
+    at := FieldAt(json, 0, "account")
+    account_end := ValueEnd(json, at, 0)
+    known := at >= 0 && account_end > at && DewParseAccount(json[at:account_end], TextUntilNul(owner[:]), *account)
+    if known {
+        amount := DewDecimal(account.balance, DewUnits, "Dew")
+        TextLine(45006, amount, x, y, width, 24)
+        y += 48.0 * scale
+    }
+    if !busy && Action(45007, Label("entity.refresh", "Refresh"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("refresh", sequence) }
+    y += 56.0 * scale
+    if !busy && Action(45008, Label("entity.dew_fund", "Add Dew with Monero"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("address", sequence) }
+    y += 56.0 * scale
+    funding: DewFunding
+    at = FieldAt(json, 0, "funding")
+    funding_end := ValueEnd(json, at, 0)
+    if at >= 0 && funding_end > at && DewParseFunding(json[at:funding_end], TextUntilNul(owner[:]), *funding) {
+        minimum := DewDecimal(funding.minimum, 1000000000000, "XMR")
+        explanation: Vec(u8)
+        BuilderPrint(*explanation, "%: % · %: %", Label("entity.dew_minimum", "Minimum"), minimum,
+            Label("entity.dew_confirmations", "Confirmations"), funding.confirmations)
+        Paragraph(45014, BuilderFinish(explanation), x, y, width, 64.0)
+        y += 72.0 * scale
+        Paragraph(45009, TextUntilNul(funding.address[:]), x, y, width, 100.0)
+        y += 108.0 * scale
+        if Action(45010, Label("entity.copy_address", "Copy address"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(funding.address[:]), 0) }
+        y += 56.0 * scale
+    }
+    if MatchLiteral(json, FieldAt(json, 0, "pending"), "true") {
+        Paragraph(45011, Label("entity.dew_pending", "A purchase is awaiting confirmation. Retry checks the same purchase."), x, y, width, 60.0)
+        y += 68.0 * scale
+        if !busy && Action(45012, Label("entity.retry", "Retry"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("retry", sequence) }
+        y += 56.0 * scale
+    } else if known && account.enabled && !busy {
+        TextLine(45013, Label("entity.storage_plans", "Storage plans"), x, y, width, 20)
+        y += 40.0 * scale
+        for index: cast(s32)0..3 {
+            slot := index / 2
+            yearly := index % 2 == 1
+            cost := ifx yearly then account.plans[slot].yearly_units else account.plans[slot].monthly_units
+            if cost <= 0 || cost > account.balance { continue }
+            amount := DewDecimal(cost, DewUnits, "Dew")
+            title: Vec(u8)
+            BuilderPrint(*title, "% GB · % · %", ifx slot == 0 then 1 else 5,
+                ifx yearly then Label("entity.yearly", "Yearly") else Label("entity.monthly", "Monthly"), amount)
+            label := BuilderFinish(title)
+            if Action(45020 + index, label, Rectangle.{x, y, width, 44.0 * scale}) { dew_confirmation = index }
+            y += 56.0 * scale
+            if dew_confirmation == index {
+                if Action(45030 + index, Label("entity.confirm_purchase", "Confirm purchase"), Rectangle.{x, y, width, 44.0 * scale}, true) {
+                    DewCommand("buy", sequence, DewPlanSizes[slot], ifx yearly then "yearly" else "monthly")
+                    dew_confirmation = -1
+                }
+                y += 56.0 * scale
+            }
+        }
+    }
+    if MatchLiteral(json, FieldAt(json, 0, "error"), "true") { Paragraph(45040, Label("entity.dew_error", "Could not confirm the node's response. Refresh or retry."), x, y, width, 64.0) }
 }

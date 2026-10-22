@@ -1,6 +1,6 @@
 # Entity
 
-Entity is one portable profile app shared by Inner Breeze and Werkzeug. It also
+Entity is one portable profile app shared by Inner Breeze, Werkzeug and standalone Shovey/Arcade. It also
 runs independently with its own native account provider. The portable profile
 preferences also run in Kryon's generic ZIB player, without account capabilities.
 
@@ -79,3 +79,20 @@ storage. Standalone Entity does not advertise sync or quota data it has not fetc
 QR payloads, cancellation, one-time actions and account-scoped persistence.
 `scripts/native_ui_test.py` checks the standalone native account flows and must
 run with `ENTITY_PRIVATE_DISPLAY=1` on a private Xvfb display.
+
+## Standalone hosts and Dew
+
+The `entity/native_host` export opens the same profile bundle for native hosts.
+The host supplies its private account directory and client name; embedded game
+collections carry no Entity bundle or account store. Run `EntityHostPump` after
+VM frames, save before closing the profile, and keep the page open if saving
+fails. Hosts that draw navigation pass `host_navigation = true` to
+`EntityHostOpen`.
+
+On the Waozi node, connected native profiles can read their Dew balance, obtain
+their Monero funding address, and confirm a node-priced storage plan. Purchases
+are saved before sending. An uncertain result retains its request ID for an
+explicit retry; it never becomes a new debit. Switching or logging out cancels
+the old account's in-flight requests. The `entity/dew_model` export shares strict
+integer balance, allowance and funding-address validation with Inner Breeze.
+No currency transfer or game-specific shop is added.

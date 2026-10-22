@@ -1,0 +1,188 @@
+// Native transport for Entity's Dew page. Queued intentions run after the VM.
+// A purchase is saved before sending and retries retain its original ID.
+#import "account_store"
+#import "dew_model"
+#import "model"
+#import "recovery"
+#import "std/net_http"
+#import "daochi_client/crypto"
+#import "native_files"
+#import "std/c_string"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/date_time_linux"
+#import "daochi_client/async_client"
+#import "daochi_client/client"
+#import "daochi_client/keys"
+Auth :: #import "daochi_client/auth";
+#import "kryon/http_transfer"
+
+dew_owner: [65]u8;
+dew_sequence: s32;
+dew_queued: [24]u8;
+dew_size: [16]u8;
+dew_period: [16]u8;
+dew_pending: PendingRequest;
+dew_session: Auth.Session;
+dew_transfer: HttpTransfer;
+dew_active: bool;
+dew_response: [8192]u8;
+dew_plan: [8192]u8;
+dew_address: [8192]u8;
+dew_attempt: [256]u8;
+dew_error: bool;
+dew_document: string;
+
+DewReady :: () -> bool {
+    return account_standalone_ready &&
+    TextUntilNul(account_profile.nodes[account_profile.preferred][:]) == DewNode
+}
+
+DewReset :: () {
+    CancelRequest(*dew_pending)
+    HttpTransferCancel(*dew_transfer)
+    dew_session = Auth.Session.{}
+    dew_owner = account_recovery.keys.public_id
+    dew_active = false
+    dew_queued = .{}
+    dew_plan = .{}
+    dew_address = .{}
+    dew_attempt = .{}
+    dew_error = false
+}
+
+DewAttemptPath :: (output: []u8) -> string {
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "dew.%.purchase.json", TextUntilNul(dew_owner[:]))
+    text := BuilderFinish(bytes)
+    defer { EntityFree(text) }
+    return AccountStorePath(text, output)
+}
+
+DewSnapshot :: () -> string {
+    if TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { DewReset() }
+    EntityFree(dew_document)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"sequence\":%,\"busy\":%,\"available\":%,\"error\":%,\"pending\":%,\"owner\":",
+        dew_sequence, dew_active || dew_queued[0] != cast(u8)0, DewReady(), dew_error, dew_attempt[0] != cast(u8)0)
+    EntityQuote(*out, TextUntilNul(dew_owner[:]))
+    BuilderPrint(*out, ",\"account\":%,\"funding\":%}",
+        ifx dew_plan[0] == cast(u8)0 then "null" else TextUntilNul(dew_plan[:]),
+        ifx dew_address[0] == cast(u8)0 then "null" else TextUntilNul(dew_address[:]))
+    dew_document = BuilderFinish(out)
+    return dew_document
+}
+
+DewEnqueue :: (text: string) -> bool {
+    if !DewReady() || dew_active || dew_queued[0] != cast(u8)0 || text.count > 512 { return false }
+    owner: [65]u8
+    operation: [24]u8
+    size: [16]u8
+    period: [16]u8
+    sequence: s64
+    if Space(text, ValueEnd(text, 0, 0)) != cast(s32)text.count ||
+    ReadStringText(text, FieldAt(text, 0, "owner"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) ||
+    !DewInteger(text, FieldAt(text, 0, "sequence"), *sequence) ||
+    sequence <= dew_sequence || sequence > 2147483647 ||
+    ReadStringText(text, FieldAt(text, 0, "operation"), operation[:]) <= 0 { return false }
+    op := TextUntilNul(operation[:])
+    if op != "refresh" && op != "address" && op != "buy" && op != "retry" { return false }
+    if op == "buy" {
+        account: DewAccount
+        if dew_attempt[0] != cast(u8)0 || !DewParseAccount(TextUntilNul(dew_plan[:]), TextUntilNul(owner[:]), *account) || !account.enabled { return false }
+        unused ReadStringText(text, FieldAt(text, 0, "size"), size[:])
+        unused ReadStringText(text, FieldAt(text, 0, "period"), period[:])
+        slot := DewPlanSlot(TextUntilNul(size[:]))
+        if slot < 0 || (TextUntilNul(period[:]) != "monthly" && TextUntilNul(period[:]) != "yearly") { return false }
+        cost := ifx TextUntilNul(period[:]) == "monthly" then account.plans[slot].monthly_units else account.plans[slot].yearly_units
+        if cost <= 0 || cost > account.balance { return false }
+    }
+    if op == "retry" && dew_attempt[0] == cast(u8)0 { return false }
+    dew_owner = owner
+    dew_sequence = cast(s32)sequence
+    dew_queued = operation
+    dew_size = size
+    dew_period = period
+    return true
+}
+
+DewStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*dew_transfer, request, output, 15000)
+}
+DewPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*dew_transfer, status) }
+DewCancel :: (context: *void) { HttpTransferCancel(*dew_transfer) }
+
+DewPump :: () {
+    if !DewReady() || TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) {
+        DewReset()
+        return
+    }
+    if dew_active {
+        if !PollRequest(*dew_pending) { return }
+        dew_active = false
+        address_request := TextUntilNul(dew_queued[:]) == "address"
+        purchase_request := TextUntilNul(dew_queued[:]) == "buy" || TextUntilNul(dew_queued[:]) == "retry"
+        dew_queued = .{}
+        dew_error = true
+        if dew_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+            if address_request {
+                funding: DewFunding
+                if DewParseFunding(TextUntilNul(dew_response[:]), TextUntilNul(dew_owner[:]), *funding) {
+                    dew_address = dew_response
+                    dew_error = false
+                }
+            } else {
+                account: DewAccount
+                if DewParseAccount(TextUntilNul(dew_response[:]), TextUntilNul(dew_owner[:]), *account) {
+                    dew_plan = dew_response
+                    dew_error = false
+                    if purchase_request {
+                        path: [4096]u8
+                        if NativeWrite(DewAttemptPath(path[:]), "{}") { dew_attempt = .{} }
+                    }
+                }
+            }
+        }
+        return
+    }
+    code: s32 = 0
+    if TextUntilNul(dew_queued[:]) == "refresh" { code = 1 }
+    if TextUntilNul(dew_queued[:]) == "address" { code = 2 }
+    if TextUntilNul(dew_queued[:]) == "buy" { code = 3 }
+    if TextUntilNul(dew_queued[:]) == "retry" { code = 4 }
+    if code == 0 { return }
+    path: [4096]u8
+    if code == 1 && dew_attempt[0] == cast(u8)0 {
+        loaded: [256]u8
+        if NativeRead(DewAttemptPath(path[:]), loaded[:]) > 2 { dew_attempt = loaded }
+    }
+    if code == 3 {
+        random: [16]u8
+        request_id: [33]u8
+        if SecureRandom(*random[0], random.count) == 0 { dew_error = true; dew_queued = .{}; return }
+        BytesToHex(*random[0], random.count, *request_id[0], request_id.count)
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"size\":\"%\",\"period\":\"%\",\"request_id\":\"%\"}",
+            TextUntilNul(dew_size[:]), TextUntilNul(dew_period[:]), TextUntilNul(request_id[:]))
+        body := BuilderFinish(out)
+        defer { EntityFree(body) }
+        if !CopyCString(body, dew_attempt[:]) || !NativeWrite(DewAttemptPath(path[:]), body) {
+            dew_error = true
+            dew_queued = .{}
+            return
+        }
+    }
+    client: Client
+    if !AccountStoreClient(null, *client) { dew_queued = .{}; return }
+    transport := AsyncTransport.{.start = DewStart, .poll = DewPoll, .cancel = DewCancel}
+    headers: [0]HttpHeader
+    purchase := code == 3 || code == 4
+    dew_error = false
+    dew_active = BeginRequest(*dew_pending, client, *dew_session, UnixNow(), transport,
+        ifx purchase then "POST" else "GET",
+        ifx code == 2 then "/api/v1/tokens/purchases/monero/address" else "/api/v1/storage/plan",
+        ifx purchase then TextUntilNul(dew_attempt[:]) else "", dew_response[:], headers[:])
+    if !dew_active { dew_error = true; dew_queued = .{} }
+}

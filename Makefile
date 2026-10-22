@@ -1,4 +1,4 @@
-ZIRAN ?= ziran
+ZIRAN ?= ./scripts/ziran.sh
 LOCK_FLAGS := $(if $(wildcard ziran.local.toml),,--locked)
 KRYON_DIR = $(shell $(ZIRAN) pkg path kryon $(LOCK_FLAGS))
 ZIRAN_ROOT = $(shell $(ZIRAN) pkg path ziran $(LOCK_FLAGS))
@@ -46,11 +46,12 @@ build/liboqs/lib/liboqs.a: ziran.lock
 build/ziran/libziran.a: ziran.lock $(RUNTIME_SOURCES)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(MAKE) -C $(ZIRAN_ROOT) BUILD_DIR=$(abspath build/ziran) $(abspath $@)
 build/generated/native/.complete: $(SOURCES) $(UI_SOURCES) ziran.lock Makefile
+	rm -rf $(@D)
 	mkdir -p $(@D)
-	$(ZIRAN) build --root . $(MODULE_PATHS) --define PLATFORM_DESKTOP --target=c --entry desktop:main -o $(@D) src/desktop.zi
+	$(ZIRAN) build --project $(LOCK_FLAGS) --define PLATFORM_DESKTOP --target=c --entry desktop:main -o $(@D) src/desktop.zi
 	touch $@
 build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_LIBRARY) Makefile
-	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/generated/native \
+	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/generated/native $$(find build/generated/native -type d -printf ' -iquote %p') \
 		$$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) \
 		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -o $@
 native: build/entity

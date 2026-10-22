@@ -1,6 +1,7 @@
 // Shared native host for Entity. Games keep only a route to this context;
 // account keys remain in this provider and never enter a game bundle.
 #import "account_store"
+#import "dew_native"
 #import "model"
 #import "native_files"
 #import "native_management"
@@ -21,6 +22,7 @@
 portable: AppContext;
 profile_document: string;
 asset_folder: [4096]u8;
+entity_host_navigation: bool;
 
 EntityHostText :: (text: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
@@ -28,12 +30,17 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets"
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew"
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
+        if service == "entity.dew" {
+            request := AppArgumentText(arguments[1])
+            result.* = EntityHostText(ifx request == "" then DewSnapshot() else ifx DewEnqueue(request) then "queued" else "rejected")
+            return 1
+        }
         if service == "entity.assets" { result.* = EntityHostText(TextUntilNul(asset_folder[:])); return 1 }
         if service == "entity.management" {
             request := AppArgumentText(arguments[1])
@@ -52,7 +59,10 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         for index: 0..64 { owner[index] = account_profile.owner_id[index] }
         unused SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
         EntityFree(profile_document)
-        profile_document = EntityEncode(account_profile)
+        state := account_profile
+        state.host_navigation = entity_host_navigation
+        if DewReady() { unused EntityAddExtension(*state, "dew", "Dew") }
+        profile_document = EntityEncode(state)
         output := arguments[1]
         if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)profile_document.count { return 0 }
         for index: 0..profile_document.count {
@@ -78,7 +88,8 @@ EntityHostAssetAllowed :: (path: string) -> bool {
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
 }
 
-EntityHostOpen :: (bytes: string, root: string, client_id: string) -> bool {
+EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigation: bool = false) -> bool {
+    entity_host_navigation = host_navigation
     if !AccountStoreStartAt(root, client_id) || !CopyCString(root, asset_folder[:]) { return false }
     portable = AppContext.{.expected_id = "entity", .allows = EntityHostAllows,
         .services = EntityHostServices, .widgets = WidgetHostCall}
@@ -126,10 +137,12 @@ EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s3
 
 EntityHostPump :: () {
     AccountStorePump()
+    DewPump()
 }
 
 EntityHostClose :: () -> bool {
     if !EntityHostSave() { return false }
+    DewReset()
     HostedAppClose(*portable.app)
     EntityFree(profile_document)
     profile_document = ""

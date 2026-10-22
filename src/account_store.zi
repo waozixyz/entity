@@ -17,7 +17,7 @@ Auth :: #import "daochi_client/auth";
 #import "std/byte_text_linux"
 #import "std/file"
 #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
-    Dialog :: #import "kryon/FileDialogLinux";
+    Dialog :: #import "file_dialog_linux";
 }
 
 account_profile: EntityState;
@@ -91,6 +91,9 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
     output.alias = account_alias
     output.capabilities = ACCOUNT_CREATE | ACCOUNT_IMPORT | ACCOUNT_SWITCH | ACCOUNT_LINK
     if account_standalone_ready { output.capabilities |= ACCOUNT_BACKUP | ACCOUNT_ALIAS | ACCOUNT_LOGOUT | ACCOUNT_CLEAR_REMOTE }
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        output.capabilities &= ~(ACCOUNT_IMPORT | ACCOUNT_BACKUP)
+    }
     output.node_count = account_profile.node_count
     for index: 0..output.node_count - 1 {
         output.nodes[index].address = account_profile.nodes[index]

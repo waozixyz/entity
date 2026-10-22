@@ -2,12 +2,15 @@
 #import "daochi_client/keys"
 #import "account_store"
 #import "management"
+#import "dew_model"
+#import "dew_native"
 #import "native_management"
 #import "native_files"
 #import "recovery"
 #import "pairing"
 #import "std/c_string"
 #import "std/text_buffer"
+#import "std/vec"
 
 fixture: Recovery;
 current_id: [65]u8;
@@ -144,5 +147,34 @@ Check :: () -> s32 {
     unused CopyCString("logout", action.operation[:])
     if AccountStoreAction(null, *action) != 1 || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 35 }
     if !AccountStoreStart() || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 36 }
+    // Dew accepts node-priced integer balances only for the current account.
+    account_recovery = fixture
+    account_standalone_ready = true
+    account_profile = EntityDefault()
+    dew_owner = fixture.keys.public_id
+    plan: Vec(u8)
+    BuilderPrint(*plan, "{\"account_id\":\"%\",\"asset_id\":\"waozi:token\",\"units_per_dew\":1000000,\"free_bytes\":10485760,\"used_bytes\":4096,\"enabled\":true,\"plan\":{\"balance\":12000000,\"limit_bytes\":10485760,\"expires_at\":0,\"size\":\"free\"},\"plans\":[{\"size\":\"1gb\",\"limit_bytes\":1073741824,\"monthly_units\":1000000,\"yearly_units\":10000000},{\"size\":\"5gb\",\"limit_bytes\":5368709120,\"monthly_units\":5000000,\"yearly_units\":50000000}]}", TextUntilNul(fixture.keys.public_id[:]))
+    response := BuilderFinish(plan)
+    defer { EntityFree(response) }
+    balance: DewAccount
+    if !DewParseAccount(response, TextUntilNul(fixture.keys.public_id[:]), *balance) || balance.balance != 12000000 { return 40 }
+    if DewParseAccount(response, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *balance) { return 41 }
+    number: s64
+    if DewInteger("9223372036854775808", 0, *number) || DewInteger("1.5", 0, *number) || DewInteger("-1", 0, *number) { return 42 }
+    unused CopyCString(response, dew_plan[:])
+    command: Vec(u8)
+    BuilderPrint(*command, "{\"owner\":\"%\",\"sequence\":1,\"operation\":\"buy\",\"size\":\"1gb\",\"period\":\"monthly\"}", TextUntilNul(fixture.keys.public_id[:]))
+    request := BuilderFinish(command)
+    defer { EntityFree(request) }
+    if !DewEnqueue(request) || DewEnqueue(request) { return 43 }
+    dew_queued = .{}
+    if DewEnqueue(request) { return 44 }
+    // Pending purchases cannot be replaced with a new debit.
+    unused CopyCString("{\"request_id\":\"fixture-purchase\",\"size\":\"1gb\",\"period\":\"monthly\"}", dew_attempt[:])
+    dew_sequence = 0
+    if DewEnqueue(request) { return 45 }
+    AccountStoreAction(null, *action)
+    DewReset()
+    if dew_active || dew_attempt[0] != cast(u8)0 || dew_plan[0] != cast(u8)0 { return 46 }
     return 0
 }
