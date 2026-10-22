@@ -16,7 +16,9 @@ Auth :: #import "daochi_client/auth";
 #import "std/vec"
 #import "std/byte_text_linux"
 #import "std/file"
-Dialog :: #import "file_dialog_linux";
+#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    Dialog :: #import "kryon/FileDialogLinux";
+}
 
 account_profile: EntityState;
 account_recovery: Recovery;
@@ -24,19 +26,24 @@ account_provider: ManagementProvider;
 account_alias: [40]u8;
 account_pairing_delivered: bool;
 account_standalone_ready: bool;
+account_root: [4096]u8;
+account_client_id: [64]u8;
 
 AccountStorePath :: (name: string, output: []u8) -> string {
-    root: [4096]u8
-    return NativeJoin(output, NativeRoot(root[:]), name)
+    return NativeJoin(output, TextUntilNul(account_root[:]), name)
 }
 AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
-    patterns: [2]string = .["*.key", "*.json"]
-    props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
-        .filename = ifx save then "entity-account.key" else "", .save = save,
-        .filter_name = "Account keys", .patterns = patterns[:]}
-    selected := Dialog.FileDialog(props, output)
-    if !selected.available { return -1 }
-    return ifx selected.accepted then 1 else 0
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        return -1
+    } else {
+        patterns: [2]string = .["*.key", "*.json"]
+        props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
+            .filename = ifx save then "entity-account.key" else "", .save = save,
+            .filter_name = "Account keys", .patterns = patterns[:]}
+        selected := Dialog.FileDialog(props, output)
+        if !selected.available { return -1 }
+        return ifx selected.accepted then 1 else 0
+    }
 }
 AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -141,9 +148,9 @@ AccountStoreDigest :: (body: string, output: []u8) -> bool {
 AccountStoreClient :: (context: *void, output: *Client) -> bool {
     if !account_standalone_ready { return false }
     output.server_url = TextUntilNul(account_profile.nodes[account_profile.preferred][:])
-    output.app_id = "self"
+    output.app_id = TextUntilNul(account_client_id[:])
     output.identity = Auth.Identity.{.account_id = TextUntilNul(account_recovery.keys.public_id[:]),
-        .public_key = TextUntilNul(account_recovery.keys.public_key_hex[:]), .client_id = "self",
+        .public_key = TextUntilNul(account_recovery.keys.public_key_hex[:]), .client_id = TextUntilNul(account_client_id[:]),
         .signing_context = cast(*void)*account_recovery.keys}
     output.digest = AccountStoreDigest
     output.signer = SignAccountMessage
@@ -177,7 +184,14 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
 }
 AccountStoreStart :: () -> bool {
     root: [4096]u8
-    if !NativeDirectory(NativeRoot(root[:])) { return false }
+    return AccountStoreStartAt(NativeRoot(root[:]), "entity")
+}
+
+// Every standalone host owns its account files. Nested apps use that host's
+// provider; they never open another credential store.
+AccountStoreStartAt :: (root: string, client_id: string) -> bool {
+    if root == "" || client_id == "" || !CopyCString(root, account_root[:]) ||
+    !CopyCString(client_id, account_client_id[:]) || !NativeDirectory(root) { return false }
     account_profile = EntityDefault()
     path: [4096]u8
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8

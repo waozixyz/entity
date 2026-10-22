@@ -18,6 +18,7 @@ management = "src/management.zi"
 recovery = "src/recovery.zi"
 native_files = "src/native_files.zi"
 native_management = "src/native_management.zi"
+native_host = "src/native_host.zi"
 pairing = "src/pairing.zi"
 pairing_client = "src/pairing_client.zi"
 

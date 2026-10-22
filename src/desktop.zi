@@ -86,7 +86,7 @@ AssetAllowed :: (path: string) -> bool {
     return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/entity/pfp.png") ||
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
 }
-OpenSelf :: (path: string) -> bool {
+OpenEntity :: (path: string) -> bool {
     file := OpenRead(path)
     if !file.valid { return false }
     defer { unused CloseFile(file) }
@@ -152,7 +152,7 @@ Draw :: (session: UI.Session) -> bool {
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
     path := ifx argc > 1 then TextFromCString(argv[1]) else "build/entity.zib"
-    if !AccountStoreStart() || !OpenSelf(path) { return 1 }
+    if !AccountStoreStart() || !OpenEntity(path) { return 1 }
     if !Desktop.OpenDesktopSized(480, 800) { return 1 }
     title: [16]u8
     unused CopyCString("Entity", title[:])
