@@ -670,8 +670,6 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
 }
 
 Draw :: () {
-    if AchievementViewFrame(!state.host_navigation) { return }
-    if dew_page { DrawDew(); return }
     PollManagement()
     if !loaded {
         state = EntityDefault()
@@ -682,6 +680,8 @@ Draw :: () {
         if count > 0 { unused EntityDecode(TextUntilNul(bytes[:]), *state) }
         loaded = true
     }
+    if AchievementViewFrame(!state.host_navigation) { return }
+    if dew_page { DrawDew(); return }
     if management_page != 0 { DrawAccount(); return }
     session = AppSession()
     scale = AppScale()
@@ -838,6 +838,12 @@ Main :: () -> s64 {
         fields = .{}
     }
     if mode == APP_COMMAND && AppCommand() == "account" { management_page = 1; management_scroll = 0 }
+    if mode == APP_COMMAND && AppCommand() == "dew" && AppSupports("entity.dew") {
+        dew_page = true
+        dew_refresh = true
+        dew_confirmation = -1
+        management_scroll = 0
+    }
     if mode == APP_COMMAND && AppCommand() == "back" && management_page != 0 {
         management_page = ifx management_page == 1 then 0 else 1
         management_scroll = 0
@@ -907,8 +913,10 @@ DrawDew :: () {
     x := scroll.content.x + 24.0 * scale
     y := scroll.content.y + 16.0 * scale
     width := scroll.content.width - 48.0 * scale
-    if Action(45002, Label("entity.back", "Back"), Rectangle.{x, y, 76.0 * scale, 44.0 * scale}) { dew_page = false; dew_confirmation = -1 }
-    y += 56.0 * scale
+    if !state.host_navigation {
+        if Action(45002, Label("entity.back", "Back"), Rectangle.{x, y, 76.0 * scale, 44.0 * scale}) { dew_page = false; dew_confirmation = -1 }
+        y += 56.0 * scale
+    }
     TextLine(45003, "Dew", x, y, width, 28)
     y += 48.0 * scale
     if !available { Paragraph(45004, Label("entity.dew_connect", "Connect an account on the Waozi node to use Dew"), x, y, width, 70.0); return }

@@ -89,6 +89,10 @@ VM frames, save before closing the profile, and keep the page open if saving
 fails. Hosts that draw navigation pass `host_navigation = true` to
 `EntityHostOpen`.
 
+Native hosts expose the shared intention field and can use
+`EntityHostDewAvailable` and `EntityHostDew` for a direct Dew entry. Dew uses
+the host's existing Back control when the host supplies navigation.
+
 On the Waozi node, connected native profiles can read their Dew balance, obtain
 their Monero funding address, and confirm a node-priced storage plan. Purchases
 are saved before sending. An uncertain result retains its request ID for an

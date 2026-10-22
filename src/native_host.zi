@@ -62,6 +62,7 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         EntityFree(profile_document)
         state := account_profile
         state.host_navigation = entity_host_navigation
+        state.controls |= ENTITY_INTENTION
         state.extensions = .{}
         state.extension_count = 0
         if DewReady() { unused EntityAddExtension(*state, "dew", "Dew") }
@@ -116,6 +117,14 @@ EntityHostReload :: () {
 
 EntityHostAccount :: () -> bool {
     portable.command = "account"
+    return AppContextRun(*portable, APP_COMMAND)
+}
+
+EntityHostDewAvailable :: () -> bool { return DewReady() }
+
+EntityHostDew :: () -> bool {
+    if !DewReady() { return false }
+    portable.command = "dew"
     return AppContextRun(*portable, APP_COMMAND)
 }
 
