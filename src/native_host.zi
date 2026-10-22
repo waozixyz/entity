@@ -114,6 +114,11 @@ EntityHostReload :: () {
     unused AppContextRun(*portable, APP_COMMAND)
 }
 
+EntityHostAccount :: () -> bool {
+    portable.command = "account"
+    return AppContextRun(*portable, APP_COMMAND)
+}
+
 EntityHostSave :: () -> bool {
     return AppContextRun(*portable, APP_SAVE)
 }
