@@ -45,8 +45,6 @@ notice: string;
 session: Session;
 scale: float32;
 asset_root: [4096]u8;
-focused_top: float32;
-focused_bottom: float32;
 management: Management;
 management_tick: s32;
 management_waiting: s32;
@@ -103,10 +101,6 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
     if secure && snapshot[0] != cast(u8)0 { props.display_value = "••••••••" }
     if field.focused { props.input = AppFieldInput() }
     result := TextField(session, props)
-    if result.focused {
-        focused_top = bounds.y
-        focused_bottom = bounds.y + bounds.height
-    }
     if result.edit.changed {
         edit := result.edit
         length: s64 = 0
@@ -307,18 +301,10 @@ DrawAccount :: () {
     scale = AppScale()
     if scale <= 0.0 { scale = 1.0 }
     area := AppBounds()
-    if focused_bottom > area.y + area.height - 16.0 * scale {
-        management_scroll += cast(s32)(focused_bottom - area.y - area.height + 16.0 * scale)
-    } else if focused_bottom > 0.0 && focused_top < area.y + 16.0 * scale {
-        management_scroll -= cast(s32)(area.y + 16.0 * scale - focused_top)
-        if management_scroll < 0 { management_scroll = 0 }
-    }
-    focused_top = 0.0
-    focused_bottom = 0.0
     width := area.width - 80.0 * scale
     if width > 512.0 * scale { width = 512.0 * scale }
     if width < 160.0 * scale { return }
-    height: float32 = 244.0
+    height: float32 = ifx state.host_navigation then 180.0 else 244.0
     if management_page == 1 {
         if (state.controls & SELF_NODES) != 0 {
             height += cast(float32)(112 + state.node_count * 56)
@@ -350,14 +336,16 @@ DrawAccount :: () {
     if !scroll.opened { return }
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     y := scroll.content.y + 48.0 * scale
-    if Action(800, Label("self.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) {
-        if management_page == 1 { management_page = 0 }
-        else { management_page = 1 }
-        management_scroll = 0
-        for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
-        fields = .{}
+    if !state.host_navigation {
+        if Action(800, Label("self.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) {
+            if management_page == 1 { management_page = 0 }
+            else { management_page = 1 }
+            management_scroll = 0
+            for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
+            fields = .{}
+        }
+        y += 64.0 * scale
     }
-    y += 64.0 * scale
     title := Label("self.account", "Account")
     if management_page == 2 { title = Label("self.import_key", "Import account key") }
     if management_page == 3 { title = Label("self.backup_key", "Back up account key") }
@@ -635,7 +623,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
 }
 
 Draw :: () {
-    if AchievementViewFrame() { return }
+    if AchievementViewFrame(!state.host_navigation) { return }
     PollManagement()
     if !loaded {
         state = SelfDefault()
@@ -651,14 +639,6 @@ Draw :: () {
     scale = AppScale()
     if scale <= 0.0 { scale = 1.0 }
     area := AppBounds()
-    if focused_bottom > area.y + area.height - 16.0 * scale {
-        scroll_offset += cast(s32)(focused_bottom - area.y - area.height + 16.0 * scale)
-    } else if focused_bottom > 0.0 && focused_top < area.y + 16.0 * scale {
-        scroll_offset -= cast(s32)(area.y + 16.0 * scale - focused_top)
-        if scroll_offset < 0 { scroll_offset = 0 }
-    }
-    focused_top = 0.0
-    focused_bottom = 0.0
     panel_width := area.width - 32.0 * scale
     if panel_width > 560.0 * scale { panel_width = 560.0 * scale }
     if panel_width < 208.0 * scale { return }
@@ -669,7 +649,7 @@ Draw :: () {
     picture_count: s32 = 0
     for index: 0..27 { if (state.pictures & (1 << cast(s32)index)) != 0 { picture_count += 1 } }
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
-    height := 352.0 * scale
+    height := (ifx !state.host_navigation then 352.0 else 308.0) * scale
     if (state.controls & SELF_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
     if management.available { height += 144.0 * scale }
     if !management.available {
@@ -700,8 +680,10 @@ Draw :: () {
             .border = ThemeOr("border", 0x34514aff, 0xdde7e3ff), .radius = 20.0 * scale})
     x := panel_x + 24.0 * scale
     y := panel_y + 24.0 * scale
-    TextLine(5, Label("self.title", "Your profile"), x, y, width, 30)
-    y += 44.0 * scale
+    if !state.host_navigation {
+        TextLine(5, Label("self.title", "Your profile"), x, y, width, 30)
+        y += 44.0 * scale
+    }
     center_x := x + width * 0.5
     Box(session, BoxProps.{.key = cast(u64)6,
             .bounds = Rectangle.{center_x - 40.0 * scale, y, 80.0 * scale, 80.0 * scale},

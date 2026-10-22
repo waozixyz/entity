@@ -7,7 +7,7 @@ DAOCHI_CLIENT_DIR = $(shell $(ZIRAN) pkg path daochi_client $(LOCK_FLAGS))
 OQS_DIR = $(shell $(ZIRAN) pkg path oqs $(LOCK_FLAGS))
 LIBOQS_DIR = $(shell $(ZIRAN) pkg path liboqs $(LOCK_FLAGS))
 MONOCYPHER_DIR = $(shell $(ZIRAN) pkg path monocypher $(LOCK_FLAGS))
-LIBOQS_LIBRARY ?= $(abspath build/liboqs/lib/liboqs.a)
+LIBOQS_LIBRARY ?= build/liboqs/lib/liboqs.a
 MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/backend --module-path kryon=$(KRYON_DIR)/src/ui \
 	--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \

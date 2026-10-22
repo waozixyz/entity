@@ -7,7 +7,7 @@ ValidPage :: #string JSON
 JSON
 
 FilteredPage :: #string JSON
-{"version":1,"owner":"profile-a","page":0,"pages":1,"total":1,"earned":1,"alerts":1,"app":"inbe.diary","apps":[{"id":"inbe.diary","title":"Diary"}],"rows":[{"group":"Diary","title":"First page","description":"Save a diary day.","progress":"1 / 1","date":"2026-10-20","earned":1,"badge":"S1.5rr:M4 4H20V20H4Z","badge_tier":2}]}
+{"version":1,"owner":"profile-a","page":0,"pages":1,"total":1,"earned":1,"alerts":1,"app":"inbe.diary","apps":[{"id":"inbe.diary","title":"Diary"}],"rows":[{"group":"Diary","title":"First page","description":"Save a diary day.","progress":"1 / 1","date":"2026-10-20","earned":1,"icon":"S1.5rr:M4 4H20V20H4Z"}]}
 JSON
 
 #program_export
@@ -23,7 +23,7 @@ Answer :: () -> s32 {
     if AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":1,\"earned\":0,\"alerts\":1,\"rows\":[{\"title\":\"Missing fields\"}]}", *page) { return 8 }
     if !AchievementPageDecode("{\"version\":1,\"owner\":\"a\",\"page\":0,\"pages\":1,\"total\":0,\"earned\":0,\"alerts\":1,\"rows\":[]}", *page) { return 9 }
     if !AchievementPageDecode(FilteredPage, *page) { return 10 }
-    if page.app_count != 1 || page.rows[0].tier != 2 || page.rows[0].badge[0] != #char "S" { return 11 }
+    if page.app_count != 1 || page.rows[0].icon[0] != #char "S" { return 11 }
     if TextUntilNul(page.app[:]) != "inbe.diary" || TextUntilNul(page.apps[0].title[:]) != "Diary" { return 12 }
     return 42
 }

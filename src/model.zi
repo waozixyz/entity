@@ -35,6 +35,7 @@ SelfState :: struct {
     theme: s32
     accent: s32
     material: bool
+    host_navigation: bool
     controls: s32
     nodes: [SELF_NODE_LIMIT][256]u8
     node_count: s32
@@ -84,6 +85,7 @@ SelfEncode :: (state: SelfState) -> string {
     SelfQuote(*out, TextUntilNul(state.name[:]))
     BuilderPrint(*out, ",\"intention\":")
     SelfQuote(*out, TextUntilNul(state.intention[:]))
+    BuilderPrint(*out, ",\"host_navigation\":%", ifx state.host_navigation then 1 else 0)
     BuilderPrint(*out, ",\"picture\":%,\"pictures\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
         state.picture, state.pictures, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
     for index: 0..state.node_count - 1 {
@@ -128,6 +130,10 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
         return false
     }
     state: SelfState
+    navigation_at := Json.FieldAt(text, 0, "host_navigation")
+    navigation := ifx navigation_at < 0 then 0 else SelfNumber(text, navigation_at, 0, 1)
+    if navigation < 0 { return false }
+    state.host_navigation = navigation == 1
     owner_at := Json.FieldAt(text, 0, "owner_id")
     if owner_at >= 0 && Json.ReadStringText(text, owner_at, state.owner_id[:]) < 0 { return false }
     if state.owner_id[0] != cast(u8)0 {

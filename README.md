@@ -24,7 +24,9 @@ Hosts select the available controls and picture choices, supply localized labels
 through `AppLocaleHost`, and add named extension routes. Self returns a route
 through `AppReply`; the host accepts only its own routes. Send the `reload`
 command after returning from an extension. Run `APP_SAVE` before leaving Self
-and keep the page open if saving fails.
+and keep the page open if saving fails. Hosts that supply their own title and Back
+control set `host_navigation` in `SelfState`; Self then omits its duplicate
+navigation. Standalone Self keeps its own navigation.
 
 The default node is `https://api.waozi.xyz`. Selecting a node does not create an
 account or enable synchronization. A host maps the node selection to its own

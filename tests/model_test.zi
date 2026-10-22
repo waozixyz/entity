@@ -5,7 +5,12 @@
 
 #program_export
 main :: () -> s32 {
+    decoded: SelfState
+    legacy := "{\"version\":1,\"name\":\"\",\"intention\":\"\",\"picture\":0,\"theme\":0,\"accent\":0,\"material\":1,\"controls\":0,\"preferred\":0,\"nodes\":[\"https://example.com\"],\"extensions\":[]}"
+    if !SelfDecode(legacy, *decoded) || decoded.host_navigation { return 10 }
     state := SelfDefault()
+    if state.host_navigation { return 8 }
+    state.host_navigation = true
     unused CopyCString("Waozi \"quoted\" \\ UTF-8: 花", state.name[:])
     unused CopyCString("Breathe slowly", state.intention[:])
     state.picture = 27
@@ -15,8 +20,8 @@ main :: () -> s32 {
     unused CopyCString("http://127.0.0.1:8090", state.nodes[1][:])
     SelfAddExtension(*state, "inbe", "Inner Breeze")
     encoded := SelfEncode(state)
-    decoded: SelfState
     if !SelfDecode(encoded, *decoded) { return 1 }
+    if !decoded.host_navigation { return 9 }
     if TextUntilNul(decoded.name[:]) != TextUntilNul(state.name[:]) ||
     TextUntilNul(decoded.intention[:]) != "Breathe slowly" || decoded.picture != 27 ||
     decoded.preferred != 1 || decoded.node_count != 2 ||

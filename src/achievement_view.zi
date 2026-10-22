@@ -45,8 +45,7 @@ AchievementRow :: struct {
     progress: [256]u8
     date: [128]u8
     earned: bool
-    badge: [1024]u8
-    tier: s32
+    icon: [1024]u8
 }
 AchievementApp :: struct {
     id: [97]u8
@@ -127,11 +126,9 @@ AchievementPageDecode :: (document: string, output: *AchievementPage) -> bool {
         earned := ReadNumber(document, FieldAt(document, element, "earned"))
         if !earned.valid || (earned.value != 0 && earned.value != 1) { return false }
         row.earned = earned.value == 1
-        badge_at := FieldAt(document, element, "badge")
-        if badge_at >= 0 && ReadStringText(document, badge_at, row.badge[:]) < 0 { return false }
-        tier := ReadNumber(document, FieldAt(document, element, "badge_tier"))
-        if tier.valid && (tier.value < 1 || tier.value > 99 || tier.value != cast(float64)cast(s32)tier.value) { return false }
-        row.tier = ifx tier.valid then cast(s32)tier.value else 1
+        icon_at := FieldAt(document, element, "icon")
+        if icon_at < 0 { icon_at = FieldAt(document, element, "badge") }
+        if icon_at >= 0 && ReadStringText(document, icon_at, row.icon[:]) < 0 { return false }
     }
     output.* = next
     return true
@@ -189,7 +186,7 @@ AchievementText :: (session: Session, key: u64, value: string, bounds: Rectangle
             .font = font, .wrap = TextWrap.TextWrapAuto})
 }
 
-AchievementViewFrame :: () -> bool {
+AchievementViewFrame :: (show_navigation: bool = true) -> bool {
     if !achievement_open { return false }
     achievement_ticks += 1
     if !achievement_ready || achievement_ticks % 30 == 0 {
@@ -240,7 +237,7 @@ AchievementViewFrame :: () -> bool {
     heights: [AchievementPageSize]float32
     title_heights: [AchievementPageSize]float32
     description_heights: [AchievementPageSize]float32
-    height := 240.0 * scale + help_height
+    height := (ifx show_navigation then 240.0 else 184.0) * scale + help_height
     if achievement_page.app_count > 0 { height += 60.0 * scale }
     previous: [256]u8
     for index: cast(s32)0..achievement_page.count - 1 {
@@ -259,11 +256,13 @@ AchievementViewFrame :: () -> bool {
     if !scroll.opened { return true }
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     y := scroll.content.y + 16.0 * scale
-    if Button(session, ButtonProps.{.key = cast(u64)50001, .id = 50001,
-            .label = AppLocale("achievement_back"), .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 {
-        achievement_open = false
+    if show_navigation {
+        if Button(session, ButtonProps.{.key = cast(u64)50001, .id = 50001,
+                .label = AppLocale("achievement_back"), .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 {
+            achievement_open = false
+        }
+        y += 56.0 * scale
     }
-    y += 56.0 * scale
     AchievementText(session, 50002, AppLocale("achievements_title"), Rectangle.{x, y, width, 32.0 * scale}, cast(s32)(24.0 * scale))
     y += 40.0 * scale
     if achievement_ready {
@@ -337,19 +336,10 @@ AchievementViewFrame :: () -> bool {
         visible := y + heights[index] >= area.y && y <= area.y + area.height
         if visible {
             color := ifx row.earned then ThemeOr("accent", 0x7ab5a5ff, 0x347c6cff) else Color.{135, 143, 147, 255}
-            Box(session, BoxProps.{.key = key + 1,
-                    .bounds = Rectangle.{x, y + 4.0 * scale, 60.0 * scale, 76.0 * scale},
-                    .radius = 12.0 * scale, .fill = ThemeOr("surface", 0x24333aff, 0xf1f5f7ff), .border = color})
-            shape := TextUntilNul(row.badge[:])
-            if shape == "" { shape = "S1.6rr:M12 2L20 5V12L12 22L4 12V5ZM8 12L11 15L16 9" }
+            shape := TextUntilNul(row.icon[:])
+            if shape == "" { shape = "S2rr:M6 12L10 16L18 7" }
             SvgIcon(session, SvgIconProps.{.bounds = Rectangle.{x + 4.0 * scale, y + 8.0 * scale, 52.0 * scale, 52.0 * scale},
                     .shape = shape, .color = color})
-            tier: Vec(u8)
-            BuilderPrint(*tier, "%", row.tier)
-            tier_text := BuilderFinish(tier)
-            Text(session, TextProps.{.key = key + 2, .bounds = Rectangle.{x, y + 58.0 * scale, 60.0 * scale, 20.0 * scale},
-                    .text = tier_text, .font = cast(s32)(11.0 * scale), .align = TextAlign.TextAlignCenter})
-            AchievementRelease(tier_text)
             label_x := x + 80.0 * scale
             AchievementText(session, key + 4, TextUntilNul(row.title[:]), Rectangle.{label_x, y, label_width, title_heights[index]}, title_font)
             description_y := y + title_heights[index] + 8.0 * scale
