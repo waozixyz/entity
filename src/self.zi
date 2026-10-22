@@ -238,6 +238,31 @@ ByteLabel :: (bytes: s64) -> string {
     return BuilderFinish(out)
 }
 
+StorageUsageLabel :: (used: s64, limit: s64) -> string {
+    template := Label("self.storage_used_of", "%s of %s used")
+    if limit <= 0 {
+        template = Label("self.storage_used_unlimited", "%s used · no limit")
+    }
+    values: [2]string = .[ByteLabel(used), ByteLabel(limit)]
+    out: Vec(u8)
+    start: s64 = 0
+    at: s64 = 0
+    argument: s32 = 0
+    while at + 1 < template.count && argument < 2 {
+        if template[at:at + 2] == "%s" {
+            BuilderPrint(*out, "%", template[start:at])
+            BuilderPrint(*out, "%", values[argument])
+            argument += 1
+            at += 2
+            start = at
+        } else {
+            at += 1
+        }
+    }
+    BuilderPrint(*out, "%", template[start:])
+    return BuilderFinish(out)
+}
+
 NodeDetails :: (address: string, x: float32, y: *float32, width: float32) {
     index := ManagementNodeAt(address)
     if index < 0 { return }
@@ -250,8 +275,7 @@ NodeDetails :: (address: string, x: float32, y: *float32, width: float32) {
         value := Label("self.storage_unknown", "Storage usage not reported yet")
         if node.known {
             out: Vec(u8)
-            BuilderPrint(*out, "%", ByteLabel(node.used))
-            if node.limit > 0 { BuilderPrint(*out, " / %", ByteLabel(node.limit)) }
+            BuilderPrint(*out, "%", StorageUsageLabel(node.used, node.limit))
             if node.full { BuilderPrint(*out, " · %", Label("self.storage_full", "Storage full")) }
             value = BuilderFinish(out)
         }
