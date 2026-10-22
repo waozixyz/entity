@@ -23,6 +23,7 @@ portable: AppContext;
 profile_document: string;
 asset_folder: [4096]u8;
 entity_host_navigation: bool;
+entity_paste: [16384]u8;
 
 EntityHostText :: (text: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
@@ -61,6 +62,8 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         EntityFree(profile_document)
         state := account_profile
         state.host_navigation = entity_host_navigation
+        state.extensions = .{}
+        state.extension_count = 0
         if DewReady() { unused EntityAddExtension(*state, "dew", "Dew") }
         profile_document = EntityEncode(state)
         output := arguments[1]
@@ -120,14 +123,17 @@ EntityHostBack :: () -> bool {
     return AppContextRun(*portable, APP_COMMAND) && portable.reply == "handled"
 }
 
-EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s32, input: TextFieldInput) -> bool {
+EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s32, input: TextFieldInput, dark: bool = false) -> bool {
     portable.session = session
     portable.bounds = bounds
     portable.scale = 1.0
     portable.font = 16
+    portable.dark = dark
     portable.key = key
     portable.modifiers = modifiers
-    portable.input = input
+    field_input := input
+    if field_input.paste { field_input.paste_text = SystemClipboardText(entity_paste[:]) }
+    portable.input = field_input
     WidgetHostBegin(session, EntityHostAssetAllowed)
     ran := AppContextRun(*portable, APP_FRAME)
     WidgetHostEnd()
