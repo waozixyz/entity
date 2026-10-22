@@ -2,6 +2,14 @@
   "format": 1,
   "packages": [
     {
+      "commit": "08969407c431b7c512f76a58033e5d4101523353",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "p01e33d1c2eade6ee",
+      "name": "kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "2944b2e668e735438d8ce24e47a39be3f5c36af5",
       "dependencies": {},
       "id": "p0dfa70137405b096",
@@ -44,14 +52,6 @@
       "url": "https://github.com/ziranlang/daochi-client.git"
     },
     {
-      "commit": "20b187a5ef4c97f8ffc2cb942244487e5cdfc916",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "pb8945df295df506b",
-      "name": "kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
-    },
-    {
       "commit": "fd44469daeffe6b28f031f54f9bb66cbae69a572",
       "dependencies": {},
       "id": "pfb3df7cb222b1bdc",
@@ -62,7 +62,7 @@
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "pb8945df295df506b", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p01e33d1c2eade6ee", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Self"
   },
   "toolchain": {
