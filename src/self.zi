@@ -371,7 +371,7 @@ DrawAccount :: () {
         y += 72.0 * scale
         unused EditField(4, account_passphrase[:], Label("self.passphrase", "Passphrase (optional)"), Rectangle.{x, y, width, 44.0 * scale}, 160, true)
         y += 60.0 * scale
-        if Action(803, Label("self.choose_file", "Choose file"), Rectangle.{x, y, width, 44.0 * scale}, true) {
+        if Action(803, Label(ifx management_page == 3 then "self.save" else "self.choose_file", ifx management_page == 3 then "Save key file" else "Choose file"), Rectangle.{x, y, width, 44.0 * scale}, true) {
             passphrase: [512]u8
             for index: 0..account_passphrase.count - 1 { passphrase[index] = account_passphrase[index] }
             {
