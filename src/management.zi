@@ -49,7 +49,7 @@ Management :: struct {
     link_code: [1024]u8
     link_message: [256]u8
     candidate_id: [65]u8
-    nodes: [SELF_NODE_LIMIT]ManagementNode
+    nodes: [ENTITY_NODE_LIMIT]ManagementNode
     node_count: s32
 }
 
@@ -90,13 +90,13 @@ ManagementOperation :: (operation: string) -> s32 {
 ManagementRequestEncode :: (request: ManagementRequest) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "{\"version\":1,\"sequence\":%,\"operation\":", request.sequence)
-    SelfQuote(*out, TextUntilNul(request.operation[:]))
+    EntityQuote(*out, TextUntilNul(request.operation[:]))
     BuilderPrint(*out, ",\"owner_id\":")
-    SelfQuote(*out, TextUntilNul(request.owner_id[:]))
+    EntityQuote(*out, TextUntilNul(request.owner_id[:]))
     BuilderPrint(*out, ",\"target\":")
-    SelfQuote(*out, TextUntilNul(request.target[:]))
+    EntityQuote(*out, TextUntilNul(request.target[:]))
     BuilderPrint(*out, ",\"value\":")
-    SelfQuote(*out, TextUntilNul(request.value[:]))
+    EntityQuote(*out, TextUntilNul(request.value[:]))
     BuilderPrint(*out, ",\"choice\":%}", request.choice)
     return BuilderFinish(out)
 }
@@ -107,10 +107,10 @@ ManagementRequestDecode :: (text: string, output: *ManagementRequest) -> bool {
     if end < 0 || Json.Space(text, end) != text.count { return false }
     keys: [6]string = .["version", "sequence", "operation", "target", "value", "choice"]
     at: [6]s32
-    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || SelfNumber(text, at[0], 1, 1) != 1 { return false }
+    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || EntityNumber(text, at[0], 1, 1) != 1 { return false }
     request: ManagementRequest
-    request.sequence = SelfNumber(text, at[1], 1, 2147483646)
-    request.choice = SelfNumber(text, at[5], 0, 2)
+    request.sequence = EntityNumber(text, at[1], 1, 2147483646)
+    request.choice = EntityNumber(text, at[5], 0, 2)
     if request.sequence < 1 || request.choice < 0 ||
     Json.ReadStringText(text, at[2], request.operation[:]) <= 0 ||
     Json.ReadStringText(text, at[3], request.target[:]) < 0 ||
@@ -171,16 +171,16 @@ ManagementEncode :: (state: Management) -> string {
     names: [8]string = .["result", "message", "public_id", "alias", "status", "link_code", "link_message", "candidate_id"]
     for index: 0..7 {
         BuilderPrint(*out, ",\"%\":", names[index])
-        SelfQuote(*out, strings[index])
+        EntityQuote(*out, strings[index])
     }
     BuilderPrint(*out, ",\"nodes\":[")
     for index: 0..state.node_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
         node := state.nodes[index]
         BuilderPrint(*out, "{\"address\":")
-        SelfQuote(*out, TextUntilNul(node.address[:]))
+        EntityQuote(*out, TextUntilNul(node.address[:]))
         BuilderPrint(*out, ",\"label\":")
-        SelfQuote(*out, TextUntilNul(node.label[:]))
+        EntityQuote(*out, TextUntilNul(node.label[:]))
         BuilderPrint(*out, ",\"active\":%,\"known\":%,\"used\":%,\"limit\":%,\"full\":%,\"media_supported\":%,\"media\":%}",
             ifx node.active then 1 else 0, ifx node.known then 1 else 0,
             node.used, node.limit, ifx node.full then 1 else 0,
@@ -195,7 +195,7 @@ ManagementReadText :: (text: string, name: string, output: []u8) -> bool {
 }
 
 ManagementReadNumber :: (text: string, name: string, minimum: s32, maximum: s32) -> s32 {
-    return SelfNumber(text, Json.FieldAt(text, 0, name), minimum, maximum)
+    return EntityNumber(text, Json.FieldAt(text, 0, name), minimum, maximum)
 }
 
 ManagementReadBytes :: (text: string, at: s32) -> s64 {
@@ -229,20 +229,20 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     !ManagementReadText(text, "public_id", state.public_id[:]) || !ManagementReadText(text, "alias", state.alias[:]) ||
     !ManagementReadText(text, "status", state.status[:]) || !ManagementReadText(text, "link_code", state.link_code[:]) ||
     !ManagementReadText(text, "link_message", state.link_message[:]) || !ManagementReadText(text, "candidate_id", state.candidate_id[:]) { return false }
-    positions: [SELF_NODE_LIMIT]s32
+    positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])
-    if state.node_count < 0 || state.node_count > SELF_NODE_LIMIT { return false }
+    if state.node_count < 0 || state.node_count > ENTITY_NODE_LIMIT { return false }
     for index: 0..state.node_count - 1 {
         at := positions[index]
         node := *state.nodes[index]
         if Json.ReadStringText(text, Json.FieldAt(text, at, "address"), node.address[:]) <= 0 ||
         Json.ReadStringText(text, Json.FieldAt(text, at, "label"), node.label[:]) < 0 { return false }
         if NodeOrigin(TextUntilNul(node.address[:])) == "" { return false }
-        active := SelfNumber(text, Json.FieldAt(text, at, "active"), 0, 1)
-        known := SelfNumber(text, Json.FieldAt(text, at, "known"), 0, 1)
-        full := SelfNumber(text, Json.FieldAt(text, at, "full"), 0, 1)
-        media_supported := SelfNumber(text, Json.FieldAt(text, at, "media_supported"), 0, 1)
-        media := SelfNumber(text, Json.FieldAt(text, at, "media"), 0, 1)
+        active := EntityNumber(text, Json.FieldAt(text, at, "active"), 0, 1)
+        known := EntityNumber(text, Json.FieldAt(text, at, "known"), 0, 1)
+        full := EntityNumber(text, Json.FieldAt(text, at, "full"), 0, 1)
+        media_supported := EntityNumber(text, Json.FieldAt(text, at, "media_supported"), 0, 1)
+        media := EntityNumber(text, Json.FieldAt(text, at, "media"), 0, 1)
         node.used = ManagementReadBytes(text, Json.FieldAt(text, at, "used"))
         node.limit = ManagementReadBytes(text, Json.FieldAt(text, at, "limit"))
         if active < 0 || known < 0 || full < 0 || media_supported < 0 || media < 0 || node.used < 0 || node.limit < 0 { return false }

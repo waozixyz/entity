@@ -1,4 +1,4 @@
-// One profile UI. Hosts supply self.json through the ordinary scoped store
+// One profile UI. Hosts supply entity.json through the ordinary scoped store
 // interface; extension replies name only routes supplied by that host.
 #import "model"
 #import "achievement_view"
@@ -35,7 +35,7 @@
 #import "kryon/svg_icon_widget"
 
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
-state: SelfState;
+state: EntityState;
 loaded: bool;
 fields: [6]Field;
 node_text: [256]u8;
@@ -79,9 +79,9 @@ Action :: (id: s32, label: string, bounds: Rectangle, selected: bool = false, da
 }
 
 Save :: () -> bool {
-    document := SelfEncode(state)
-    if !WriteStore("self.json", document) {
-        notice = Label("self.save_error", "Could not save changes")
+    document := EntityEncode(state)
+    if !WriteStore("entity.json", document) {
+        notice = Label("entity.save_error", "Could not save changes")
         return false
     } else {
         notice = ""
@@ -95,7 +95,7 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
     for byte: 0..buffer.count - 1 { snapshot[byte] = buffer[byte] }
     props := TextFieldProps.{.key = cast(u64)(100 + index), .focus_id = 100 + index,
         .bounds = bounds, .label = label, .scale = scale,
-        .placeholder = ifx index == 0 then Label("self.name_placeholder", "Your name") else label,
+        .placeholder = ifx index == 0 then Label("entity.name_placeholder", "Your name") else label,
         .value = TextUntilNul(snapshot[:]), .cursor = field.cursor,
         .anchor = field.anchor, .scroll_x = field.scroll_x, .focused = field.focused,
         .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum, .secure = secure}
@@ -134,7 +134,7 @@ PollManagement :: () {
     management_tick += 1
     if management_tick != 1 && management_tick % 15 != 0 { return }
     next: Management
-    if !ManagementDecode(AppService("self.management", ""), *next) { return }
+    if !ManagementDecode(AppService("entity.management", ""), *next) { return }
     result_changed := TextUntilNul(next.result[:]) != TextUntilNul(management.result[:])
     owner_changed := TextUntilNul(next.public_id[:]) != TextUntilNul(management.public_id[:])
     management = next
@@ -164,14 +164,14 @@ Manage :: (operation: string, value: string = "", target: string = "", choice: s
     if management_waiting > management.completed || !CanManage(ManagementOperation(operation)) { return }
     if TextUntilNul(state.owner_id[:]) != TextUntilNul(management.public_id[:]) {
         loaded = false
-        notice = Label("self.account_changed", "The account changed; open its current profile again")
+        notice = Label("entity.account_changed", "The account changed; open its current profile again")
         return
     }
     if !Save() { return }
     request := ManagementRequest.{.sequence = management.sequence + 1, .choice = choice}
     request.owner_id = management.public_id
     if !CopyCString(operation, request.operation[:]) || !CopyCString(value, request.value[:]) || !CopyCString(target, request.target[:]) { return }
-    reply := AppService("self.management", ManagementRequestEncode(request))
+    reply := AppService("entity.management", ManagementRequestEncode(request))
     if reply == "queued" {
         management_waiting = request.sequence
         management.sequence = request.sequence
@@ -180,7 +180,7 @@ Manage :: (operation: string, value: string = "", target: string = "", choice: s
         for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
         fields[4] = Field.{}
     } else {
-        notice = Label("self.action_error", "Could not start this action")
+        notice = Label("entity.action_error", "Could not start this action")
     }
 }
 
@@ -193,18 +193,18 @@ OpenManagement :: (page: s32) {
 }
 
 AccountSummary :: (x: float32, y: *float32, width: float32) {
-    title := Label("self.no_account", "No account connected")
+    title := Label("entity.no_account", "No account connected")
     if management.account {
         title = TextUntilNul(management.alias[:])
-        if title == "" { title = Label("self.account", "Account") }
+        if title == "" { title = Label("entity.account", "Account") }
     }
     TextLine(700, title, x, y.*, width, 20)
     y.* += 34.0 * scale
     status := TextUntilNul(management.status[:])
-    if status == "" { status = Label("self.account_local", "Your data stays on this device until you connect") }
+    if status == "" { status = Label("entity.account_local", "Your data stays on this device until you connect") }
     Paragraph(701, status, x, y.*, width, 42.0)
     y.* += 46.0 * scale
-    if Action(702, Label(ifx management.account then "self.manage_account" else "self.connect_account",
+    if Action(702, Label(ifx management.account then "entity.manage_account" else "entity.connect_account",
         ifx management.account then "Manage account" else "Connect an account"), Rectangle.{x, y.*, width, 44.0 * scale}) {
         OpenManagement(1)
     }
@@ -239,9 +239,9 @@ ByteLabel :: (bytes: s64) -> string {
 }
 
 StorageUsageLabel :: (used: s64, limit: s64) -> string {
-    template := Label("self.storage_used_of", "%s of %s used")
+    template := Label("entity.storage_used_of", "%s of %s used")
     if limit <= 0 {
-        template = Label("self.storage_used_unlimited", "%s used · no limit")
+        template = Label("entity.storage_used_unlimited", "%s used · no limit")
     }
     values: [2]string = .[ByteLabel(used), ByteLabel(limit)]
     out: Vec(u8)
@@ -268,25 +268,25 @@ NodeDetails :: (address: string, x: float32, y: *float32, width: float32) {
     if index < 0 { return }
     node := management.nodes[index]
     if node.active {
-        TextLine(cast(u64)(720 + index), Label("self.active_node", "Active node"), x + 12.0 * scale, y.*, width, 12)
+        TextLine(cast(u64)(720 + index), Label("entity.active_node", "Active node"), x + 12.0 * scale, y.*, width, 12)
         y.* += 28.0 * scale
     }
     if node.known || management.account {
-        value := Label("self.storage_unknown", "Storage usage not reported yet")
+        value := Label("entity.storage_unknown", "Storage usage not reported yet")
         if node.known {
             out: Vec(u8)
             BuilderPrint(*out, "%", StorageUsageLabel(node.used, node.limit))
-            if node.full { BuilderPrint(*out, " · %", Label("self.storage_full", "Storage full")) }
+            if node.full { BuilderPrint(*out, " · %", Label("entity.storage_full", "Storage full")) }
             value = BuilderFinish(out)
         }
         TextLine(cast(u64)(740 + index), value, x + 12.0 * scale, y.*, width - 24.0 * scale, 13)
         y.* += 36.0 * scale
     }
     if node.media_supported {
-        TextLine(cast(u64)(760 + index), Label("self.node_media", "Upload photos and videos"), x + 12.0 * scale, y.* + 8.0 * scale, width - 84.0 * scale, 13)
+        TextLine(cast(u64)(760 + index), Label("entity.node_media", "Upload photos and videos"), x + 12.0 * scale, y.* + 8.0 * scale, width - 84.0 * scale, 13)
         result := Toggle(session, ToggleProps.{.key = cast(u64)(780 + index), .id = 780 + cast(s32)index,
                 .bounds = Rectangle.{x + width - 64.0 * scale, y.*, 52.0 * scale, 40.0 * scale},
-                .label = Label("self.node_media", "Upload photos and videos"), .value = node.media,
+                .label = Label("entity.node_media", "Upload photos and videos"), .value = node.media,
                 .disabled = management.busy || management_waiting > management.completed})
         if result.changed { Manage("media", "", address, ifx result.value then 1 else 0) }
         y.* += 52.0 * scale
@@ -331,7 +331,7 @@ DrawAccount :: () {
     if width < 160.0 * scale { return }
     height: float32 = ifx state.host_navigation then 180.0 else 244.0
     if management_page == 1 {
-        if (state.controls & SELF_NODES) != 0 {
+        if (state.controls & ENTITY_NODES) != 0 {
             height += cast(float32)(112 + state.node_count * 56)
             for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) / scale }
         }
@@ -362,7 +362,7 @@ DrawAccount :: () {
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     y := scroll.content.y + 48.0 * scale
     if !state.host_navigation {
-        if Action(800, Label("self.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) {
+        if Action(800, Label("entity.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) {
             if management_page == 1 { management_page = 0 }
             else { management_page = 1 }
             management_scroll = 0
@@ -371,22 +371,22 @@ DrawAccount :: () {
         }
         y += 64.0 * scale
     }
-    title := Label("self.account", "Account")
-    if management_page == 2 { title = Label("self.import_key", "Import account key") }
-    if management_page == 3 { title = Label("self.backup_key", "Back up account key") }
-    if management_page == 4 { title = Label("self.logout", "Log out on this device") }
-    if management_page == 5 { title = Label("self.clear_remote", "Clear remote account data") }
-    if management_page == 6 { title = Label("self.switch_account", "Switch account") }
+    title := Label("entity.account", "Account")
+    if management_page == 2 { title = Label("entity.import_key", "Import account key") }
+    if management_page == 3 { title = Label("entity.backup_key", "Back up account key") }
+    if management_page == 4 { title = Label("entity.logout", "Log out on this device") }
+    if management_page == 5 { title = Label("entity.clear_remote", "Clear remote account data") }
+    if management_page == 6 { title = Label("entity.switch_account", "Switch account") }
     if !state.host_navigation || management_page != 1 {
         TextLine(801, title, x, y, width, 26)
         y += 52.0 * scale
     }
     if management_page == 2 || management_page == 3 {
-        Paragraph(802, Label("self.key_file_help", "Choose a key file. A passphrase protects the backup and is needed again when importing it."), x, y, width, 64.0)
+        Paragraph(802, Label("entity.key_file_help", "Choose a key file. A passphrase protects the backup and is needed again when importing it."), x, y, width, 64.0)
         y += 72.0 * scale
-        unused EditField(4, account_passphrase[:], Label("self.passphrase", "Passphrase (optional)"), Rectangle.{x, y, width, 44.0 * scale}, 160, true)
+        unused EditField(4, account_passphrase[:], Label("entity.passphrase", "Passphrase (optional)"), Rectangle.{x, y, width, 44.0 * scale}, 160, true)
         y += 60.0 * scale
-        if Action(803, Label(ifx management_page == 3 then "self.save" else "self.choose_file", ifx management_page == 3 then "Save key file" else "Choose file"), Rectangle.{x, y, width, 44.0 * scale}, true) {
+        if Action(803, Label(ifx management_page == 3 then "entity.save" else "entity.choose_file", ifx management_page == 3 then "Save key file" else "Choose file"), Rectangle.{x, y, width, 44.0 * scale}, true) {
             passphrase: [512]u8
             for index: 0..account_passphrase.count - 1 { passphrase[index] = account_passphrase[index] }
             {
@@ -397,17 +397,17 @@ DrawAccount :: () {
         }
         y += 56.0 * scale
     } else if management_page >= 4 {
-        explanation := Label("self.logout_help", "Your local records stay on this device. Keep a key backup so you can connect again.")
-        if management_page == 5 { explanation = Label("self.clear_remote_help", "This removes this account's remote data. Local records stay on this device.") }
-        if management_page == 6 { explanation = Label("self.switch_help", "Choose whether to keep and merge the local records or replace them for the incoming account.") }
+        explanation := Label("entity.logout_help", "Your local records stay on this device. Keep a key backup so you can connect again.")
+        if management_page == 5 { explanation = Label("entity.clear_remote_help", "This removes this account's remote data. Local records stay on this device.") }
+        if management_page == 6 { explanation = Label("entity.switch_help", "Choose whether to keep and merge the local records or replace them for the incoming account.") }
         Paragraph(804, explanation, x, y, width, 80.0)
         y += 92.0 * scale
         if management_page == 6 {
-            if Action(805, Label("self.merge", "Keep and merge local data"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_apply", "", "", 1) }
+            if Action(805, Label("entity.merge", "Keep and merge local data"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_apply", "", "", 1) }
             y += 56.0 * scale
-            if Action(806, Label("self.replace", "Replace local data"), Rectangle.{x, y, width, 44.0 * scale}, false, true) { Manage("switch_apply", "", "", 2) }
+            if Action(806, Label("entity.replace", "Replace local data"), Rectangle.{x, y, width, 44.0 * scale}, false, true) { Manage("switch_apply", "", "", 2) }
             y += 56.0 * scale
-            if Action(807, Label("self.cancel", "Cancel"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_cancel"); management_page = 1 }
+            if Action(807, Label("entity.cancel", "Cancel"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("switch_cancel"); management_page = 1 }
         } else if Action(808, title, Rectangle.{x, y, width, 44.0 * scale}, true, true) {
             Manage(ifx management_page == 4 then "logout" else "clear_remote")
             management_page = 1
@@ -426,96 +426,96 @@ DrawAccount :: () {
             }
             Paragraph(811, identity, x, y, width, 48.0, 13)
             y += 52.0 * scale
-            if Action(812, Label("self.copy_id", "Copy public ID"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.public_id[:]), 0) }
+            if Action(812, Label("entity.copy_id", "Copy public ID"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.public_id[:]), 0) }
             y += 56.0 * scale
             Paragraph(813, TextUntilNul(management.status[:]), x, y, width, 48.0)
             y += 52.0 * scale
             if CanManage(ACCOUNT_SYNC) {
                 out: Vec(u8)
-                BuilderPrint(*out, "%: %", Label("self.queued", "Queued changes"), management.queued)
+                BuilderPrint(*out, "%: %", Label("entity.queued", "Queued changes"), management.queued)
                 TextLine(814, BuilderFinish(out), x, y, width, 14)
                 y += 36.0 * scale
             }
             if CanManage(ACCOUNT_ALIAS) {
-                unused EditField(3, account_alias[:], Label("self.alias", "Account alias"), Rectangle.{x, y, width - 84.0 * scale, 44.0 * scale}, 39)
-                if Action(815, Label("self.save", "Save"), Rectangle.{x + width - 72.0 * scale, y, 72.0 * scale, 44.0 * scale}) { Manage("alias", TextUntilNul(account_alias[:])) }
+                unused EditField(3, account_alias[:], Label("entity.alias", "Account alias"), Rectangle.{x, y, width - 84.0 * scale, 44.0 * scale}, 39)
+                if Action(815, Label("entity.save", "Save"), Rectangle.{x + width - 72.0 * scale, y, 72.0 * scale, 44.0 * scale}) { Manage("alias", TextUntilNul(account_alias[:])) }
                 y += 100.0 * scale
             }
             if CanManage(ACCOUNT_SYNC) {
-                TextLine(816, Label("self.sync", "Sync"), x, y + 8.0 * scale, width - 80.0 * scale, 16)
+                TextLine(816, Label("entity.sync", "Sync"), x, y + 8.0 * scale, width - 80.0 * scale, 16)
                 result := Toggle(session, ToggleProps.{.key = cast(u64)817, .id = 817,
                         .bounds = Rectangle.{x + width - 64.0 * scale, y, 64.0 * scale, 40.0 * scale},
-                        .label = Label("self.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
+                        .label = Label("entity.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
                 if result.changed { Manage("set_sync", "", "", ifx result.value then 1 else 0) }
                 y += 56.0 * scale
-                if Action(818, Label("self.sync_now", "Sync now"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("sync") }
+                if Action(818, Label("entity.sync_now", "Sync now"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("sync") }
                 y += 56.0 * scale
             }
             if CanManage(ACCOUNT_BACKUP) {
-                if Action(819, Label("self.backup_key", "Back up account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(3) }
+                if Action(819, Label("entity.backup_key", "Back up account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(3) }
                 y += 56.0 * scale
             }
         } else if CanManage(ACCOUNT_CREATE) {
-            if Action(820, Label("self.create_account", "Create account"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("create") }
+            if Action(820, Label("entity.create_account", "Create account"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("create") }
             y += 56.0 * scale
         }
         if CanManage(ACCOUNT_IMPORT) {
-            if Action(821, Label("self.import_key", "Import account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(2) }
+            if Action(821, Label("entity.import_key", "Import account key"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(2) }
             y += 56.0 * scale
         }
-        if (state.controls & SELF_NODES) != 0 { Nodes(x, *y, width) }
+        if (state.controls & ENTITY_NODES) != 0 { Nodes(x, *y, width) }
         if CanManage(ACCOUNT_LINK) {
-            TextLine(822, Label("self.connect_device", "Connect another device"), x, y, width, 20)
+            TextLine(822, Label("entity.connect_device", "Connect another device"), x, y, width, 20)
             y += 40.0 * scale
             if management.link_code[0] != cast(u8)0 {
                 DrawConnectionCode(TextUntilNul(management.link_code[:]), x, y, width)
                 y += 252.0 * scale
-                if Action(823, Label("self.copy_code", "Copy connection code"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.link_code[:]), 0) }
+                if Action(823, Label("entity.copy_code", "Copy connection code"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(management.link_code[:]), 0) }
                 y += 64.0 * scale
             }
             if management.link_message[0] != cast(u8)0 {
                 Paragraph(824, TextUntilNul(management.link_message[:]), x, y, width, 48.0)
                 y += 52.0 * scale
             }
-            unused EditField(5, account_code[:], Label("self.connection_code", "Connection code"), Rectangle.{x, y, width, 44.0 * scale}, 1023)
+            unused EditField(5, account_code[:], Label("entity.connection_code", "Connection code"), Rectangle.{x, y, width, 44.0 * scale}, 1023)
             y += 56.0 * scale
-            if Action(825, Label("self.connect", "Connect"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_join", TextUntilNul(account_code[:])) }
+            if Action(825, Label("entity.connect", "Connect"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_join", TextUntilNul(account_code[:])) }
             y += 56.0 * scale
-            if Action(826, Label("self.show_code", "Show connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_show") }
+            if Action(826, Label("entity.show_code", "Show connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_show") }
             y += 56.0 * scale
             if CanManage(ACCOUNT_SCAN) {
-                if Action(827, Label("self.scan_code", "Scan connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_scan") }
+                if Action(827, Label("entity.scan_code", "Scan connection code"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_scan") }
                 y += 56.0 * scale
             }
             if management.link_stage == 2 || management.link_stage == 4 {
-                if Action(828, Label("self.confirm_device", "The digits match — connect"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("link_confirm") }
+                if Action(828, Label("entity.confirm_device", "The digits match — connect"), Rectangle.{x, y, width, 44.0 * scale}, true) { Manage("link_confirm") }
                 y += 56.0 * scale
             }
             if management.link_stage != 0 {
-                if Action(829, Label("self.cancel_connection", "Cancel connection"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_cancel") }
+                if Action(829, Label("entity.cancel_connection", "Cancel connection"), Rectangle.{x, y, width, 44.0 * scale}) { Manage("link_cancel") }
                 y += 56.0 * scale
             }
         }
         if management.account && CanManage(ACCOUNT_LOGOUT) {
-            if Action(830, Label("self.logout", "Log out on this device"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(4) }
+            if Action(830, Label("entity.logout", "Log out on this device"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(4) }
             y += 56.0 * scale
         }
         if management.account && CanManage(ACCOUNT_CLEAR_REMOTE) {
-            if Action(831, Label("self.clear_remote", "Clear remote account data"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(5) }
+            if Action(831, Label("entity.clear_remote", "Clear remote account data"), Rectangle.{x, y, width, 44.0 * scale}) { OpenManagement(5) }
             y += 56.0 * scale
         }
     }
     if notice != "" { Paragraph(840, notice, x, y, width, 64.0) }
-    if management_waiting > management.completed { TextLine(841, Label("self.working", "Working…"), x, y + 68.0 * scale, width, 14) }
+    if management_waiting > management.completed { TextLine(841, Label("entity.working", "Working…"), x, y + 68.0 * scale, width, 14) }
     unused End(session)
     AppKeyboard(fields[3].focused || fields[4].focused || fields[5].focused)
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
-    image := ImageProps.{.asset_path = "assets/self/pfp.png", .alt_text = Label("self.picture", "Profile picture"),
+    image := ImageProps.{.asset_path = "assets/entity/pfp.png", .alt_text = Label("entity.picture", "Profile picture"),
         .bounds = bounds, .source = Rectangle.{cast(float32)(index % 5) * 64.0, cast(float32)(index / 5) * 64.0, 64.0, 64.0}}
     if index == 9 {
-        image.asset_path = "assets/self/flowers.png"
+        image.asset_path = "assets/entity/flowers.png"
         image.source = Rectangle.{}
         image.fit = ImageFit.ImageFitContain
     }
@@ -528,7 +528,7 @@ Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
 }
 
 Nodes :: (x: float32, y: *float32, width: float32) {
-    TextLine(400, Label("self.nodes", "Nodes"), x, y.*, width, 20)
+    TextLine(400, Label("entity.nodes", "Nodes"), x, y.*, width, 20)
     y.* += 36.0 * scale
     for index: 0..state.node_count - 1 {
         node: [256]u8
@@ -563,7 +563,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         if state.node_count > 1 {
             remove := ButtonProps.{.key = cast(u64)(430 + index), .id = 430 + cast(s32)index,
                 .bounds = Rectangle.{x + width - 40.0 * scale, y.*, 40.0 * scale, 48.0 * scale},
-                .label = Label("self.remove", "Remove node"), .icon_only = true,
+                .label = Label("entity.remove", "Remove node"), .icon_only = true,
                 .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost,
                 .icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"}
             if Button(session, remove) != 0 {
@@ -578,9 +578,9 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         NodeDetails(TextUntilNul(node[:]), x, y, width)
     }
     y.* += 8.0 * scale
-    submitted := EditField(2, node_text[:], Label("self.node_address", "Node address"),
+    submitted := EditField(2, node_text[:], Label("entity.node_address", "Node address"),
         Rectangle.{x, y.*, width - 84.0 * scale, 44.0 * scale}, 255)
-    add := Button(session, ButtonProps.{.key = cast(u64)450, .id = 450, .label = Label("self.add", "Add"),
+    add := Button(session, ButtonProps.{.key = cast(u64)450, .id = 450, .label = Label("entity.add", "Add"),
             .bounds = Rectangle.{x + width - 72.0 * scale, y.*, 72.0 * scale, 44.0 * scale},
             .size = ControlSize.ControlSizeLarge,
             .tone = ButtonTone.ButtonToneAccent, .emphasis = ButtonEmphasis.ButtonEmphasisFilled}) != 0
@@ -589,7 +589,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
         snapshot := node_text
         origin := NodeOrigin(TextUntilNul(snapshot[:]))
         if origin == "" {
-            notice = Label("self.node_invalid", "Enter a valid HTTPS node address")
+            notice = Label("entity.node_invalid", "Enter a valid HTTPS node address")
         } else {
             existing: s32 = -1
             for index: 0..state.node_count - 1 {
@@ -599,13 +599,13 @@ Nodes :: (x: float32, y: *float32, width: float32) {
                 state.preferred = existing
                 Save()
                 clear_node = true
-            } else if state.node_count < SELF_NODE_LIMIT {
+            } else if state.node_count < ENTITY_NODE_LIMIT {
                 unused CopyCString(origin, state.nodes[state.node_count][:])
                 state.preferred = state.node_count
                 state.node_count += 1
                 Save()
                 clear_node = true
-            } else { notice = Label("self.node_limit", "Eight nodes are already saved") }
+            } else { notice = Label("entity.node_limit", "Eight nodes are already saved") }
         }
     }
     if clear_node {
@@ -660,12 +660,12 @@ Draw :: () {
     if AchievementViewFrame(!state.host_navigation) { return }
     PollManagement()
     if !loaded {
-        state = SelfDefault()
-        assets := AppService("self.assets", "")
+        state = EntityDefault()
+        assets := AppService("entity.assets", "")
         if assets.count > 0 && assets[0] == cast(u8)47 { unused CopyCString(assets, asset_root[:]) }
         bytes: [16385]u8
-        count := ReadStore("self.json", bytes[:])
-        if count > 0 { unused SelfDecode(TextUntilNul(bytes[:]), *state) }
+        count := ReadStore("entity.json", bytes[:])
+        if count > 0 { unused EntityDecode(TextUntilNul(bytes[:]), *state) }
         loaded = true
     }
     if management_page != 0 { DrawAccount(); return }
@@ -684,15 +684,15 @@ Draw :: () {
     for index: 0..27 { if (state.pictures & (1 << cast(s32)index)) != 0 { picture_count += 1 } }
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     height := (ifx !state.host_navigation then 352.0 else 308.0) * scale
-    if (state.controls & SELF_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
+    if (state.controls & ENTITY_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
     if management.available { height += 144.0 * scale }
     if !management.available {
         for index: 0..state.node_count - 1 { height += NodeDetailsHeight(TextUntilNul(state.nodes[index][:])) }
     }
-    if (state.controls & SELF_INTENTION) != 0 { height += 100.0 * scale }
-    if (state.controls & SELF_APPEARANCE) != 0 { height += 100.0 * scale }
-    if (state.controls & SELF_ACCENT) != 0 { height += 68.0 * scale + 2.0 * ((width - 56.0 * scale) / 8.0) }
-    if (state.controls & SELF_WIDGETS) != 0 { height += 100.0 * scale }
+    if (state.controls & ENTITY_INTENTION) != 0 { height += 100.0 * scale }
+    if (state.controls & ENTITY_APPEARANCE) != 0 { height += 100.0 * scale }
+    if (state.controls & ENTITY_ACCENT) != 0 { height += 68.0 * scale + 2.0 * ((width - 56.0 * scale) / 8.0) }
+    if (state.controls & ENTITY_WIDGETS) != 0 { height += 100.0 * scale }
     if choosing_picture { height += picker_height }
     for index: 0..state.extension_count - 1 {
         entry := state.extensions[index]
@@ -715,7 +715,7 @@ Draw :: () {
     x := panel_x + 24.0 * scale
     y := panel_y + 24.0 * scale
     if !state.host_navigation {
-        TextLine(5, Label("self.title", "Your profile"), x, y, width, 30)
+        TextLine(5, Label("entity.title", "Your profile"), x, y, width, 30)
         y += 44.0 * scale
     }
     center_x := x + width * 0.5
@@ -726,7 +726,7 @@ Draw :: () {
     y += 88.0 * scale
     change := ButtonProps.{.key = cast(u64)10, .id = 10,
         .bounds = Rectangle.{center_x - 72.0 * scale, y, 144.0 * scale, 32.0 * scale},
-        .label = Label(ifx choosing_picture then "self.done" else "self.change_picture", ifx choosing_picture then "Done" else "Change picture"),
+        .label = Label(ifx choosing_picture then "entity.done" else "entity.change_picture", ifx choosing_picture then "Done" else "Change picture"),
         .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost}
     if Button(session, change) != 0 { choosing_picture = !choosing_picture }
     y += 52.0 * scale
@@ -737,7 +737,7 @@ Draw :: () {
         for index: 0..27 {
             if (state.pictures & (1 << cast(s32)index)) == 0 { continue }
             choice := ButtonProps.{.key = cast(u64)(200 + index), .id = 200 + cast(s32)index,
-                .label = Label("self.picture", "Profile picture"), .icon_only = true,
+                .label = Label("entity.picture", "Profile picture"), .icon_only = true,
                 .bounds = Rectangle.{x + cast(float32)(position % columns) * (size + gap),
                     y + cast(float32)(position / columns) * 56.0 * scale, size, size},
                 .image = Picture(cast(s32)index, Rectangle.{}), .selected = state.picture == index}
@@ -746,26 +746,26 @@ Draw :: () {
         }
         y += picker_height
     }
-    TextLine(20, Label("self.name", "Name"), x, y, width, 14)
-    if EditField(0, state.name[:], Label("self.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
+    TextLine(20, Label("entity.name", "Name"), x, y, width, 14)
+    if EditField(0, state.name[:], Label("entity.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
     y += 100.0 * scale
-    if (state.controls & SELF_INTENTION) != 0 {
-        TextLine(21, Label("self.intention", "Intention"), x, y, width, 14)
-        if EditField(1, state.intention[:], Label("self.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
+    if (state.controls & ENTITY_INTENTION) != 0 {
+        TextLine(21, Label("entity.intention", "Intention"), x, y, width, 14)
+        if EditField(1, state.intention[:], Label("entity.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
         y += 100.0 * scale
     }
     ExtensionRows(x, *y, width)
     if management.available { AccountSummary(x, *y, width) }
-    if (state.controls & SELF_NODES) != 0 && !management.available { Nodes(x, *y, width) }
+    if (state.controls & ENTITY_NODES) != 0 && !management.available { Nodes(x, *y, width) }
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
                 .bounds = Rectangle.{x, y, width, 40.0 * scale}, .font = cast(s32)(13.0 * scale), .wrap = TextWrap.TextWrapAuto})
         y += 48.0 * scale
     }
-    if (state.controls & SELF_APPEARANCE) != 0 {
-        TextLine(30, Label("self.appearance", "Appearance"), x, y, width, 20)
+    if (state.controls & ENTITY_APPEARANCE) != 0 {
+        TextLine(30, Label("entity.appearance", "Appearance"), x, y, width, 20)
         y += 36.0 * scale
-        modes: [3]string = .[Label("self.system", "System"), Label("self.light", "Light"), Label("self.dark", "Dark")]
+        modes: [3]string = .[Label("entity.system", "System"), Label("entity.light", "Light"), Label("entity.dark", "Dark")]
         third := (width - 16.0 * scale) / 3.0
         for index: 0..2 {
             if Action(50 + cast(s32)index, modes[index], Rectangle.{x + cast(float32)index * (third + 8.0 * scale), y, third, 40.0 * scale}, state.theme == index) {
@@ -775,8 +775,8 @@ Draw :: () {
         }
         y += 64.0 * scale
     }
-    if (state.controls & SELF_ACCENT) != 0 {
-        TextLine(31, Label("self.accent", "Accent"), x, y, width, 20)
+    if (state.controls & ENTITY_ACCENT) != 0 {
+        TextLine(31, Label("entity.accent", "Accent"), x, y, width, 20)
         y += 36.0 * scale
         colors: [16]u32 = .[0x7355d9ff, 0x2563ebff, 0x059669ff, 0xdb2777ff, 0xd97706ff, 0x0891b2ff, 0xdc2626ff, 0x7c3aedff,
         0x4f46e5ff, 0x0d9488ff, 0x65a30dff, 0xc026d3ff, 0xea580cff, 0x0284c7ff, 0x9333eaff, 0x475569ff]
@@ -784,15 +784,15 @@ Draw :: () {
         for index: 0..15 {
             if Button(session, ButtonProps.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
                     .bounds = Rectangle.{x + cast(float32)(index % 8) * (size + 8.0 * scale), y + cast(float32)(index / 8) * (size + 8.0 * scale), size, size},
-                    .label = Label("self.accent", "Accent"), .icon_only = true, .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
+                    .label = Label("entity.accent", "Accent"), .icon_only = true, .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
                 state.accent = cast(s32)index
                 Save()
             }
         }
         y += 2.0 * (size + 8.0 * scale) + 16.0 * scale
     }
-    if (state.controls & SELF_WIDGETS) != 0 {
-        TextLine(32, Label("self.widgets", "Widgets"), x, y, width, 20)
+    if (state.controls & ENTITY_WIDGETS) != 0 {
+        TextLine(32, Label("entity.widgets", "Widgets"), x, y, width, 20)
         y += 36.0 * scale
         half := (width - 8.0 * scale) * 0.5
         if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
@@ -807,8 +807,8 @@ Draw :: () {
 Main :: () -> s64 {
     mode := AppMode()
     if mode == APP_IDENTIFY {
-        AppIdentity("self")
-        AppDescribe("Self", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
+        AppIdentity("entity")
+        AppDescribe("Entity", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
         return APP_PROTOCOL
     }
     if mode == APP_COMMAND && AchievementCommand(AppCommand()) { return 0 }

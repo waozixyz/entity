@@ -42,7 +42,7 @@ Request :: (provider: *ManagementProvider, operation: string, value: string = ""
     unused CopyCString(operation, request.operation[:])
     unused CopyCString(value, request.value[:])
     encoded := ManagementRequestEncode(request)
-    defer { SelfFree(encoded) }
+    defer { EntityFree(encoded) }
     return ProviderEnqueue(provider, encoded)
 }
 
@@ -76,15 +76,15 @@ Check :: () -> s32 {
     defer { DeviceLinkForget(*first); DeviceLinkForget(*second) }
     id := "0123456789abcdef0123456789abcdef"
     code_text := DeviceLinkCodeText(id, *first, true, "https://api.waozi.xyz")
-    defer { SelfFree(code_text) }
+    defer { EntityFree(code_text) }
     if !DeviceLinkParse(code_text).valid || DeviceLinkParse("https://example.com").valid { return 12 }
     sealed := DeviceLinkSeal(*fixture.keys, "https://api.waozi.xyz", id, *first, *second.public[0], true)
-    defer { SelfFree(sealed) }
+    defer { EntityFree(sealed) }
     received := DeviceLinkOpen(sealed, id, *second, false, *first.public[0])
     if !received.valid || TextUntilNul(received.account.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 13 }
     if DeviceLinkOpen(sealed, "fedcba9876543210fedcba9876543210", *second, false, *first.public[0]).valid { return 14 }
     protected := DeviceLinkSeal(*fixture.keys, "https://api.waozi.xyz", id, *first, *second.public[0], true, TextUntilNul(fixture.context[:]))
-    defer { SelfFree(protected) }
+    defer { EntityFree(protected) }
     recovered := DeviceLinkOpen(protected, id, *second, false, *first.public[0])
     if !recovered.valid || TextUntilNul(recovered.context[:]) != TextUntilNul(fixture.context[:]) { return 30 }
     if DeviceLinkParse(DeviceLinkCodeText(id, *first, true, "https://user:password@example.com")).valid { return 15 }
@@ -118,12 +118,12 @@ Check :: () -> s32 {
     if provider.queue.pending || TextUntilNul(provider.queue.result[:]) != "error" || apply_count != 1 { return 25 }
 
     // Shared preferences only meet at the same verified identity.
-    state := SelfDefault()
+    state := EntityDefault()
     unused CopyCString("Fixture profile", state.name[:])
     if !SharedProfileSave(TextUntilNul(current_id[:]), state) { return 26 }
-    loaded := SelfDefault()
+    loaded := EntityDefault()
     loaded.theme = 2
-    SelfAddExtension(*loaded, "inbe", "Inner Breeze")
+    EntityAddExtension(*loaded, "inbe", "Inner Breeze")
     if !SharedProfileLoad(TextUntilNul(current_id[:]), *loaded) || TextUntilNul(loaded.name[:]) != "Fixture profile" || loaded.theme != 2 || loaded.extension_count != 1 { return 27 }
     if SharedProfileLoad("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *loaded) { return 28 }
     path: [4096]u8

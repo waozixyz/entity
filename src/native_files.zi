@@ -60,7 +60,7 @@ NativeWrite :: (path: string, text: string) -> bool {
     builder: Vec(u8)
     BuilderPrint(*builder, "%.%.%.new", path, FileProcessId(), native_write_sequence)
     next := BuilderFinish(builder)
-    defer { SelfFree(next) }
+    defer { EntityFree(next) }
     unused RemoveFile(next)
     file := OpenExclusivePrivate(next)
     if !file.valid { return false }
@@ -73,12 +73,25 @@ NativeWrite :: (path: string, text: string) -> bool {
 }
 
 NativeRoot :: (output: []u8) -> string {
-    override := NativeEnvironment("SELF_DATA")
+    override := NativeEnvironment("ENTITY_DATA")
     if override != "" { return ifx CopyCString(override, output) then TextUntilNul(output) else "" }
     base := NativeEnvironment("XDG_DATA_HOME")
     fallback: [4096]u8
     if base == "" { base = NativeJoin(fallback[:], NativeEnvironment("HOME"), ".local/share") }
-    return NativeJoin(output, base, "self")
+    root := NativeJoin(output, base, "entity")
+    NativeMoveOldRoot(base, root)
+    return root
+}
+
+// Entity was called Self: its folder and profile document move over once.
+NativeMoveOldRoot :: (base: string, root: string) {
+    old: [4096]u8
+    previous := NativeJoin(old[:], base, "self")
+    if root == "" || previous == "" || PathExists(root) || !PathExists(previous) || PathIsLink(previous) { return }
+    if !RenamePath(previous, root) { return }
+    document: [4096]u8
+    renamed: [4096]u8
+    unused RenamePath(NativeJoin(document[:], root, "self.json"), NativeJoin(renamed[:], root, "entity.json"))
 }
 
 NativeAccountId :: (id: string) -> bool {
@@ -102,13 +115,13 @@ SharedProfilePath :: (id: string, output: []u8) -> string {
     return NativeJoin(output, folder, "profile.json")
 }
 
-SharedProfileLoad :: (id: string, state: *SelfState) -> bool {
+SharedProfileLoad :: (id: string, state: *EntityState) -> bool {
     path: [4096]u8
     document: [16385]u8
     address := SharedProfilePath(id, path[:])
     if address == "" || NativeRead(address, document[:]) < 0 { return false }
-    shared: SelfState
-    if !SelfDecode(TextUntilNul(document[:]), *shared) { return false }
+    shared: EntityState
+    if !EntityDecode(TextUntilNul(document[:]), *shared) { return false }
     if TextUntilNul(shared.owner_id[:]) != id { return false }
     unused CopyCString(id, state.owner_id[:])
     state.name = shared.name
@@ -120,14 +133,14 @@ SharedProfileLoad :: (id: string, state: *SelfState) -> bool {
     return true
 }
 
-SharedProfileSave :: (id: string, state: SelfState) -> bool {
+SharedProfileSave :: (id: string, state: EntityState) -> bool {
     #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) || #defined(PLAN9_BUILD) || #defined(_WIN32) {
         return true
     }
     path: [4096]u8
     address := SharedProfilePath(id, path[:])
     if address == "" { return !NativeAccountId(id) }
-    shared := SelfDefault()
+    shared := EntityDefault()
     unused CopyCString(id, shared.owner_id[:])
     shared.name = state.name
     shared.intention = state.intention
@@ -135,7 +148,7 @@ SharedProfileSave :: (id: string, state: SelfState) -> bool {
     shared.nodes = state.nodes
     shared.node_count = state.node_count
     shared.preferred = state.preferred
-    document := SelfEncode(shared)
-    defer { SelfFree(document) }
+    document := EntityEncode(shared)
+    defer { EntityFree(document) }
     return NativeWrite(address, document)
 }

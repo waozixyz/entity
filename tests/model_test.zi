@@ -5,10 +5,10 @@
 
 #program_export
 main :: () -> s32 {
-    decoded: SelfState
+    decoded: EntityState
     legacy := "{\"version\":1,\"name\":\"\",\"intention\":\"\",\"picture\":0,\"theme\":0,\"accent\":0,\"material\":1,\"controls\":0,\"preferred\":0,\"nodes\":[\"https://example.com\"],\"extensions\":[]}"
-    if !SelfDecode(legacy, *decoded) || decoded.host_navigation { return 10 }
-    state := SelfDefault()
+    if !EntityDecode(legacy, *decoded) || decoded.host_navigation { return 10 }
+    state := EntityDefault()
     if state.host_navigation { return 8 }
     state.host_navigation = true
     unused CopyCString("Waozi \"quoted\" \\ UTF-8: 花", state.name[:])
@@ -18,29 +18,29 @@ main :: () -> s32 {
     state.node_count = 2
     state.preferred = 1
     unused CopyCString("http://127.0.0.1:8090", state.nodes[1][:])
-    SelfAddExtension(*state, "inbe", "Inner Breeze")
-    encoded := SelfEncode(state)
-    if !SelfDecode(encoded, *decoded) { return 1 }
+    EntityAddExtension(*state, "inbe", "Inner Breeze")
+    encoded := EntityEncode(state)
+    if !EntityDecode(encoded, *decoded) { return 1 }
     if !decoded.host_navigation { return 9 }
     if TextUntilNul(decoded.name[:]) != TextUntilNul(state.name[:]) ||
     TextUntilNul(decoded.intention[:]) != "Breathe slowly" || decoded.picture != 27 ||
     decoded.preferred != 1 || decoded.node_count != 2 ||
     TextUntilNul(decoded.extensions[0].id[:]) != "inbe" { return 2 }
-    SelfFree(encoded)
+    EntityFree(encoded)
     state.preferred = 2
-    invalid := SelfEncode(state)
-    if SelfDecode(invalid, *decoded) { return 3 }
-    SelfFree(invalid)
+    invalid := EntityEncode(state)
+    if EntityDecode(invalid, *decoded) { return 3 }
+    EntityFree(invalid)
     state.preferred = 0
     state.nodes[1] = state.nodes[0]
-    duplicate := SelfEncode(state)
-    if SelfDecode(duplicate, *decoded) { return 4 }
-    SelfFree(duplicate)
+    duplicate := EntityEncode(state)
+    if EntityDecode(duplicate, *decoded) { return 4 }
+    EntityFree(duplicate)
     unused CopyCString("https://example.com/path", state.nodes[1][:])
-    path := SelfEncode(state)
-    if SelfDecode(path, *decoded) { return 5 }
-    SelfFree(path)
-    if SelfDecode("{\"version\":2}", *decoded) { return 6 }
+    path := EntityEncode(state)
+    if EntityDecode(path, *decoded) { return 5 }
+    EntityFree(path)
+    if EntityDecode("{\"version\":2}", *decoded) { return 6 }
     if NodeOrigin("http://example.com") != "" || NodeOrigin("https://name:password@example.com") != "" { return 7 }
     return 0
 }

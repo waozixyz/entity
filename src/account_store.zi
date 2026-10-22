@@ -1,4 +1,4 @@
-// Standalone Self keeps its own private account key. Common preferences are
+// Standalone Entity keeps its own private account key. Common preferences are
 // shared only through the verified account's public profile directory.
 #import "model"
 #import "management"
@@ -18,7 +18,7 @@ Auth :: #import "daochi_client/auth";
 #import "std/file"
 Dialog :: #import "file_dialog_linux";
 
-account_profile: SelfState;
+account_profile: EntityState;
 account_recovery: Recovery;
 account_provider: ManagementProvider;
 account_alias: [40]u8;
@@ -32,7 +32,7 @@ AccountStorePath :: (name: string, output: []u8) -> string {
 AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
     patterns: [2]string = .["*.key", "*.json"]
     props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
-        .filename = ifx save then "self-account.key" else "", .save = save,
+        .filename = ifx save then "entity-account.key" else "", .save = save,
         .filter_name = "Account keys", .patterns = patterns[:]}
     selected := Dialog.FileDialog(props, output)
     if !selected.available { return -1 }
@@ -44,12 +44,12 @@ AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     path: [4096]u8
     return RecoveryEncode(recovery, "", text[:]) && NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:]))
 }
-AccountStoreSaveProfile :: (state: SelfState) -> bool {
+AccountStoreSaveProfile :: (state: EntityState) -> bool {
     if TextUntilNul(state.owner_id[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { return false }
-    document := SelfEncode(state)
-    defer { SelfFree(document) }
+    document := EntityEncode(state)
+    defer { EntityFree(document) }
     path: [4096]u8
-    if !NativeWrite(AccountStorePath("self.json", path[:]), document) { return false }
+    if !NativeWrite(AccountStorePath("entity.json", path[:]), document) { return false }
     if !SharedProfileSave(TextUntilNul(state.owner_id[:]), state) { return false }
     account_profile = state
     return true
@@ -60,7 +60,7 @@ AccountStoreAliasPath :: (output: []u8) -> string {
     name: Vec(u8)
     BuilderPrint(*name, "alias.%.txt", owner)
     filename := BuilderFinish(name)
-    defer { SelfFree(filename) }
+    defer { EntityFree(filename) }
     return AccountStorePath(filename, output)
 }
 AccountStoreReadAlias :: () {
@@ -87,7 +87,7 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
     output.node_count = account_profile.node_count
     for index: 0..output.node_count - 1 {
         output.nodes[index].address = account_profile.nodes[index]
-        // Standalone Self shares public preferences locally; it does not
+        // Standalone Entity shares public preferences locally; it does not
         // claim a sync connection or storage quota it has not fetched.
         output.nodes[index].active = false
     }
@@ -99,7 +99,7 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
         BuilderPrint(*digits, "Compare this number on both devices: %", device_link.confirmation)
         message := BuilderFinish(digits)
         unused CopyCString(message, output.link_message[:])
-        SelfFree(message)
+        EntityFree(message)
     } else if output.link_stage == 4 {
         unused CopyCString("Send this device your account key?", output.link_message[:])
     } else if output.link_stage == 7 {
@@ -113,7 +113,7 @@ AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
     if !same && local_data && choice == 0 { return 2 }
     previous := account_recovery
     defer { RecoveryClear(*previous) }
-    next := SelfDefault()
+    next := EntityDefault()
     if same || choice == 1 { next = account_profile }
     unused CopyCString(id, next.owner_id[:])
     unused SharedProfileLoad(id, *next)
@@ -178,7 +178,7 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
 AccountStoreStart :: () -> bool {
     root: [4096]u8
     if !NativeDirectory(NativeRoot(root[:])) { return false }
-    account_profile = SelfDefault()
+    account_profile = EntityDefault()
     path: [4096]u8
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
@@ -186,9 +186,9 @@ AccountStoreStart :: () -> bool {
         if !RecoveryDecode(TextUntilNul(text[:]), "", *account_recovery) { return false }
         account_standalone_ready = true
     }
-    if NativeRead(AccountStorePath("self.json", path[:]), text[:]) > 0 {
-        loaded: SelfState
-        if !SelfDecode(TextUntilNul(text[:]), *loaded) { return false }
+    if NativeRead(AccountStorePath("entity.json", path[:]), text[:]) > 0 {
+        loaded: EntityState
+        if !EntityDecode(TextUntilNul(text[:]), *loaded) { return false }
         if TextUntilNul(loaded.owner_id[:]) == TextUntilNul(account_recovery.keys.public_id[:]) { account_profile = loaded }
     }
     unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])

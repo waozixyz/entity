@@ -42,8 +42,20 @@ subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-ffunction-secti
                 str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-o', str(executable)], check=True, env=ENV)
 data = output / 'data'
 shutil.rmtree(data, ignore_errors=True)
-ENV['SELF_DATA'] = str(data)
+ENV['ENTITY_DATA'] = str(data)
 subprocess.run([str(executable)], check=True, env=ENV)
 for path in data.rglob('*'):
     assert path.stat().st_mode & 0o077 == 0, f'Non-private fixture path: {path.name}'
-print('Recovery compatibility, tampering, QR transfer, one-time actions, cancelled switches and identity-scoped storage passed.')
+# Entity was called Self: an existing self folder moves over once.
+legacy = output / 'legacy'
+shutil.rmtree(legacy, ignore_errors=True)
+(legacy / 'self').mkdir(parents=True, mode=0o700)
+(legacy / 'self/marker.txt').write_text('kept')
+shutil.copyfile(data / 'entity.json', legacy / 'self/self.json')
+moved = {**ENV, 'XDG_DATA_HOME': str(legacy)}
+moved.pop('ENTITY_DATA')
+subprocess.run([str(executable)], check=True, env=moved)
+assert not (legacy / 'self').exists(), 'The self folder was not moved'
+assert (legacy / 'entity/marker.txt').read_text() == 'kept', 'The self folder lost its files'
+assert (legacy / 'entity/entity.json').exists() and not (legacy / 'entity/self.json').exists()
+print('Recovery compatibility, tampering, QR transfer, one-time actions, cancelled switches and identity-scoped storage and the move from Self passed.')

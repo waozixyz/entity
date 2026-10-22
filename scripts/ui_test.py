@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Self's saved profile and nodes on a private display only."""
+"""Exercise Entity's saved profile and nodes on a private display only."""
 import csv
 import io
 import json
@@ -11,7 +11,7 @@ import sys
 import time
 from PIL import Image
 
-assert os.environ.get("SELF_PRIVATE_DISPLAY") == "1"
+assert os.environ.get("ENTITY_PRIVATE_DISPLAY") == "1"
 root = Path(__file__).resolve().parents[1]
 narrow = "--narrow" in sys.argv[3:]
 output = root / "build/gui-test" / ("narrow" if narrow else "desktop")
@@ -31,7 +31,7 @@ def start():
     global app, window
     app = subprocess.Popen([player, bundle], env=environment)
     for _ in range(100):
-        assert app.poll() is None, f"Self exited before opening: {app.returncode}"
+        assert app.poll() is None, f"Entity exited before opening: {app.returncode}"
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                env=environment, capture_output=True, text=True)
         if found.returncode == 0:
@@ -42,7 +42,7 @@ def start():
             time.sleep(.5)
             return
         time.sleep(.1)
-    raise AssertionError("Self did not open")
+    raise AssertionError("Entity did not open")
 
 
 def stop():
@@ -63,7 +63,7 @@ def text(value):
 
 
 def saved():
-    return json.loads((output / "data/self.json").read_text())
+    return json.loads((output / "data/entity.json").read_text())
 
 
 
@@ -155,6 +155,6 @@ try:
     click_word("Change")
     capture("picture-picker")
     click_word("Done")
-    print("Self: responsive profile, picture picker, node validation, add/prefer/remove and restart passed")
+    print("Entity: responsive profile, picture picker, node validation, add/prefer/remove and restart passed")
 finally:
     stop()

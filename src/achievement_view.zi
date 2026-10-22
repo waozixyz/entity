@@ -33,7 +33,7 @@
 // ordinary owned strings returned by BuilderFinish.
 AchievementRelease :: (value: string) {
     #if !#defined(KRYON_HOSTED_UI) {
-        SelfFree(value)
+        EntityFree(value)
     }
 }
 
@@ -163,10 +163,10 @@ AchievementCommand :: (command: string) -> bool {
 AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: float32) -> float32 {
     request: Vec(u8)
     BuilderPrint(*request, "{\"width\":%,\"font\":%,\"scale\":%,\"text\":", cast(s32)width, font, scale)
-    SelfQuote(*request, value)
+    EntityQuote(*request, value)
     BuilderPrint(*request, "}")
     document := BuilderFinish(request)
-    response := AppService("self.text_height", document)
+    response := AppService("entity.text_height", document)
     AchievementRelease(document)
     measured := ReadNumber(response, Space(response, 0))
     if measured.valid && measured.value >= cast(float64)font && measured.value <= 1000000 {
@@ -192,10 +192,10 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
     if !achievement_ready || achievement_ticks % 30 == 0 {
         request: Vec(u8)
         BuilderPrint(*request, "{\"page\":%,\"app\":", achievement_requested)
-        SelfQuote(*request, TextUntilNul(achievement_filter[:]))
+        EntityQuote(*request, TextUntilNul(achievement_filter[:]))
         BuilderPrint(*request, "}")
         query := BuilderFinish(request)
-        response := AppService("self.achievements", query)
+        response := AppService("entity.achievements", query)
         AchievementRelease(query)
         next: AchievementPage
         valid := response.count > 0 && AchievementPageDecode(response, *next)

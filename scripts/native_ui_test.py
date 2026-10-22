@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise standalone Self's native account provider on a private display."""
+"""Exercise standalone Entity's native account provider on a private display."""
 import csv
 import io
 import json
@@ -11,7 +11,7 @@ import sys
 import time
 from PIL import Image
 
-assert os.environ.get('SELF_PRIVATE_DISPLAY') == '1'
+assert os.environ.get('ENTITY_PRIVATE_DISPLAY') == '1'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/native-gui-test'
 shutil.rmtree(OUT, ignore_errors=True)
@@ -22,9 +22,9 @@ DATA.mkdir(mode=0o700)
 state = dict(version=1, owner_id='', name='', intention='', picture=0, pictures=268435455,
              theme=0, accent=0, material=1, controls=33, preferred=0,
              nodes=['http://127.0.0.1:9'], extensions=[])
-(DATA / 'self.json').write_text(json.dumps(state))
-(DATA / 'self.json').chmod(0o600)
-ENV = dict(os.environ, SELF_DATA=str(DATA), XDG_CACHE_HOME=str(OUT / 'cache'))
+(DATA / 'entity.json').write_text(json.dumps(state))
+(DATA / 'entity.json').chmod(0o600)
+ENV = dict(os.environ, ENTITY_DATA=str(DATA), XDG_CACHE_HOME=str(OUT / 'cache'))
 APP = None
 WINDOW = None
 
@@ -33,9 +33,9 @@ def command(*args):
 
 def start():
     global APP, WINDOW
-    APP = subprocess.Popen([str(ROOT / 'build/self'), str(ROOT / 'build/self.zib')], env=ENV)
+    APP = subprocess.Popen([str(ROOT / 'build/entity'), str(ROOT / 'build/entity.zib')], env=ENV)
     for _ in range(100):
-        assert APP.poll() is None, 'Self exited before opening'
+        assert APP.poll() is None, 'Entity exited before opening'
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(APP.pid)], env=ENV, capture_output=True, text=True)
         if found.returncode == 0:
             WINDOW = found.stdout.splitlines()[0]
@@ -43,7 +43,7 @@ def start():
             time.sleep(.5)
             return
         time.sleep(.1)
-    raise AssertionError('Self did not open')
+    raise AssertionError('Entity did not open')
 
 def stop():
     if APP and APP.poll() is None:
@@ -111,7 +111,7 @@ def click_filled():
     click((rows[0][0] + rows[0][2]) // 2, (rows[0][1] + rows[-1][1]) // 2)
 
 def profile():
-    return json.loads((DATA / 'self.json').read_text())
+    return json.loads((DATA / 'entity.json').read_text())
 
 try:
     start()
@@ -143,6 +143,6 @@ try:
     assert not (DATA / 'account.key').exists()
     assert profile()['name'] == 'Fixture Native' and profile()['owner_id'] == ''
     capture('logged-out')
-    print('Native Self identity, account creation with merge, restart and logout preserving local profile passed.')
+    print('Native Entity identity, account creation with merge, restart and logout preserving local profile passed.')
 finally:
     stop()

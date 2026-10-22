@@ -63,7 +63,7 @@
   ],
   "root": {
     "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p01e33d1c2eade6ee", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
-    "name": "Self"
+    "name": "Entity"
   },
   "toolchain": {
     "commit": "130b263f42e9332896f7bc63cfed2508d34098dc",

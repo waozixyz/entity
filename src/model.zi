@@ -1,4 +1,4 @@
-// Self's public document contains profile preferences, never account keys.
+// Entity's public document contains profile preferences, never account keys.
 // Hosts map it to their existing storage and provide their own extension routes.
 #import "std/c_string"
 #import "std/byte_text_linux"
@@ -8,17 +8,17 @@
 Json :: #import "std/json_scan";
 #import "node_url"
 
-SELF_IDENTITY :: 1
-SELF_INTENTION :: 2
-SELF_APPEARANCE :: 4
-SELF_ACCENT :: 8
-SELF_WIDGETS :: 16
-SELF_NODES :: 32
-SELF_NODE_LIMIT :: 8
-SELF_EXTENSION_LIMIT :: 8
-SELF_DEFAULT_NODE :: "https://api.waozi.xyz"
+ENTITY_IDENTITY :: 1
+ENTITY_INTENTION :: 2
+ENTITY_APPEARANCE :: 4
+ENTITY_ACCENT :: 8
+ENTITY_WIDGETS :: 16
+ENTITY_NODES :: 32
+ENTITY_NODE_LIMIT :: 8
+ENTITY_EXTENSION_LIMIT :: 8
+ENTITY_DEFAULT_NODE :: "https://api.waozi.xyz"
 
-SelfExtension :: struct {
+EntityExtension :: struct {
     id: [40]u8
     label: [128]u8
     summary: [256]u8
@@ -26,7 +26,7 @@ SelfExtension :: struct {
     icon: [32]u8
 }
 
-SelfState :: struct {
+EntityState :: struct {
     owner_id: [65]u8
     name: [64]u8
     intention: [128]u8
@@ -37,23 +37,23 @@ SelfState :: struct {
     material: bool
     host_navigation: bool
     controls: s32
-    nodes: [SELF_NODE_LIMIT][256]u8
+    nodes: [ENTITY_NODE_LIMIT][256]u8
     node_count: s32
     preferred: s32
-    extensions: [SELF_EXTENSION_LIMIT]SelfExtension
+    extensions: [ENTITY_EXTENSION_LIMIT]EntityExtension
     extension_count: s32
 }
 
-SelfDefault :: () -> SelfState {
-    state := SelfState.{.material = true,
+EntityDefault :: () -> EntityState {
+    state := EntityState.{.material = true,
         .pictures = 268435455,
-        .controls = SELF_IDENTITY | SELF_NODES,
+        .controls = ENTITY_IDENTITY | ENTITY_NODES,
         .node_count = 1}
-    unused CopyCString(SELF_DEFAULT_NODE, state.nodes[0][:])
+    unused CopyCString(ENTITY_DEFAULT_NODE, state.nodes[0][:])
     return state
 }
 
-SelfFree :: (text: string) {
+EntityFree :: (text: string) {
     if text.count == 0 { return }
     descriptor := cast(*TextDescriptor)(*text)
     FreeBytes(descriptor.data)
@@ -61,7 +61,7 @@ SelfFree :: (text: string) {
 libc :: #system_library "libc";
 FreeBytes :: (bytes: *u8) #foreign libc "free";
 
-SelfQuote :: (out: *Vec(u8), text: string) {
+EntityQuote :: (out: *Vec(u8), text: string) {
     BuilderPrint(out, "\"")
     for byte: text {
         if byte == cast(u8)34 { BuilderPrint(out, "\\\"") }
@@ -77,41 +77,41 @@ SelfQuote :: (out: *Vec(u8), text: string) {
     BuilderPrint(out, "\"")
 }
 
-SelfEncode :: (state: SelfState) -> string {
+EntityEncode :: (state: EntityState) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "{\"version\":1,\"owner_id\":")
-    SelfQuote(*out, TextUntilNul(state.owner_id[:]))
+    EntityQuote(*out, TextUntilNul(state.owner_id[:]))
     BuilderPrint(*out, ",\"name\":")
-    SelfQuote(*out, TextUntilNul(state.name[:]))
+    EntityQuote(*out, TextUntilNul(state.name[:]))
     BuilderPrint(*out, ",\"intention\":")
-    SelfQuote(*out, TextUntilNul(state.intention[:]))
+    EntityQuote(*out, TextUntilNul(state.intention[:]))
     BuilderPrint(*out, ",\"host_navigation\":%", ifx state.host_navigation then 1 else 0)
     BuilderPrint(*out, ",\"picture\":%,\"pictures\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
         state.picture, state.pictures, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
     for index: 0..state.node_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
-        SelfQuote(*out, TextUntilNul(state.nodes[index][:]))
+        EntityQuote(*out, TextUntilNul(state.nodes[index][:]))
     }
     BuilderPrint(*out, "],\"extensions\":[")
     for index: 0..state.extension_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
         BuilderPrint(*out, "{\"id\":")
-        SelfQuote(*out, TextUntilNul(state.extensions[index].id[:]))
+        EntityQuote(*out, TextUntilNul(state.extensions[index].id[:]))
         BuilderPrint(*out, ",\"label\":")
-        SelfQuote(*out, TextUntilNul(state.extensions[index].label[:]))
+        EntityQuote(*out, TextUntilNul(state.extensions[index].label[:]))
         BuilderPrint(*out, ",\"summary\":")
-        SelfQuote(*out, TextUntilNul(state.extensions[index].summary[:]))
+        EntityQuote(*out, TextUntilNul(state.extensions[index].summary[:]))
         BuilderPrint(*out, ",\"badge\":")
-        SelfQuote(*out, TextUntilNul(state.extensions[index].badge[:]))
+        EntityQuote(*out, TextUntilNul(state.extensions[index].badge[:]))
         BuilderPrint(*out, ",\"icon\":")
-        SelfQuote(*out, TextUntilNul(state.extensions[index].icon[:]))
+        EntityQuote(*out, TextUntilNul(state.extensions[index].icon[:]))
         BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]}")
     return BuilderFinish(out)
 }
 
-SelfNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
+EntityNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
     number := Json.ReadNumber(text, at)
     value := cast(s32)number.value
     if !number.valid || number.value != cast(float64)value || value < minimum || value > maximum {
@@ -120,18 +120,18 @@ SelfNumber :: (text: string, at: s32, minimum: s32, maximum: s32) -> s32 {
     return value
 }
 
-SelfDecode :: (text: string, output: *SelfState) -> bool {
+EntityDecode :: (text: string, output: *EntityState) -> bool {
     if text.count == 0 || text.count > 16384 { return false }
     end := Json.ValueEnd(text, Json.Space(text, 0), 0)
     if end < 0 || Json.Space(text, end) != text.count { return false }
     keys: [11]string = .["version", "name", "intention", "picture", "theme", "accent", "material", "controls", "preferred", "nodes", "extensions"]
     at: [11]s32
-    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || SelfNumber(text, at[0], 1, 1) != 1 {
+    if !Json.ObjectPositions(text, 0, keys[:], at[:]) || EntityNumber(text, at[0], 1, 1) != 1 {
         return false
     }
-    state: SelfState
+    state: EntityState
     navigation_at := Json.FieldAt(text, 0, "host_navigation")
-    navigation := ifx navigation_at < 0 then 0 else SelfNumber(text, navigation_at, 0, 1)
+    navigation := ifx navigation_at < 0 then 0 else EntityNumber(text, navigation_at, 0, 1)
     if navigation < 0 { return false }
     state.host_navigation = navigation == 1
     owner_at := Json.FieldAt(text, 0, "owner_id")
@@ -145,23 +145,23 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
     }
     if Json.ReadStringText(text, at[1], state.name[:]) < 0 ||
     Json.ReadStringText(text, at[2], state.intention[:]) < 0 { return false }
-    state.picture = SelfNumber(text, at[3], 0, 27)
+    state.picture = EntityNumber(text, at[3], 0, 27)
     if state.picture < 0 { return false }
     picture_keys: [1]string = .["pictures"]
     picture_at: [1]s32
     unused Json.ObjectPositions(text, 0, picture_keys[:], picture_at[:])
-    state.pictures = ifx picture_at[0] < 0 then 268435455 else SelfNumber(text, picture_at[0], 1, 268435455)
+    state.pictures = ifx picture_at[0] < 0 then 268435455 else EntityNumber(text, picture_at[0], 1, 268435455)
     if state.pictures < 1 || (state.pictures & (1 << state.picture)) == 0 { return false }
-    state.theme = SelfNumber(text, at[4], 0, 2)
-    state.accent = SelfNumber(text, at[5], 0, 15)
-    material := SelfNumber(text, at[6], 0, 1)
-    state.controls = SelfNumber(text, at[7], 0, 63)
-    state.preferred = SelfNumber(text, at[8], 0, SELF_NODE_LIMIT - 1)
+    state.theme = EntityNumber(text, at[4], 0, 2)
+    state.accent = EntityNumber(text, at[5], 0, 15)
+    material := EntityNumber(text, at[6], 0, 1)
+    state.controls = EntityNumber(text, at[7], 0, 63)
+    state.preferred = EntityNumber(text, at[8], 0, ENTITY_NODE_LIMIT - 1)
     if state.picture < 0 || state.theme < 0 || state.accent < 0 || material < 0 || state.controls < 0 || state.preferred < 0 { return false }
     state.material = material == 1
-    positions: [SELF_NODE_LIMIT]s32
+    positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, at[9], positions[:])
-    if state.node_count < 1 || state.node_count > SELF_NODE_LIMIT || state.preferred >= state.node_count { return false }
+    if state.node_count < 1 || state.node_count > ENTITY_NODE_LIMIT || state.preferred >= state.node_count { return false }
     for index: 0..state.node_count - 1 {
         value: [256]u8
         if Json.ReadStringText(text, positions[index], value[:]) <= 0 { return false }
@@ -171,9 +171,9 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
             if TextUntilNul(state.nodes[previous][:]) == normalized { return false }
         }
     }
-    extensions: [SELF_EXTENSION_LIMIT]s32
+    extensions: [ENTITY_EXTENSION_LIMIT]s32
     state.extension_count = Json.ArrayPositions(text, at[10], extensions[:])
-    if state.extension_count < 0 || state.extension_count > SELF_EXTENSION_LIMIT { return false }
+    if state.extension_count < 0 || state.extension_count > ENTITY_EXTENSION_LIMIT { return false }
     for index: 0..state.extension_count - 1 {
         fields: [2]string = .["id", "label"]
         offsets: [2]s32
@@ -194,15 +194,15 @@ SelfDecode :: (text: string, output: *SelfState) -> bool {
     return true
 }
 
-SelfAddExtension :: (state: *SelfState, id: string, label: string) {
-    if state.extension_count >= SELF_EXTENSION_LIMIT { return }
+EntityAddExtension :: (state: *EntityState, id: string, label: string) {
+    if state.extension_count >= ENTITY_EXTENSION_LIMIT { return }
     entry := *state.extensions[state.extension_count]
     if CopyCString(id, entry.id[:]) && CopyCString(label, entry.label[:]) {
         state.extension_count += 1
     }
 }
 
-SelfDescribeExtension :: (state: *SelfState, id: string, summary: string, badge: string, icon: string) -> bool {
+EntityDescribeExtension :: (state: *EntityState, id: string, summary: string, badge: string, icon: string) -> bool {
     for index: 0..state.extension_count - 1 {
         entry := state.extensions[index]
         if TextUntilNul(entry.id[:]) != id { continue }

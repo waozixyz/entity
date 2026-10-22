@@ -1,4 +1,4 @@
-// Native pairing session shared by Self hosts. Private keys, relay requests
+// Native pairing session shared by Entity hosts. Private keys, relay requests
 // and protected recovery context never cross the portable UI boundary.
 #import "pairing"
 #import "recovery"
@@ -145,7 +145,7 @@ DeviceLinkShow :: () -> bool {
     }
     text := DeviceLinkCodeText(TextUntilNul(device_link.id[:]), *device_link.keys, device_link.sends,
         TextUntilNul(device_link.server[:]))
-    defer { SelfFree(text) }
+    defer { EntityFree(text) }
     if text.count == 0 || text.count > DEVICE_LINK_CODE_MAX {
         DeviceLinkFail("device_link_failed")
         return false
@@ -241,7 +241,7 @@ DeviceLinkSend :: (request: s32) {
         unused DeviceLinkServer(server[:])
         sealed := DeviceLinkSeal(*recovery.keys, TextUntilNul(server[:]), id, *device_link.keys,
             *device_link.other[0], device_link.shows, TextUntilNul(recovery.context[:]))
-        defer { SelfFree(sealed) }
+        defer { EntityFree(sealed) }
         if sealed.count == 0 {
             DeviceLinkFail("device_link_failed")
             return
@@ -256,12 +256,12 @@ DeviceLinkSend :: (request: s32) {
         BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"%\"}", id, slot)
     }
     body := BuilderFinish(out)
-    defer { SelfFree(body) }
+    defer { EntityFree(body) }
     url: Vec(u8)
     BuilderPrint(*url, "%", TextUntilNul(device_link.server[:]))
     BuilderPrint(*url, "%", path)
     address := BuilderFinish(url)
-    defer { SelfFree(address) }
+    defer { EntityFree(address) }
     if body.count >= device_link_body.count || address.count >= device_link_url.count {
         DeviceLinkFail("device_link_failed")
         return

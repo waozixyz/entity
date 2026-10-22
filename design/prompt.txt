@@ -1,9 +1,9 @@
 Mode: built-in image_gen, generate, ui-mockup
-Output: design/self-reference.png
-Input role: earlier private-display Self screenshot, functionality reference.
+Output: design/entity-reference.png
+Input role: earlier private-display Entity screenshot, functionality reference.
 
 Use case: ui-mockup.
-Asset type: one high fidelity design reference sheet for Self, a native personal
+Asset type: one high fidelity design reference sheet for Entity, a native personal
 profile app, showing the same UI desktop and narrow side by side.
 The reference image is for functionality only; completely improve the design.
 Main subject: a calm, beautifully proportioned profile card.

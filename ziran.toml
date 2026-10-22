@@ -1,6 +1,6 @@
 [package]
-name = "Self"
-entry = "src/self.zi"
+name = "Entity"
+entry = "src/entity.zi"
 module_roots = ["src", "tests"]
 
 [toolchain]

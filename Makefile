@@ -18,14 +18,14 @@ ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
 UI_SOURCES = $(wildcard $(KRYON_DIR)/src/ui/*.zi $(KRYON_DIR)/src/backend/*.zi $(ZIRAN_ROOT)/std/*.zi)
 .PHONY: all test run native native-test model-test
-all: build/self.zib native
-build/self.zib: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
+all: build/entity.zib native
+build/entity.zib: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
 	mkdir -p build
 	$(ZIRAN) bundle --root . --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
-		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry self:Main -o $@ src/self.zi
-test: build/self.zib native-test model-test achievement-view-test
+		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
+test: build/entity.zib native-test model-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
@@ -49,13 +49,13 @@ build/generated/native/.complete: $(SOURCES) $(UI_SOURCES) ziran.lock Makefile
 	mkdir -p $(@D)
 	$(ZIRAN) build --root . $(MODULE_PATHS) --define PLATFORM_DESKTOP --target=c --entry desktop:main -o $(@D) src/desktop.zi
 	touch $@
-build/self: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_LIBRARY) Makefile
+build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_LIBRARY) Makefile
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/generated/native \
 		$$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) \
 		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -o $@
-native: build/self
+native: build/entity
 native-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py
 run: all
-	./build/self build/self.zib
+	./build/entity build/entity.zib

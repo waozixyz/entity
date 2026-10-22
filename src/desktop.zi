@@ -1,4 +1,4 @@
-// Self's standalone native provider hosts the same portable UI as Inbe and
+// Entity's standalone native provider hosts the same portable UI as Inbe and
 // Werkzeug. It manages only its own window and its private account store.
 #import "model"
 #import "account_store"
@@ -37,14 +37,14 @@ TextValue :: (text: string) -> HostValue {
 }
 Allows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "self.management" || name == "self.assets"
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets"
 }
 Services :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
-        if service == "self.assets" { result.* = TextValue(TextUntilNul(asset_folder[:])); return 1 }
-        if service == "self.management" {
+        if service == "entity.assets" { result.* = TextValue(TextUntilNul(asset_folder[:])); return 1 }
+        if service == "entity.management" {
             request := AppArgumentText(arguments[1])
             if request == "" { ProviderRefresh(*account_provider); result.* = TextValue(account_provider.document) }
             else { result.* = TextValue(ifx ProviderEnqueue(*account_provider, request) then "queued" else "rejected") }
@@ -56,12 +56,12 @@ Services :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, 
         result.* = HostScalar("bool", ifx Desktop.SystemClipboardWriteHost(AppArgumentText(arguments[0])) then 1 else 0)
         return 1
     }
-    if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
+    if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
         owner: [65]u8
         for index: 0..64 { owner[index] = account_profile.owner_id[index] }
         unused SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
-        SelfFree(profile_document)
-        profile_document = SelfEncode(account_profile)
+        EntityFree(profile_document)
+        profile_document = EntityEncode(account_profile)
         output := arguments[1]
         if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)profile_document.count { return 0 }
         for index: 0..profile_document.count {
@@ -72,9 +72,9 @@ Services :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, 
         result.* = HostScalar("s32", profile_document.count)
         return 1
     }
-    if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "self.json" {
-        state: SelfState
-        saved := SelfDecode(AppArgumentText(arguments[1]), *state) && AccountStoreSaveProfile(state)
+    if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
+        state: EntityState
+        saved := EntityDecode(AppArgumentText(arguments[1]), *state) && AccountStoreSaveProfile(state)
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
     }
@@ -83,8 +83,8 @@ Services :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, 
 AssetAllowed :: (path: string) -> bool {
     first: [4096]u8
     second: [4096]u8
-    return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/self/pfp.png") ||
-    path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/self/flowers.png")
+    return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/entity/pfp.png") ||
+    path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
 }
 OpenSelf :: (path: string) -> bool {
     file := OpenRead(path)
@@ -101,15 +101,15 @@ OpenSelf :: (path: string) -> bool {
     }
     if read != size { VecFree(bytes); return false }
     bundle_bytes = BuilderFinish(bytes)
-    portable = AppContext.{.expected_id = "self", .allows = Allows, .services = Services, .widgets = WidgetHostCall}
+    portable = AppContext.{.expected_id = "entity", .allows = Allows, .services = Services, .widgets = WidgetHostCall}
     if !AppContextOpen(*portable, bundle_bytes) { return false }
     unused NativeRoot(asset_folder[:])
     for index: cast(u64)0..BundleAssets(portable.app.bundle) - 1 {
         name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
-        if name != "assets/self/pfp.png" && name != "assets/self/flowers.png" { continue }
+        if name != "assets/entity/pfp.png" && name != "assets/entity/flowers.png" { continue }
         folder: [4096]u8
         path_buffer: [4096]u8
-        if !NativeDirectory(NativeJoin(folder[:], TextUntilNul(asset_folder[:]), "assets/self")) { return false }
+        if !NativeDirectory(NativeJoin(folder[:], TextUntilNul(asset_folder[:]), "assets/entity")) { return false }
         asset_bytes := BytesFromPointer(BundleAssetBytes(portable.app.bundle, index), BundleAssetLength(portable.app.bundle, index))
         if !NativeWrite(NativeJoin(path_buffer[:], TextUntilNul(asset_folder[:]), name), TextFromBytes(asset_bytes)) { return false }
     }
@@ -142,7 +142,7 @@ Draw :: (session: UI.Session) -> bool {
     ran := AppContextRun(*portable, APP_FRAME)
     WidgetHostEnd()
     portable.input = UI.TextFieldInput.{}
-    SelfFree(input_text)
+    EntityFree(input_text)
     AccountStorePump()
     if !ran { TreeCancel(session); return false }
     if EndFrame(session) != FrameStatus.FrameOk { return false }
@@ -151,11 +151,11 @@ Draw :: (session: UI.Session) -> bool {
 }
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
-    path := ifx argc > 1 then TextFromCString(argv[1]) else "build/self.zib"
+    path := ifx argc > 1 then TextFromCString(argv[1]) else "build/entity.zib"
     if !AccountStoreStart() || !OpenSelf(path) { return 1 }
     if !Desktop.OpenDesktopSized(480, 800) { return 1 }
     title: [16]u8
-    unused CopyCString("Self", title[:])
+    unused CopyCString("Entity", title[:])
     SetTitle(Desktop.window, *title[0])
     unused Desktop.WindowInterceptCloseHost(true)
     session := SessionOpen()

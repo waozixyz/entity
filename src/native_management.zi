@@ -1,4 +1,4 @@
-// One account workflow for native Self providers. The UI sends bounded
+// One account workflow for native Entity providers. The UI sends bounded
 // intentions; this module owns staged recovery, file access and completion.
 #import "management"
 #import "model"
@@ -63,7 +63,7 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
 }
 
 ProviderRefresh :: (provider: *ManagementProvider) {
-    SelfFree(provider.document)
+    EntityFree(provider.document)
     provider.document = ManagementEncode(ProviderState(provider))
 }
 
