@@ -625,6 +625,7 @@ Nodes :: (x: float32, y: *float32, width: float32) {
 }
 
 ExtensionShape :: (route: string) -> string {
+    if route == "dew" { return "S1.7rr:M12 3C10 6 5 11 5 15C5 24 19 24 19 15C19 11 14 6 12 3ZM8 15C8 18 10 19 12 19" }
     if route == "achievements" { return "S1.7rr:M8 3H16V10C16 16 8 16 8 10ZM8 5H4V8L8 11M16 5H20V8L16 11M12 15V21M8 21H16" }
     if route == "inbe" { return "S1.7rr:M3 13H7L10 5L14 20L17 11H21" }
     if route == "friends" { return "S1.7rr:M9 3C4 3 4 11 9 11C14 11 14 3 9 3M2 21V18C2 12 16 12 16 18V21M17 4C22 4 22 11 17 11M19 14C22 15 22 18 22 21" }
@@ -759,6 +760,7 @@ Draw :: () {
         }
         y += picker_height
     }
+    if management.available { AccountSummary(x, *y, width) }
     TextLine(20, Label("entity.name", "Name"), x, y, width, 14)
     if EditField(0, state.name[:], Label("entity.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
     y += 100.0 * scale
@@ -768,7 +770,6 @@ Draw :: () {
         y += 100.0 * scale
     }
     ExtensionRows(x, *y, width)
-    if management.available { AccountSummary(x, *y, width) }
     if (state.controls & ENTITY_NODES) != 0 && !management.available { Nodes(x, *y, width) }
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
