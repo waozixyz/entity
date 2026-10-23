@@ -15,6 +15,7 @@
 
 DewBalanceTopUp :: 1
 DewBalancePlans :: 2
+DewBalanceData :: 3
 
 DewBalanceProps :: struct {
     key: u64
@@ -30,6 +31,8 @@ DewBalanceProps :: struct {
     notice: string
     top_up: string
     plans: string
+    // Hosts that manage local data name the action; empty hides it.
+    data: string
     ready: bool
     known: bool
     busy: bool
@@ -61,6 +64,11 @@ DewBalanceLine :: (session: Session, key: u64, text: string, x: float32,
                 .wrap = TextWrap.TextWrapAuto})
     }
     y.* += height + 8.0 * scale
+}
+
+DewBalanceAction :: (session: Session, key: u64, label: string, bounds: Rectangle, draw: bool) -> bool {
+    return draw && Button(session, ButtonProps.{.key = key, .id = cast(s32)key, .label = label, .bounds = bounds,
+            .tone = ButtonTone.ButtonToneAccent, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0
 }
 
 DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> DewBalanceResult {
@@ -123,18 +131,43 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
             y += 16.0 * scale
             DewBalanceLine(session, key + 8, props.usage, x, *y, width, small, scale, draw)
         }
-        if props.enabled && props.plans != "" {
-            if draw && Button(session, ButtonProps.{.key = key + 9, .id = cast(s32)(key + 9),
-                    .label = props.plans, .bounds = Rectangle.{x, y, width, 44.0 * scale},
-                    .tone = ButtonTone.ButtonToneAccent, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
+        plans := props.enabled && props.plans != ""
+        // Storage plans and data management share the usage they act on.
+        if plans && props.data != "" && width >= 280.0 * scale {
+            half := (width - 8.0 * scale) * 0.5
+            if DewBalanceAction(session, key + 9, props.plans, Rectangle.{x, y, half, 44.0 * scale}, draw) {
                 result.action = DewBalancePlans
+            }
+            if DewBalanceAction(session, key + 11, props.data, Rectangle.{x + half + 8.0 * scale, y, half, 44.0 * scale}, draw) {
+                result.action = DewBalanceData
+            }
+            y += 52.0 * scale
+        } else {
+            if plans {
+                if DewBalanceAction(session, key + 9, props.plans, Rectangle.{x, y, width, 44.0 * scale}, draw) {
+                    result.action = DewBalancePlans
+                }
+                y += 52.0 * scale
+            }
+            if props.data != "" {
+                if DewBalanceAction(session, key + 11, props.data, Rectangle.{x, y, width, 44.0 * scale}, draw) {
+                    result.action = DewBalanceData
+                }
+                y += 52.0 * scale
+            }
+        }
+        DewBalanceLine(session, key + 10, props.notice, x, *y, width, small, scale, draw)
+    } else {
+        DewBalanceLine(session, key + 2, props.balance, x, *y, width, value_font, scale, draw)
+        DewBalanceLine(session, key + 10, props.notice, x, *y, width, small, scale, draw)
+        // Local data stays manageable before the node answers.
+        if props.data != "" {
+            if DewBalanceAction(session, key + 11, props.data, Rectangle.{x, y, width, 44.0 * scale}, draw) {
+                result.action = DewBalanceData
             }
             y += 52.0 * scale
         }
-    } else {
-        DewBalanceLine(session, key + 2, props.balance, x, *y, width, value_font, scale, draw)
     }
-    DewBalanceLine(session, key + 10, props.notice, x, *y, width, small, scale, draw)
     result.height = y - props.bounds.y + 20.0 * scale
     return result
 }

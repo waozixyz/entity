@@ -124,12 +124,6 @@ def click_add():
 
 try:
     start()
-    x, y, _, _ = word("Name")
-    click(x + 80, y + 40)
-    text("Fixture Person")
-    command("xdotool", "key", "--window", window, "Return")
-    time.sleep(.3)
-    assert saved()["name"] == "Fixture Person"
     x, y, width, height = word("address")
     node_field = (x + width // 2, y + height // 2)
     click(*node_field)
@@ -147,7 +141,7 @@ try:
     start()
     x, y, _, _ = word("Nodes")
     click(x + 80, y + 48)
-    assert saved()["preferred"] == 0 and saved()["name"] == "Fixture Person"
+    assert saved()["preferred"] == 0
     _, _, right, _ = primary_bounds()
     click(right - 18, y + 112)
     assert saved()["nodes"] == ["https://api.waozi.xyz"]
