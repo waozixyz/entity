@@ -1,0 +1,116 @@
+// The "publications.read" app service: a hosted app fetches one public
+// publication by id from the node, with or without an account, such as the
+// level campaign a game's publisher keeps up to date there. It never
+// publishes. Requests:
+//   {"operation":"fetch","id":"<32 hex digits>"} answers
+//       {"status":"pending","request":N} or {"status":"rejected","error":"..."}
+//   {"operation":"status","request":N} answers {"status":"pending"},
+//       {"status":"failed","error":"..."} or {"status":"done",
+//       "publication":{...},"document":{...}}, the node's answer.
+#import "std/json_scan"
+#import "std/net_http"
+#import "std/text_buffer"
+#import "std/number_text"
+#import "kryon/http_transfer"
+#import "dew_model"
+#import "model"
+
+PUBLICATIONS_READ_SERVICE :: "publications.read"
+// A public document holds at most 256 KiB; the answer adds its description.
+PUBLICATIONS_READ_ANSWER :: 270336
+
+publications_read_transfer: HttpTransfer;
+publications_read_answer: [PUBLICATIONS_READ_ANSWER]u8;
+publications_read_request: s32;
+// 0 idle, 1 running, 2 done, 3 failed.
+publications_read_state: s32;
+publications_read_status: s32;
+// The latest reply, which the host value borrows until the app copies it.
+publications_read_reply: [PUBLICATIONS_READ_ANSWER + 64]u8;
+publications_read_url: [256]u8;
+
+// Keeps first, second and third, joined, as the reply; a reply that cannot
+// fit says so instead.
+PublicationsReadReply :: (first: string, second: string = "", third: string = "") -> string {
+    if first.count + second.count + third.count >= publications_read_reply.count {
+        return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"the answer is too large\"}")
+    }
+    length: s64 = 0
+    for byte: first { publications_read_reply[length] = byte; length += 1 }
+    for byte: second { publications_read_reply[length] = byte; length += 1 }
+    for byte: third { publications_read_reply[length] = byte; length += 1 }
+    publications_read_reply[length] = cast(u8)0
+    return TextView(publications_read_reply[:length])
+}
+
+PublicationsReadIdValid :: (id: string) -> bool {
+    if id.count != 32 { return false }
+    for byte: id {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+PublicationsReadPump :: () {
+    if publications_read_state != 1 { return }
+    status: s32
+    done := HttpTransferPoll(*publications_read_transfer, *status)
+    if done < 0 { return }
+    publications_read_status = status
+    publications_read_state = ifx done == 1 && status == 200 then 2 else 3
+    HttpTransferCancel(*publications_read_transfer)
+}
+
+// The text a request answers, valid until the next request.
+PublicationsReadAnswer :: (request: string) -> string {
+    PublicationsReadPump()
+    operation_at := FieldAt(request, 0, "operation")
+    operation: [16]u8
+    if operation_at < 0 || ReadStringText(request, operation_at, operation[:]) < 0 {
+        return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"malformed request\"}")
+    }
+    if TextUntilNul(operation[:]) == "fetch" {
+        id_at := FieldAt(request, 0, "id")
+        id: [40]u8
+        if id_at < 0 || ReadStringText(request, id_at, id[:]) < 0 || !PublicationsReadIdValid(TextUntilNul(id[:])) {
+            return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"invalid publication\"}")
+        }
+        HttpTransferCancel(*publications_read_transfer)
+        length: s64 = 0
+        for byte: DewNode { publications_read_url[length] = byte; length += 1 }
+        for byte: "/api/v1/publications/" { publications_read_url[length] = byte; length += 1 }
+        for byte: TextUntilNul(id[:]) { publications_read_url[length] = byte; length += 1 }
+        publications_read_url[length] = cast(u8)0
+        request_value := HttpRequest.{.method = "GET", .url = TextView(publications_read_url[:length]), .accept = "application/json"}
+        publications_read_request += 1
+        publications_read_state = 0
+        if !HttpTransferStart(*publications_read_transfer, request_value, publications_read_answer[:], 20000) {
+            return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"the node is unavailable\"}")
+        }
+        publications_read_state = 1
+        digits: [24]u8
+        number_text := FormatInteger(cast(s64)publications_read_request, digits[:])
+        return PublicationsReadReply("{\"status\":\"pending\",\"request\":", number_text, "}")
+    }
+    if TextUntilNul(operation[:]) == "status" {
+        number_at := FieldAt(request, 0, "request")
+        number := ReadNumber(request, number_at)
+        if number_at < 0 || !number.valid || cast(s32)number.value != publications_read_request || publications_read_state == 0 {
+            return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"unknown request\"}")
+        }
+        if publications_read_state == 1 { return PublicationsReadReply("{\"status\":\"pending\"}") }
+        if publications_read_state == 3 {
+            digits: [24]u8
+            status_text := FormatInteger(cast(s64)publications_read_status, digits[:])
+            return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"the node answered ", status_text, "\"}")
+        }
+        // The node's answer is {"publication":...,"document":...}.
+        body := TextUntilNul(publications_read_answer[:])
+        start := Space(body, 0)
+        if start < 0 || start >= cast(s32)body.count || body[start] != #char "{" {
+            return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"malformed answer\"}")
+        }
+        return PublicationsReadReply("{\"status\":\"done\",", body[start + 1:])
+    }
+    return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"unsupported operation\"}")
+}

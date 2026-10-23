@@ -17,7 +17,7 @@ SOURCES := $(wildcard src/*.zi)
 ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
 UI_SOURCES = $(wildcard $(KRYON_DIR)/src/ui/*.zi $(KRYON_DIR)/src/backend/*.zi $(ZIRAN_ROOT)/std/*.zi)
-.PHONY: all test run native native-test model-test
+.PHONY: all test run native native-test model-test publication
 all: build/entity.zib native
 build/entity.zib: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
 	mkdir -p build
@@ -55,6 +55,13 @@ build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_L
 		$$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) \
 		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -o $@
 native: build/entity
+# Publishes a JSON document as a public Daochi publication; see tools/publication.zi.
+publication: build/publication
+build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) ziran.lock Makefile
+	rm -rf build/publication-c
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry publication:main -o build/publication-c tools/publication.zi
+	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/publication-c $$(find build/publication-c -type d -printf ' -iquote %p') \
+		$$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -o $@
 native-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py

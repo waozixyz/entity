@@ -1,0 +1,185 @@
+// Publishes a JSON document as a public Daochi publication from an account
+// key file, so a game can ship content such as its level campaign without a
+// new release. Players read public publications without an account.
+//
+//   publication create KEY
+//       Writes a new account key to KEY, readable only by its owner.
+//   publication publish KEY SERVER FORMAT TITLE DOCUMENT [ID]
+//       Publishes DOCUMENT (a file holding one JSON object) and prints the
+//       node's answer. With ID it replaces that publication of this account.
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/file"
+#import "std/net_http"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/date_time_linux"
+#import "daochi_client/async_client"
+#import "daochi_client/client"
+#import "daochi_client/crypto"
+#import "daochi_client/keys"
+Auth :: #import "daochi_client/auth";
+#import "kryon/http_transfer"
+
+libc :: #system_library "libc";
+WriteRaw :: (fd: s32, input: *u8, count: usize) -> isize #foreign libc "write";
+SleepMicroseconds :: (microseconds: u32) -> s32 #foreign libc "usleep";
+
+publication_transfer: HttpTransfer;
+publication_keys: AccountKeys;
+publication_answer: [262144]u8;
+publication_body: [262144]u8;
+publication_key_text: [ACCOUNT_EXPORT_TEXT_SIZE]u8;
+
+Say :: (fd: s32, text: string) {
+    if text.count == 0 { return }
+    descriptor := cast(*TextDescriptor)(*text)
+    unused WriteRaw(fd, descriptor.data, cast(usize)text.count)
+}
+
+Usage :: () -> s32 {
+    Say(2, "usage: publication create KEY\n       publication publish KEY SERVER FORMAT TITLE DOCUMENT [ID]\n")
+    return 2
+}
+
+Digest :: (body: string, output: []u8) -> bool {
+    if output.count < 65 { return false }
+    descriptor := cast(*TextDescriptor)(*body)
+    Sha256Hex(descriptor.data, body.count, *output[0])
+    return true
+}
+
+Start :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    unused context
+    return HttpTransferStart(*publication_transfer, request, output, 30000)
+}
+Poll :: (context: *void, status: *s32) -> s32 {
+    unused context
+    return HttpTransferPoll(*publication_transfer, status)
+}
+Cancel :: (context: *void) {
+    unused context
+    HttpTransferCancel(*publication_transfer)
+}
+
+// The key file is new: an existing key is never replaced.
+Create :: (path: string) -> s32 {
+    if PathExists(path) {
+        Say(2, "publication: the key file already exists\n")
+        return 1
+    }
+    if CreateAccountKeys(*publication_keys) == 0 ||
+    AccountKeysText(*publication_keys, *publication_key_text[0], publication_key_text.count) == 0 {
+        Say(2, "publication: could not create an account key\n")
+        return 1
+    }
+    defer { SecureWipe(*publication_key_text[0], publication_key_text.count) }
+    file := OpenExclusivePrivate(path)
+    if !file.valid {
+        Say(2, "publication: could not write the key file\n")
+        return 1
+    }
+    text := TextUntilNul(publication_key_text[:])
+    written := WriteTextAt(file, text, 0) == text.count && SyncFile(file)
+    unused CloseFile(file)
+    if !written {
+        unused RemoveFile(path)
+        Say(2, "publication: could not write the key file\n")
+        return 1
+    }
+    Say(1, TextUntilNul(publication_keys.public_id[:]))
+    Say(1, "\n")
+    return 0
+}
+
+// Copies short text into the request body as a JSON string.
+AppendJsonString :: (builder: *Vec(u8), text: string) {
+    escaped: [1024]u8
+    length: s64 = 0
+    escaped[length] = cast(u8)34
+    length += 1
+    for byte: text {
+        if length + 3 >= escaped.count { break }
+        if byte == cast(u8)34 || byte == cast(u8)92 {
+            escaped[length] = cast(u8)92
+            length += 1
+            escaped[length] = byte
+        } else if byte < cast(u8)32 {
+            escaped[length] = cast(u8)32
+        } else {
+            escaped[length] = byte
+        }
+        length += 1
+    }
+    escaped[length] = cast(u8)34
+    length += 1
+    BuilderPrint(builder, "%", TextView(escaped[:length]))
+}
+
+Publish :: (key_path: string, server: string, format: string, title: string,
+    document_path: string, id: string) -> s32 {
+    key_text, key_found := ReadEntireFile(key_path)
+    document, document_found := ReadEntireFile(document_path)
+    if !key_found || !document_found {
+        Say(2, "publication: cannot read the key or the document\n")
+        return 1
+    }
+    if ParseAccountKeys(key_text, *publication_keys) == 0 {
+        Say(2, "publication: the key file is not an account key\n")
+        return 1
+    }
+    builder: Vec(u8)
+    BuilderPrint(*builder, "{\"format\":")
+    AppendJsonString(*builder, format)
+    BuilderPrint(*builder, ",\"title\":")
+    AppendJsonString(*builder, title)
+    BuilderPrint(*builder, ",\"visibility\":\"public\"")
+    if id != "" {
+        BuilderPrint(*builder, ",\"id\":")
+        AppendJsonString(*builder, id)
+    }
+    BuilderPrint(*builder, ",\"document\":%}", document)
+    body := BuilderFinish(builder)
+    if body.count + 1 > publication_body.count {
+        Say(2, "publication: the document is too large\n")
+        return 1
+    }
+    client := Client.{.server_url = server, .app_id = "",
+        .identity = Auth.Identity.{.account_id = TextUntilNul(publication_keys.public_id[:]),
+            .public_key = TextUntilNul(publication_keys.public_key_hex[:]), .client_id = "publication",
+            .signing_context = cast(*void)*publication_keys},
+        .digest = Digest, .signer = SignAccountMessage}
+    session: Auth.Session
+    pending: PendingRequest
+    transport := AsyncTransport.{.start = Start, .poll = Poll, .cancel = Cancel}
+    headers: [0]HttpHeader
+    if !BeginRequest(*pending, client, *session, UnixNow(), transport, "POST", "/api/v1/publications",
+        body, publication_answer[:], headers[:]) {
+        Say(2, "publication: could not start the request\n")
+        return 1
+    }
+    while !PollRequest(*pending) { unused SleepMicroseconds(20000) }
+    answer := TextUntilNul(publication_answer[:])
+    if pending.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+        Say(2, "publication: the node refused the publication: ")
+        Say(2, answer)
+        Say(2, "\n")
+        return 1
+    }
+    Say(1, answer)
+    Say(1, "\n")
+    return 0
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc == 3 && TextFromCString(argv[1]) == "create" {
+        return Create(TextFromCString(argv[2]))
+    }
+    if (argc == 7 || argc == 8) && TextFromCString(argv[1]) == "publish" {
+        id := ifx argc == 8 then TextFromCString(argv[7]) else ""
+        return Publish(TextFromCString(argv[2]), TextFromCString(argv[3]), TextFromCString(argv[4]),
+            TextFromCString(argv[5]), TextFromCString(argv[6]), id)
+    }
+    return Usage()
+}
