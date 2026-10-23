@@ -1,0 +1,94 @@
+// One earned achievement at a time, shown briefly in the top-right corner
+// with its badge and name. A click anywhere on it closes it at once.
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/drawing_props"
+#import "kryon/box_props"
+#import "kryon/box_widget"
+#import "kryon/text_props"
+#import "kryon/text_widget"
+#import "kryon/button_props"
+#import "kryon/button_widget"
+#import "kryon/control_props"
+#import "kryon/svg_icon_props"
+#import "kryon/svg_icon_widget"
+#import "std/c_string"
+#import "std/text_buffer"
+
+AchievementToastSeconds :: 3.5
+
+AchievementToast :: struct {
+    label: [96]u8
+    title: [256]u8
+    icon: [1024]u8
+    shown_at: float64
+    active: bool
+}
+
+AchievementToastProps :: struct {
+    key: u64
+    viewport: Rectangle
+    // Space the host keeps clear above the toast, such as its title bar.
+    top: float32
+    scale: float32
+    now: float64
+    fill: Color
+    border: Color
+    accent: Color
+}
+
+// Replaces any toast still showing; the newest award is the one to see.
+AchievementToastShow :: (toast: *AchievementToast, label: string, title: string, icon: string, now: float64) {
+    toast.* = AchievementToast.{}
+    if title == "" { return }
+    unused CopyCString(label, toast.label[:])
+    unused CopyCString(title, toast.title[:])
+    if icon.count < toast.icon.count { unused CopyCString(icon, toast.icon[:]) }
+    toast.shown_at = now
+    toast.active = true
+}
+
+AchievementToastClose :: (toast: *AchievementToast) { toast.active = false }
+
+// Draws the toast while it lasts; true while it is still showing.
+AchievementToastDraw :: (session: Session, toast: *AchievementToast, props: AchievementToastProps) -> bool {
+    if !toast.active { return false }
+    if props.now < toast.shown_at || props.now - toast.shown_at >= AchievementToastSeconds {
+        toast.active = false
+        return false
+    }
+    scale := ifx props.scale > 0.0 then props.scale else 1.0
+    key := ifx props.key != 0 then props.key else cast(u64)47000
+    margin := 12.0 * scale
+    width := 300.0 * scale
+    if width > props.viewport.width - margin * 2.0 { width = props.viewport.width - margin * 2.0 }
+    if width < 160.0 * scale { return true }
+    height := 64.0 * scale
+    bounds := Rectangle.{props.viewport.x + props.viewport.width - width - margin,
+        props.viewport.y + props.top + margin, width, height}
+    Box(session, BoxProps.{.key = key, .bounds = bounds, .fill = props.fill, .border = props.border, .radius = 14.0 * scale})
+    badge := 40.0 * scale
+    badge_x := bounds.x + 12.0 * scale
+    badge_y := bounds.y + (height - badge) * 0.5
+    Box(session, BoxProps.{.key = key + 1, .bounds = Rectangle.{badge_x, badge_y, badge, badge},
+            .fill = props.accent, .radius = badge * 0.5})
+    shape := TextUntilNul(toast.icon[:])
+    if shape != "" {
+        icon := 24.0 * scale
+        SvgIcon(session, SvgIconProps.{.shape = shape, .color = Color.{255, 255, 255, 255},
+                .bounds = Rectangle.{badge_x + (badge - icon) * 0.5, badge_y + (badge - icon) * 0.5, icon, icon}})
+    }
+    text_x := badge_x + badge + 12.0 * scale
+    text_width := bounds.x + width - 12.0 * scale - text_x
+    Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(toast.label[:]), .disabled = true,
+            .bounds = Rectangle.{text_x, bounds.y + 10.0 * scale, text_width, 18.0 * scale},
+            .font = cast(s32)(12.0 * scale), .wrap = TextWrap.TextWrapEllipsis})
+    Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(toast.title[:]),
+            .bounds = Rectangle.{text_x, bounds.y + 30.0 * scale, text_width, 24.0 * scale},
+            .font = cast(s32)(16.0 * scale), .wrap = TextWrap.TextWrapEllipsis})
+    if Button(session, ButtonProps.{.key = key + 4, .id = cast(s32)(key + 4), .bounds = bounds,
+            .label = TextUntilNul(toast.title[:]), .invisible = true}) != 0 {
+        toast.active = false
+    }
+    return toast.active
+}

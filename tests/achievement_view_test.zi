@@ -1,4 +1,5 @@
 #import "achievement_view"
+#import "achievement_toast"
 #import "std/c_string"
 #import "std/text_buffer"
 
@@ -25,6 +26,13 @@ Answer :: () -> s32 {
     if !AchievementPageDecode(FilteredPage, *page) { return 10 }
     if page.app_count != 1 || page.rows[0].icon[0] != #char "S" { return 11 }
     if TextUntilNul(page.app[:]) != "inbe.diary" || TextUntilNul(page.apps[0].title[:]) != "Diary" { return 12 }
+    toast: AchievementToast
+    AchievementToastShow(*toast, "Achievement unlocked", "", "S1.5rr:M4 4H20V20H4Z", 1.0)
+    if toast.active { return 13 }
+    AchievementToastShow(*toast, "Achievement unlocked", "First page", "S1.5rr:M4 4H20V20H4Z", 2.0)
+    if !toast.active || TextUntilNul(toast.title[:]) != "First page" || toast.icon[0] != #char "S" || toast.shown_at != 2.0 { return 14 }
+    AchievementToastClose(*toast)
+    if toast.active { return 15 }
     return 42
 }
 
