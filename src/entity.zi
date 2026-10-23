@@ -682,7 +682,10 @@ Draw :: () {
     if !loaded {
         state = EntityDefault()
         assets := AppService("entity.assets", "")
-        if assets.count > 0 && assets[0] == cast(u8)47 { unused CopyCString(assets, asset_root[:]) }
+        // An absolute folder: /home/… or, on Windows, a drive such as C:/….
+        absolute := (assets.count > 0 && assets[0] == cast(u8)47) ||
+        (assets.count > 2 && assets[1] == cast(u8)58 && assets[2] == cast(u8)47)
+        if absolute { unused CopyCString(assets, asset_root[:]) }
         bytes: [16385]u8
         count := ReadStore("entity.json", bytes[:])
         if count > 0 { unused EntityDecode(TextUntilNul(bytes[:]), *state) }

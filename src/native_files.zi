@@ -6,6 +6,7 @@
 #import "std/text_buffer"
 #import "std/byte_text_linux"
 #import "std/vec"
+#import "kryon/app_files"
 
 
 libc :: #system_library "libc";
@@ -33,14 +34,10 @@ NativeJoin :: (output: []u8, first: string, second: string) -> string {
     return TextUntilNul(output)
 }
 
+// Each folder of an absolute path, private to this user, as Kryon's app
+// storage creates them; Windows paths start with their drive, as in C:/.
 NativeDirectory :: (path: string) -> bool {
-    if path == "" || path.count > 4095 || path[0] != cast(u8)47 { return false }
-    for index: 1..path.count {
-        if index == path.count || path[index] == cast(u8)47 {
-            if PathIsLink(path[:index]) || !CreatePrivateDirectory(path[:index]) { return false }
-        }
-    }
-    return true
+    return AppPrivateDirectory(path)
 }
 
 NativeRead :: (path: string, output: []u8) -> s32 {

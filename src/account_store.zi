@@ -22,7 +22,11 @@ Auth :: #import "daochi_client/auth";
     #import "kryon/bundle_storage_web"
     #import "std/web"
 }
-#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+#if #defined(_WIN32) {
+    // Windows shows its common file dialog.
+    #import "kryon/file_picker"
+}
+#if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
     Dialog :: #import "file_dialog_linux";
 }
 
@@ -40,7 +44,7 @@ AccountStorePath :: (name: string, output: []u8) -> string {
     return NativeJoin(output, TextUntilNul(account_root[:]), name)
 }
 AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
-    #if #defined(PLATFORM_WEB) {
+    #if #defined(PLATFORM_WEB) || #defined(_WIN32) {
         return PickFile(FilePickerProps.{.title = ifx save then "Back up account key" else "Import account key",
                 .filter = "Account keys | *.key *.json", .suggested_name = "entity-account.key", .save = save}, output)
     } else #if #defined(ANDROID_BUILD) {
