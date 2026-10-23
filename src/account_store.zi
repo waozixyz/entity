@@ -19,6 +19,7 @@ Auth :: #import "daochi_client/auth";
 #if #defined(PLATFORM_WEB) {
     #import "kryon/file_picker"
     #import "kryon/page_files"
+    #import "kryon/bundle_storage_web"
     #import "std/web"
 }
 #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
@@ -77,11 +78,18 @@ AccountStoreDeliverFile :: (context: *void, path: string) -> bool {
     }
 }
 
+AccountStorePersist :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        return BundleStorageFlush()
+    }
+    return true
+}
+
 AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     path: [4096]u8
-    return RecoveryEncode(recovery, "", text[:]) && NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:]))
+    return RecoveryEncode(recovery, "", text[:]) && NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:])) && AccountStorePersist()
 }
 AccountStoreSaveProfile :: (state: EntityState) -> bool {
     if TextUntilNul(state.owner_id[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { return false }
@@ -90,6 +98,7 @@ AccountStoreSaveProfile :: (state: EntityState) -> bool {
     path: [4096]u8
     if !NativeWrite(AccountStorePath("entity.json", path[:]), document) { return false }
     if !SharedProfileSave(TextUntilNul(state.owner_id[:]), state) { return false }
+    if !AccountStorePersist() { return false }
     account_profile = state
     return true
 }
@@ -162,7 +171,11 @@ AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
     candidate := recovery.*
     defer { RecoveryClear(*candidate) }
     if same && candidate.context[0] == cast(u8)0 { candidate.context = account_recovery.context }
-    if !AccountStoreSaveKey(*candidate) { return 0 }
+    if !AccountStoreSaveKey(*candidate) {
+        if previous.keys.public_id[0] != cast(u8)0 { unused AccountStoreSaveKey(*previous) }
+        else { path: [4096]u8; unused RemoveFile(AccountStorePath("account.key", path[:])); unused AccountStorePersist() }
+        return 0
+    }
     account_recovery = candidate
     if !AccountStoreSaveProfile(next) {
         account_recovery = previous

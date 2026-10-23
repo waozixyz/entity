@@ -19,6 +19,14 @@
       "url": "https://github.com/LoupVaillant/Monocypher.git"
     },
     {
+      "commit": "a1f4e4899991319b0e2a300aa47114c7e665e02b",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "p4f82eca557c318bb",
+      "name": "kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
       "dependencies": {},
       "id": "p5a77c9c35110e925",
@@ -34,14 +42,6 @@
       "name": "Oqs",
       "ref": "master",
       "url": "https://github.com/ziranlang/oqs.git"
-    },
-    {
-      "commit": "f4b41d137f9afaa593438af129d4665fe0e943c2",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p7c3ea7cca40fb156",
-      "name": "kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
     },
     {
       "commit": "aa843632f1a1f6c58385771c4b4d9def4a438125",
@@ -62,7 +62,7 @@
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p7c3ea7cca40fb156", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p4f82eca557c318bb", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Entity"
   },
   "toolchain": {
