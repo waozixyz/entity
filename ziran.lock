@@ -36,9 +36,9 @@
       "url": "https://github.com/ziranlang/oqs.git"
     },
     {
-      "commit": "6b9fed32f5368917deb4b5161fc8b4e9b32588ed",
+      "commit": "f4b41d137f9afaa593438af129d4665fe0e943c2",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p88faf314c87eb03a",
+      "id": "p7c3ea7cca40fb156",
       "name": "kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
@@ -62,7 +62,7 @@
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p88faf314c87eb03a", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "p7c3ea7cca40fb156", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Entity"
   },
   "toolchain": {

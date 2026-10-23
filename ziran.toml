@@ -15,12 +15,14 @@ module_aliases = { FileDialogLinux = "file_dialog_linux" }
 [exports]
 model = "src/model.zi"
 dew_model = "src/dew_model.zi"
+dew_view = "src/dew_view.zi"
 node_url = "src/node_url.zi"
 management = "src/management.zi"
 recovery = "src/recovery.zi"
 native_files = "src/native_files.zi"
 native_management = "src/native_management.zi"
 native_host = "src/native_host.zi"
+browser_host = "src/browser_host.zi"
 pairing = "src/pairing.zi"
 pairing_client = "src/pairing_client.zi"
 

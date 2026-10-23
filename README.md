@@ -100,3 +100,10 @@ explicit retry; it never becomes a new debit. Switching or logging out cancels
 the old account's in-flight requests. The `entity/dew_model` export shares strict
 integer balance, allowance and funding-address validation with Inner Breeze.
 No currency transfer or game-specific shop is added.
+
+The Profile shows Inbe's shared `DewBalance` card inline. Game hosts hide the
+Name and Intention fields and identify players by their alias or public ID.
+The browser host uses Kryon's existing `BundleApp` lifecycle, IndexedDB-backed
+files and the same native Entity account provider; game bundles receive only
+a navigation service and never see account keys. `scripts/build-web.py` links
+this provider for browser applications with the locked cryptography packages.

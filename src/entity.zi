@@ -4,6 +4,7 @@
 #import "achievement_view"
 #import "management"
 #import "dew_model"
+#import "dew_view"
 #import "std/json_scan"
 #import "std/number_text"
 #import "node_url"
@@ -198,7 +199,7 @@ OpenManagement :: (page: s32) {
 AccountSummary :: (x: float32, y: *float32, width: float32) {
     if management.account {
         title := TextUntilNul(management.alias[:])
-        if title == "" { title = TextUntilNul(state.name[:]) }
+        if title == "" { title = TextUntilNul(management.public_id[:]) }
         if title == "" { title = Label("entity.account", "Account") }
         if Action(702, title, Rectangle.{x, y.*, width, 44.0 * scale}) {
             OpenManagement(1)
@@ -639,6 +640,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
         entry := state.extensions[index]
         route := TextUntilNul(entry.id[:])
         if management.available && route == "account" { continue }
+        if route == "dew" && AppSupports("entity.dew") { continue }
         detailed := entry.summary[0] != cast(u8)0
         row_height := (ifx detailed then 76.0 else 60.0) * scale
         row := Rectangle.{left, top.*, width, row_height}
@@ -679,6 +681,7 @@ Draw :: () {
         count := ReadStore("entity.json", bytes[:])
         if count > 0 { unused EntityDecode(TextUntilNul(bytes[:]), *state) }
         loaded = true
+        dew_refresh = true
     }
     if AchievementViewFrame(!state.host_navigation) { return }
     if dew_page { DrawDew(); return }
@@ -691,6 +694,8 @@ Draw :: () {
     if panel_width > 560.0 * scale { panel_width = 560.0 * scale }
     if panel_width < 208.0 * scale { return }
     width := panel_width - 48.0 * scale
+    inline_dew := AppSupports("entity.dew")
+    if inline_dew { ProfileDewRead() }
     columns := cast(s32)((width + 12.0 * scale) / (56.0 * scale))
     if columns > 7 { columns = 7 }
     if columns < 3 { columns = 3 }
@@ -698,6 +703,8 @@ Draw :: () {
     for index: 0..27 { if (state.pictures & (1 << cast(s32)index)) != 0 { picture_count += 1 } }
     picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     height := (ifx !state.host_navigation then 352.0 else 308.0) * scale
+    if (state.controls & ENTITY_IDENTITY) == 0 { height -= 100.0 * scale }
+    if inline_dew { height += ProfileDewBalance(0.0, 0.0, width, false).height }
     if (state.controls & ENTITY_NODES) != 0 && !management.available { height += cast(float32)(112 + state.node_count * 56) * scale }
     if management.available { height += (ifx management.account then 64.0 else 144.0) * scale }
     if !management.available {
@@ -711,6 +718,7 @@ Draw :: () {
     for index: 0..state.extension_count - 1 {
         entry := state.extensions[index]
         if management.available && TextUntilNul(entry.id[:]) == "account" { continue }
+        if TextUntilNul(entry.id[:]) == "dew" && inline_dew { continue }
         height += (ifx entry.summary[0] != cast(u8)0 then 84.0 else 68.0) * scale
     }
     if notice != "" { height += 48.0 * scale }
@@ -761,9 +769,12 @@ Draw :: () {
         y += picker_height
     }
     if management.available { AccountSummary(x, *y, width) }
-    TextLine(20, Label("entity.name", "Name"), x, y, width, 14)
-    if EditField(0, state.name[:], Label("entity.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
-    y += 100.0 * scale
+    if inline_dew { y += ProfileDewBalance(x, y, width, true).height }
+    if (state.controls & ENTITY_IDENTITY) != 0 {
+        TextLine(20, Label("entity.name", "Name"), x, y, width, 14)
+        if EditField(0, state.name[:], Label("entity.name", "Name"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 40) { Save() }
+        y += 100.0 * scale
+    }
     if (state.controls & ENTITY_INTENTION) != 0 {
         TextLine(21, Label("entity.intention", "Intention"), x, y, width, 14)
         if EditField(1, state.intention[:], Label("entity.intention", "Intention"), Rectangle.{x, y + 28.0 * scale, width, 44.0 * scale}, 90) { Save() }
@@ -862,6 +873,90 @@ dew_refresh: bool;
 dew_confirmation: s32 = -1;
 dew_view_tick: s32;
 dew_view_json: [20000]u8;
+dew_profile_account: DewAccount;
+dew_profile_available: bool;
+dew_profile_busy: bool;
+dew_profile_error: bool;
+dew_profile_host_actions: bool;
+dew_profile_worth: [256]u8;
+dew_profile_plan: [256]u8;
+dew_profile_usage: [256]u8;
+
+ProfileDewRead :: () {
+    dew_view_tick += 1
+    if dew_view_tick % 15 != 1 && !dew_refresh { return }
+    unused CopyCString(AppService("entity.dew", ""), dew_view_json[:])
+    json := TextUntilNul(dew_view_json[:])
+    owner: [65]u8
+    unused ReadStringText(json, FieldAt(json, 0, "owner"), owner[:])
+    same_owner := TextUntilNul(owner[:]) == TextUntilNul(management.public_id[:]) && TextUntilNul(owner[:]).count == 64
+    dew_profile_available = same_owner && MatchLiteral(json, FieldAt(json, 0, "available"), "true")
+    dew_profile_busy = MatchLiteral(json, FieldAt(json, 0, "busy"), "true")
+    dew_profile_error = MatchLiteral(json, FieldAt(json, 0, "error"), "true")
+    dew_profile_host_actions = MatchLiteral(json, FieldAt(json, 0, "host_actions"), "true")
+    dew_profile_account = .{}
+    dew_profile_worth = .{}
+    dew_profile_plan = .{}
+    dew_profile_usage = .{}
+    at := FieldAt(json, 0, "account")
+    end := ValueEnd(json, at, 0)
+    if same_owner && at >= 0 && end > at {
+        unused DewParseAccount(json[at:end], TextUntilNul(owner[:]), *dew_profile_account)
+        unused ReadStringText(json, FieldAt(json, 0, "worth"), dew_profile_worth[:])
+        unused ReadStringText(json, FieldAt(json, 0, "plan_summary"), dew_profile_plan[:])
+        unused ReadStringText(json, FieldAt(json, 0, "usage_summary"), dew_profile_usage[:])
+    }
+    if dew_refresh && dew_profile_available && !dew_profile_busy {
+        sequence := cast(s32)ReadNumber(json, FieldAt(json, 0, "sequence")).value
+        DewCommand("refresh", sequence)
+        dew_refresh = false
+    }
+}
+
+ProfileDewBalance :: (x: float32, y: float32, width: float32, draw: bool) -> DewBalanceResult {
+    account := dew_profile_account
+    amount: [64]u8
+    unused CopyCString("—", amount[:])
+    if account.known && dew_profile_available { unused DewFormat(account.balance, DewUnits, amount[:], "Dew") }
+    plan := TextUntilNul(dew_profile_plan[:])
+    usage := TextUntilNul(dew_profile_usage[:])
+    own_plan: [256]u8
+    own_usage: [256]u8
+    if account.known && plan == "" {
+        unused CopyCString(ifx account.plan_size > 0 then Label("profile_dew_paid_plan", "Paid storage") else Label("profile_dew_plan_free", "Free"), own_plan[:])
+        plan = TextUntilNul(own_plan[:])
+    }
+    if account.known && usage == "" && account.limit_bytes > 0 {
+        used: [64]u8
+        limit: [64]u8
+        unused DewFormat(account.used_bytes / 1048576, 1, used[:], "MB")
+        unused DewFormat(account.limit_bytes / 1048576, 1, limit[:], "MB")
+        at: s64 = 0
+        for byte: TextUntilNul(used[:]) { own_usage[at] = byte; at += 1 }
+        for byte: " / " { own_usage[at] = byte; at += 1 }
+        for byte: TextUntilNul(limit[:]) { own_usage[at] = byte; at += 1 }
+        usage = TextUntilNul(own_usage[:])
+    }
+    notice := ""
+    if !dew_profile_available { notice = Label("profile_dew_connect", "Connect your account to the Waozi node to view Dew.") }
+    else if dew_profile_error { notice = Label("profile_dew_error", "Could not refresh Dew. Any balance shown is the last confirmed balance.") }
+    else if !account.known { notice = Label("profile_dew_loading", "Checking Dew…") }
+    result := DewBalance(session, DewBalanceProps.{.bounds = Rectangle.{x, y, width, 0.0}, .scale = scale,
+            .title = Label("profile_dew_title", "Dew balance"), .balance = TextUntilNul(amount[:]),
+            .worth = TextUntilNul(dew_profile_worth[:]), .plan = plan, .usage = usage, .notice = notice,
+            .top_up = Label("profile_dew_topup", "Top up"), .plans = Label("profile_dew_plans", "Storage plans"),
+            .ready = dew_profile_available, .known = account.known, .busy = dew_profile_busy, .enabled = account.enabled,
+            .has_usage = account.limit_bytes > 0,
+            .usage_percent = ifx account.limit_bytes > 0 then cast(s32)(account.used_bytes * 100 / account.limit_bytes) else 0,
+            .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff), .track = ThemeOr("border", 0x34514aff, 0xdde7e3ff),
+            .accent = ThemeOr("accent", 0x49a68eff, 0x298a71ff),
+            .warning = Color.{163, 98, 0, 255}, .danger = Color.{179, 38, 30, 255}}, draw)
+    if result.action != 0 {
+        if dew_profile_host_actions { AppReply(ifx result.action == DewBalanceTopUp then "dew-topup" else "dew-plans") }
+        else { dew_page = true; dew_refresh = true; management_scroll = 0 }
+    }
+    return result
+}
 
 DewCommand :: (operation: string, sequence: s32, size: string = "", period: string = "") {
     request: Vec(u8)

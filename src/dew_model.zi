@@ -3,6 +3,7 @@
 #import "std/json_scan"
 #import "std/c_string"
 #import "std/text_buffer"
+#import "std/number_text"
 DewUnits :: 1000000
 DewNode :: "https://api.waozi.xyz"
 // The node's paid storage sizes, in the order the app offers them.
@@ -26,6 +27,39 @@ DewAccount :: struct {
     // 1 + the index of the account's paid size, or 0 without a paid plan.
     plan_size: s32
     plans: [DewPlanCount]DewStoragePlan
+}
+
+// Six decimal places match Inbe's signed ledger; trailing zeros vanish.
+// The caller owns the buffer, so portable profiles allocate nothing per frame.
+DewFormat :: (units: s64, divisor: s64, output: []u8, suffix: string = "") -> bool {
+    if units < 0 || divisor <= 0 || output.count < 2 { return false }
+    digits: [32]u8
+    whole := FormatInteger(units / divisor, digits[:])
+    if !CopyCString(whole, output) { return false }
+    at := whole.count
+    remainder := units % divisor
+    if remainder != 0 {
+        if at + 1 >= output.count { return false }
+        output[at] = cast(u8)46
+        at += 1
+        factor := divisor / 10
+        while factor > 0 {
+            if at + 1 >= output.count { return false }
+            output[at] = cast(u8)(48 + remainder / factor)
+            at += 1
+            remainder %= factor
+            if remainder == 0 { break }
+            factor /= 10
+        }
+    }
+    if suffix != "" {
+        if at + suffix.count + 1 >= output.count { return false }
+        output[at] = cast(u8)32
+        at += 1
+        for byte: suffix { output[at] = byte; at += 1 }
+    }
+    output[at] = cast(u8)0
+    return true
 }
 
 DewInteger :: (json: string, at: s32, value: *s64) -> bool {

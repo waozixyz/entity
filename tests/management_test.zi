@@ -136,6 +136,9 @@ Check :: () -> s32 {
     address := NativeJoin(path[:], NativeRoot(root[:]), "atomic.txt")
     if !NativeWrite(address, "old") || !NativeWrite(address, "new") || NativeRead(address, document[:]) != 3 || TextUntilNul(document[:]) != "new" { return 29 }
     if !AccountStoreStart() { return 31 }
+    installation := account_client_id
+    if TextUntilNul(installation[:]).count != 32 { return 47 }
+    if !AccountStoreStart() || TextUntilNul(account_client_id[:]) != TextUntilNul(installation[:]) { return 48 }
     unused CopyCString("Before switch", account_profile.name[:])
     if AccountStoreApply(null, *fixture, 0) != 2 || account_standalone_ready { return 32 }
     if AccountStoreApply(null, *fixture, 1) != 1 || TextUntilNul(account_profile.name[:]) != "Fixture profile" { return 33 }
@@ -147,6 +150,10 @@ Check :: () -> s32 {
     unused CopyCString("logout", action.operation[:])
     if AccountStoreAction(null, *action) != 1 || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 35 }
     if !AccountStoreStart() || account_standalone_ready || account_profile.name[0] == cast(u8)0 { return 36 }
+    value: [64]u8
+    if !DewFormat(12345678, DewUnits, value[:], "Dew") || TextUntilNul(value[:]) != "12.345678 Dew" { return 49 }
+    if !DewFormat(12000000, DewUnits, value[:]) || TextUntilNul(value[:]) != "12" { return 50 }
+    if DewFormat(-1, DewUnits, value[:]) { return 51 }
     // Dew accepts node-priced integer balances only for the current account.
     account_recovery = fixture
     account_standalone_ready = true

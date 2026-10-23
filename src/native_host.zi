@@ -23,6 +23,7 @@ portable: AppContext;
 profile_document: string;
 asset_folder: [4096]u8;
 entity_host_navigation: bool;
+entity_host_game: bool;
 entity_paste: [16384]u8;
 
 EntityHostText :: (text: string) -> HostValue {
@@ -62,10 +63,9 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         EntityFree(profile_document)
         state := account_profile
         state.host_navigation = entity_host_navigation
-        state.controls |= ENTITY_INTENTION
+        if entity_host_game { state.controls = ENTITY_NODES }
         state.extensions = .{}
         state.extension_count = 0
-        if DewReady() { unused EntityAddExtension(*state, "dew", "Dew") }
         profile_document = EntityEncode(state)
         output := arguments[1]
         if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)profile_document.count { return 0 }
@@ -94,6 +94,7 @@ EntityHostAssetAllowed :: (path: string) -> bool {
 
 EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigation: bool = false) -> bool {
     entity_host_navigation = host_navigation
+    entity_host_game = client_id == "arcade"
     if !AccountStoreStartAt(root, client_id) || !CopyCString(root, asset_folder[:]) { return false }
     portable = AppContext.{.expected_id = "entity", .allows = EntityHostAllows,
         .services = EntityHostServices, .widgets = WidgetHostCall}

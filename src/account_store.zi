@@ -16,6 +16,11 @@ Auth :: #import "daochi_client/auth";
 #import "std/vec"
 #import "std/byte_text_linux"
 #import "std/file"
+#if #defined(PLATFORM_WEB) {
+    #import "kryon/file_picker"
+    #import "kryon/page_files"
+    #import "std/web"
+}
 #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
     Dialog :: #import "file_dialog_linux";
 }
@@ -28,12 +33,16 @@ account_pairing_delivered: bool;
 account_standalone_ready: bool;
 account_root: [4096]u8;
 account_client_id: [64]u8;
+account_application_id: [64]u8;
 
 AccountStorePath :: (name: string, output: []u8) -> string {
     return NativeJoin(output, TextUntilNul(account_root[:]), name)
 }
 AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
-    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+    #if #defined(PLATFORM_WEB) {
+        return PickFile(FilePickerProps.{.title = ifx save then "Back up account key" else "Import account key",
+                .filter = "Account keys | *.key *.json", .suggested_name = "entity-account.key", .save = save}, output)
+    } else #if #defined(ANDROID_BUILD) {
         return -1
     } else {
         patterns: [2]string = .["*.key", "*.json"]
@@ -45,6 +54,29 @@ AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         return ifx selected.accepted then 1 else 0
     }
 }
+AccountStoreDeliverFile :: (context: *void, path: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        data := WebCall1(PageFileSystem(), WebName("readFile"), WebText(path))
+        parts := WebNewArray()
+        unused WebCall1(parts, WebName("push"), data)
+        blob := WebNew1(WebGetObject(WebGlobal, WebName("Blob")), WebObject(parts))
+        urls := WebGetObject(WebGlobal, WebName("URL"))
+        url := WebCall1(urls, WebName("createObjectURL"), WebObject(blob))
+        document := WebGetObject(WebGlobal, WebName("document"))
+        anchor := WebAsObject(WebCall1(document, WebName("createElement"), WebText("a")))
+        WebSet(anchor, WebName("href"), url)
+        WebSet(anchor, WebName("download"), WebText("entity-account.key"))
+        unused WebCall0(anchor, WebName("click"))
+        unused WebCall1(urls, WebName("revokeObjectURL"), url)
+        unused RemoveFile(path)
+        return !WebFailed()
+    } else {
+        return true
+    }
+}
+
 AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
@@ -91,7 +123,7 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
     output.alias = account_alias
     output.capabilities = ACCOUNT_CREATE | ACCOUNT_IMPORT | ACCOUNT_SWITCH | ACCOUNT_LINK
     if account_standalone_ready { output.capabilities |= ACCOUNT_BACKUP | ACCOUNT_ALIAS | ACCOUNT_LOGOUT | ACCOUNT_CLEAR_REMOTE }
-    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+    #if #defined(ANDROID_BUILD) {
         output.capabilities &= ~(ACCOUNT_IMPORT | ACCOUNT_BACKUP)
     }
     output.node_count = account_profile.node_count
@@ -151,7 +183,7 @@ AccountStoreDigest :: (body: string, output: []u8) -> bool {
 AccountStoreClient :: (context: *void, output: *Client) -> bool {
     if !account_standalone_ready { return false }
     output.server_url = TextUntilNul(account_profile.nodes[account_profile.preferred][:])
-    output.app_id = TextUntilNul(account_client_id[:])
+    output.app_id = TextUntilNul(account_application_id[:])
     output.identity = Auth.Identity.{.account_id = TextUntilNul(account_recovery.keys.public_id[:]),
         .public_key = TextUntilNul(account_recovery.keys.public_key_hex[:]), .client_id = TextUntilNul(account_client_id[:]),
         .signing_context = cast(*void)*account_recovery.keys}
@@ -194,7 +226,17 @@ AccountStoreStart :: () -> bool {
 // provider; they never open another credential store.
 AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     if root == "" || client_id == "" || !CopyCString(root, account_root[:]) ||
-    !CopyCString(client_id, account_client_id[:]) || !NativeDirectory(root) { return false }
+    !CopyCString(client_id, account_application_id[:]) || !NativeDirectory(root) { return false }
+    // The node requires an installation ID of at least eight characters.
+    // Product names such as arcade/entity are app IDs, not device IDs.
+    client_path: [4096]u8
+    account_client_id = .{}
+    if NativeRead(AccountStorePath("client.id", client_path[:]), account_client_id[:]) != 32 {
+        random: [16]u8
+        if SecureRandom(*random[0], random.count) == 0 { return false }
+        BytesToHex(*random[0], random.count, *account_client_id[0], account_client_id.count)
+        if !NativeWrite(AccountStorePath("client.id", client_path[:]), TextUntilNul(account_client_id[:])) { return false }
+    }
     account_profile = EntityDefault()
     path: [4096]u8
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -211,7 +253,7 @@ AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])
     unused SharedProfileLoad(TextUntilNul(account_recovery.keys.public_id[:]), *account_profile)
     account_provider = ManagementProvider.{.snapshot = AccountStoreSnapshot, .load = AccountStoreLoad,
-        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient, .choose_file = AccountStoreChooseFile}
+        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient, .choose_file = AccountStoreChooseFile, .deliver_file = AccountStoreDeliverFile}
     AccountStoreReadAlias()
     pairing_load = AccountStoreLoad
     pairing_server = AccountStoreServer

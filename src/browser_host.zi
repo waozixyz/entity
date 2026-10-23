@@ -1,0 +1,124 @@
+// Browser applications reuse Kryon's standalone bundle host and Entity's
+// existing account provider. Only this host can access account keys.
+using Canvas :: #import "kryon/Canvas";
+#import "kryon/bundle_app"
+#import "kryon/bundle_storage_web"
+#import "kryon/bundle_assets"
+#import "kryon/app_files"
+#import "kryon/app_context_host"
+#import "kryon/app_protocol"
+#import "kryon/hosted_values"
+#import "kryon/page_core"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/tree"
+#import "kryon/TestDriver"
+#import "kryon/Frame"
+#import "kryon/tree_input"
+#import "kryon/ScrollDevice"
+#import "kryon/key_input"
+#import "kryon/text_input_props"
+#import "kryon/text_props"
+#import "kryon/text_widget"
+#import "kryon/button_props"
+#import "kryon/button_widget"
+#import "kryon/widget_palette"
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/file"
+#import "std/web"
+#import "std/c_string"
+#import "native_host"
+#import "model"
+
+browser_game: BundleApp;
+browser_profile: bool;
+browser_ready: bool;
+
+BrowserAllows :: (context: *void, name: string) -> bool {
+    return name == "entity.profile" || BundleAppAllows(context, name)
+}
+BrowserServices :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(function) == "AppServiceHost" && count == 2 &&
+    AppArgumentText(arguments[0]) == "entity.profile" {
+        if AppArgumentText(arguments[1]) == "open" {
+            EntityHostReload()
+            browser_profile = true
+        }
+        result.* = EntityHostText("available")
+        return 1
+    }
+    return BundleAppServices(context, module, function, arguments, count, result)
+}
+
+BrowserMain :: (palette: WidgetPalette) -> s32 {
+    if !OpenCanvas() { return 1 }
+    defer CloseCanvas()
+    if !BundleStorageOpen() { return 1 }
+    while !BundleStorageReady() && !BundleStorageFailed() { WebSleep(10) }
+    if !BundleStorageReady() { return 1 }
+    game_bytes, game_found := ReadEntireFile("/app.zib")
+    profile_bytes, profile_found := ReadEntireFile("/entity.zib")
+    defer { AppFileFree(game_bytes); AppFileFree(profile_bytes) }
+    if !game_found || !profile_found || !BundleAppOpen(*browser_game, game_bytes, "/kryon-apps") { return 1 }
+    defer BundleAppClose(*browser_game)
+    browser_game.extracted_assets = true
+    if !BundleWriteAssets(browser_game.app.app.bundle, *browser_game.local.files) { return 1 }
+    browser_game.app.allows = BrowserAllows
+    browser_game.app.services = BrowserServices
+    if !EntityHostOpen(profile_bytes, "/kryon-apps/profile", "arcade", true) { return 1 }
+    defer { unused EntityHostClose(); unused BundleStorageSync(false) }
+    session := SessionOpen()
+    if !SessionValid(session) { return 1 }
+    defer { unused SessionClose(session) }
+    unused WidgetPaletteUse(session, palette)
+    saved := PageNow()
+    browser_ready = true
+    WebSet(WebGetObject(WebGlobal, WebName("Module")), WebName("profileReady"), WebBool(true))
+    while PollCanvas() {
+        scope := WebScope()
+        WebSet(WebGetObject(WebGlobal, WebName("Module")), WebName("profileVisible"), WebBool(browser_profile))
+        BeginCanvasFrame()
+        viewport := CanvasViewport()
+        pointer := PollPointer()
+        key := CanvasPressedKey()
+        modifiers := CanvasModifiers()
+        active := ifx browser_profile then session else browser_game.app.session
+        point := CanvasTypedCodepoint()
+        while point != 0 { unused TypedCodepointSend(active, point); point = CanvasTypedCodepoint() }
+        typed: [1024]u8
+        text := TypedTextTake(active, typed[:])
+        EntityHostPump()
+        if browser_profile {
+            TreePointerUpdate(session, pointer)
+            TreeSecondaryPointerUpdate(session, PollSecondaryPointer())
+            PointerWheelSend(session, pointer.x, pointer.y, CanvasWheelMove())
+            KeyboardModifiersSend(session, modifiers)
+            if key != 0 { unused KeyboardSend(session, key) }
+            BeginScrollFrame(session, Vector2.{pointer.x, pointer.y}, pointer.pressed,
+                pointer.down, pointer.released, CanvasWheelMove(), PageNow() / 1000.0)
+            if BeginFrame(session, cast(u64)1, viewport) != FrameStatus.FrameOk { return 1 }
+            bounds := Rectangle.{viewport.x, viewport.y + 56.0, viewport.width, viewport.height - 56.0}
+            if !EntityHostFrame(session, bounds, key, modifiers, TextFieldInputFor(key, modifiers, text), true) { return 1 }
+            Text(session, TextProps.{.key = cast(u64)49002, .text = "Profile", .font = 20,
+                    .bounds = Rectangle.{100.0, 12.0, viewport.width - 200.0, 36.0}})
+            if Button(session, ButtonProps.{.key = cast(u64)49001, .id = 49001, .label = "Back",
+                    .bounds = Rectangle.{8.0, 6.0, 76.0, 44.0}}) != 0 || key == 256 {
+                if !EntityHostBack() && EntityHostSave() { browser_profile = false }
+            }
+            if EndFrame(session) != FrameStatus.FrameOk { return 1 }
+        } else if !BundleAppFrame(*browser_game, viewport, pointer, PollSecondaryPointer(),
+            key, modifiers, CanvasWheelMove(), text, PageNow() / 1000.0) { return 1 }
+        TestDriverFrame(active)
+        CanvasCursor(active)
+        unused EndCanvasFrame()
+        if PageNow() - saved >= 1000.0 {
+            unused BundleAppSave(*browser_game)
+            unused BundleStorageSync(false)
+            saved = PageNow()
+        }
+        WebEnd(scope)
+    }
+    return 0
+}
