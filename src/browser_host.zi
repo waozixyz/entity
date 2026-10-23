@@ -9,6 +9,8 @@ using Canvas :: #import "kryon/Canvas";
 #import "kryon/app_protocol"
 #import "kryon/hosted_values"
 #import "kryon/page_core"
+#import "kryon/PageRoute"
+#import "kryon/mini_embed"
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/tree"
@@ -22,6 +24,9 @@ using Canvas :: #import "kryon/Canvas";
 #import "kryon/text_widget"
 #import "kryon/button_props"
 #import "kryon/button_widget"
+#import "kryon/box_props"
+#import "kryon/box_widget"
+#import "kryon/drawing_props"
 #import "kryon/widget_palette"
 #import "std/bundle_host"
 #import "std/byte_text_linux"
@@ -34,8 +39,11 @@ using Canvas :: #import "kryon/Canvas";
 browser_game: BundleApp;
 browser_profile: bool;
 browser_ready: bool;
+// A page embedded with ?mini shows only the game: no account or Profile.
+browser_mini: bool;
 
 BrowserAllows :: (context: *void, name: string) -> bool {
+    if browser_mini { return name == MINI_MODE_CAPABILITY || BundleAppAllows(context, name) }
     return name == "entity.profile" || BundleAppAllows(context, name)
 }
 BrowserServices :: (context: *void, module: *u8, function: *u8,
@@ -67,8 +75,9 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
     if !BundleWriteAssets(browser_game.app.app.bundle, *browser_game.local.files) { return 1 }
     browser_game.app.allows = BrowserAllows
     browser_game.app.services = BrowserServices
-    if !EntityHostOpen(profile_bytes, "/kryon-apps/profile", "arcade", true) { return 1 }
-    defer { unused EntityHostClose(); unused BundleStorageSync(false) }
+    browser_mini = MiniModeQuery(TextFromCString(GetRouteQuery()))
+    if !browser_mini && !EntityHostOpen(profile_bytes, "/kryon-apps/profile", "arcade", true) { return 1 }
+    defer { if !browser_mini { unused EntityHostClose() }; unused BundleStorageSync(false) }
     session := SessionOpen()
     if !SessionValid(session) { return 1 }
     defer { unused SessionClose(session) }
@@ -89,7 +98,7 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
         while point != 0 { unused TypedCodepointSend(active, point); point = CanvasTypedCodepoint() }
         typed: [1024]u8
         text := TypedTextTake(active, typed[:])
-        EntityHostPump()
+        if !browser_mini { EntityHostPump() }
         if browser_profile {
             TreePointerUpdate(session, pointer)
             TreeSecondaryPointerUpdate(session, PollSecondaryPointer())
@@ -99,6 +108,12 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
             BeginScrollFrame(session, Vector2.{pointer.x, pointer.y}, pointer.pressed,
                 pointer.down, pointer.released, CanvasWheelMove(), PageNow() / 1000.0)
             if BeginFrame(session, cast(u64)1, viewport) != FrameStatus.FrameOk { return 1 }
+            // The game's frames restore the default style when they end, so
+            // the Profile takes the app's palette again each frame, and its
+            // title bar sits on the app's background rather than the page's.
+            unused WidgetPaletteUse(session, palette)
+            Box(session, BoxProps.{.key = cast(u64)49003, .bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 56.0},
+                    .fill = ColorFromPacked(palette.background)})
             bounds := Rectangle.{viewport.x, viewport.y + 56.0, viewport.width, viewport.height - 56.0}
             if !EntityHostFrame(session, bounds, key, modifiers, TextFieldInputFor(key, modifiers, text), true) { return 1 }
             Text(session, TextProps.{.key = cast(u64)49002, .text = "Profile", .font = 20,
