@@ -77,7 +77,8 @@ EntityDewAnswer :: (request: string) -> string {
             dew_reward_answer = .{}
             dew_reward_active = AccountStoreClient(null, *client) &&
             BeginRewardClaim(*dew_reward, client, *dew_reward_session, UnixNow(), transport, reward)
-            BuilderPrint(*out, ifx dew_reward_active then "{\"status\":\"pending\"}" else "{\"status\":\"failed\"}")
+            if dew_reward_active { BuilderPrint(*out, "{\"status\":\"pending\"}") }
+            else { BuilderPrint(*out, "{\"status\":\"failed\"}") }
         }
         return DewAnswerText(out)
     }
