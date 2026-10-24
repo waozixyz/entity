@@ -121,3 +121,21 @@ The browser host uses Kryon's existing `BundleApp` lifecycle, IndexedDB-backed
 files and the same native Entity account provider; game bundles receive only
 a navigation service and never see account keys. `scripts/build-web.py` links
 this provider for browser applications with the locked cryptography packages.
+
+## Shared game progress
+
+`entity/game_progress` defines `entity.game-progress.v1` records in the
+`game-progress` kind. `GameProgressID(game, output)` derives one stable 32-digit
+record ID from the game's stable name, independent of its wrapper or device.
+The record service derives this ID when omitted and rejects another ID, so
+standalone and hosted games use the same account record.
+
+A document contains `game`, `unlocked` (1–4096), a `completed` string of up to
+4096 zero/one marks, an opaque `state` string (up to 8192 bytes), and
+`updated_at`. Unlocks take the maximum and completion marks are combined;
+the position from the furthest unlocked campaign wins, with the newer record
+revision breaking ties. A fresh installation downloads account progress before
+uploading its local save. These rules apply both when
+saving locally and when receiving another device's record, including an
+older reply that carries a newly earned completion. Games migrate their old
+saves into this record and keep those saves until the account confirms sync.

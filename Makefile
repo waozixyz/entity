@@ -75,3 +75,12 @@ native-test: $(LIBOQS_LIBRARY)
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py
 run: all
 	./build/entity build/entity.zx
+
+.PHONY: game-progress-test
+game-progress-test:
+	mkdir -p build/game-progress-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry game_progress_test:main -o build/game-progress-test tests/game_progress_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/game-progress-test $$(rg --files build/game-progress-test -g '*.c') -lm -o build/game-progress-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/game-progress-test/test
+
+test: game-progress-test

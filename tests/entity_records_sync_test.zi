@@ -23,6 +23,7 @@ SyncField :: (reply: string, name: string, expected: string) -> bool {
 // waits to upload. The app first names its kind, as an app's list does.
 SyncSettle :: () -> bool {
     unused EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"levels\"}")
+    unused EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"game-progress\"}")
     records_due = 0
     start := records_completed
     for round: 0..1200 {
@@ -78,12 +79,17 @@ Check :: () -> s32 {
     }
     if !account_standalone_ready { return 8 }
     if step == "first" {
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"110\",\"state\":\"advanced\"}}"), "status", "done") { return 22 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[]}}"), "status", "done") ||
         !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"fedcba9876543210fedcba9876543210\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"island\",\"title\":\"Shore\",\"levels\":[]}}"), "status", "done") { return 9 }
         return ifx SyncSettle() then 0 else 10
     }
     if step == "second" {
+        // This installation has never fetched the account. Its newer local
+        // default must not overwrite the account's level forty.
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":5,\"completed\":\"001\",\"state\":\"fresh\"}}"), "status", "done") { return 23 }
         if !SyncSettle() { return 11 }
+        if !SyncProgress() { return 24 }
         if !SyncTitle(one, "Garden") || !SyncTitle(two, "Shore") { return 12 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden at night\",\"levels\":[]}}"), "status", "done") ||
         !SyncField(EntityRecordsAnswer("{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"fedcba9876543210fedcba9876543210\"}"), "status", "done") { return 13 }
@@ -91,6 +97,7 @@ Check :: () -> s32 {
     }
     if step == "third" {
         if !SyncSettle() { return 15 }
+        if !SyncProgress() { return 25 }
         if !SyncTitle(one, "Garden at night") { return 16 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"fedcba9876543210fedcba9876543210\"}"), "status", "missing") { return 17 }
         if !SyncTitle("00000000000000000000000000000003", "Offline") { return 18 }
@@ -102,4 +109,14 @@ Check :: () -> s32 {
         return ifx SyncSettle() then 0 else 20
     }
     return 21
+}
+
+SyncProgress :: () -> bool {
+    reply := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"game-progress\",\"id\":\"fd65a3d7ac3d5ceb2d4d96cc5224a740\"}")
+    at := FieldAt(reply, 0, "document")
+    if at < 0 { return false }
+    document := reply[at:ValueEnd(reply, at, 0)]
+    unlocked := ReadNumber(document, FieldAt(document, 0, "unlocked"))
+    return unlocked.valid && unlocked.value == 40.0 && SyncField(document, "completed", "111") &&
+    SyncField(document, "state", "advanced")
 }

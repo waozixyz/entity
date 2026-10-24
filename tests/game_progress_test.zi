@@ -1,0 +1,35 @@
+#import "std/text_buffer"
+#import "std/vec"
+#import "game_progress"
+#import "model"
+
+#program_export
+main :: () -> s32 {
+    record_id: [33]u8
+    if !GameProgressID("shovey.classic", record_id[:]) || TextUntilNul(record_id[:]) != "fd65a3d7ac3d5ceb2d4d96cc5224a740" { return 8 }
+    left: GameProgressRecord
+    right: GameProgressRecord
+    if !GameProgressRead("{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"1101\",\"state\":\"newer\",\"updated_at\":20}", *left) { return 1 }
+    if !GameProgressRead("{\"game\":\"shovey.classic\",\"unlocked\":20,\"completed\":\"101\",\"state\":\"older\",\"updated_at\":10}", *right) { return 2 }
+    original := left
+    if !GameProgressMerge(*left, *right, false) || left.unlocked != 40 ||
+    TextUntilNul(left.completed[:]) != "1111" || TextUntilNul(left.state[:]) != "newer" { return 3 }
+    if !GameProgressMerge(*right, *original, true) || !GameProgressSame(*left, *right) { return 4 }
+    if !GameProgressMerge(*left, *right, true) || TextUntilNul(left.state[:]) != "newer" { return 9 }
+    right.state = .{}
+    right.state[0] = #char "x"
+    if !GameProgressMerge(*left, *right, false) || TextUntilNul(left.state[:]) != "newer" { return 10 }
+    if !GameProgressMerge(*left, *right, true) || TextUntilNul(left.state[:]) != "x" { return 11 }
+    out: Vec(u8)
+    GameProgressWrite(*left, *out)
+    restored: GameProgressRecord
+    valid := GameProgressRead(TextView(VecSlice(out, 0, out.count)), *restored)
+    VecFree(out)
+    if !valid || !GameProgressSame(*left, *restored) { return 5 }
+    if GameProgressRead("{\"game\":\"g\",\"unlocked\":0,\"completed\":\"1\",\"state\":\"\"}", *restored) ||
+    GameProgressRead("{\"game\":\"g\",\"unlocked\":1.5,\"completed\":\"1\",\"state\":\"\"}", *restored) ||
+    GameProgressRead("{\"game\":\"g\",\"unlocked\":2,\"completed\":\"2\",\"state\":\"\"}", *restored) { return 6 }
+    restored.game[0] = #char "x"
+    if GameProgressMerge(*left, *restored, true) || TextUntilNul(left.game[:]) != "shovey.classic" { return 7 }
+    return 0
+}

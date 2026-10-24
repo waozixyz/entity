@@ -66,5 +66,15 @@ Check :: () -> s32 {
     status = EntityRecordsAnswer("{\"operation\":\"status\"}")
     pending := ReadNumber(status, FieldAt(status, 0, "pending"))
     if !pending.valid || pending.value != 2.0 { return 18 }
+    // One game record merges earned progress when another device saves an
+    // older campaign. It keeps the newer position without relocking levels.
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"id\":\"fd65a3d7ac3d5ceb2d4d96cc5224a740\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"110\",\"state\":\"first\"}}"), "status", "done") { return 19 }
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"id\":\"fd65a3d7ac3d5ceb2d4d96cc5224a740\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":5,\"completed\":\"001\",\"state\":\"second\"}}"), "status", "done") { return 20 }
+    get = EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"game-progress\",\"id\":\"fd65a3d7ac3d5ceb2d4d96cc5224a740\"}")
+    document = FieldAt(get, 0, "document")
+    if ReadNumber(get, FieldAt(get, document, "unlocked")).value != 40.0 ||
+    !RecordsCheckField(get[document:ValueEnd(get, document, 0)], "completed", "111") ||
+    !RecordsCheckField(get[document:ValueEnd(get, document, 0)], "state", "first") { return 21 }
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"id\":\"fd65a3d7ac3d5ceb2d4d96cc5224a740\",\"document\":{\"game\":\"shovey.island\",\"unlocked\":2,\"completed\":\"1\",\"state\":\"other\"}}"), "status", "rejected") { return 22 }
     return 0
 }

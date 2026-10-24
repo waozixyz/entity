@@ -1,0 +1,125 @@
+// A game's one account record. Unlocks and completed levels only grow;
+// the position at the furthest unlocked level stays opaque to the provider.
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "daochi_client/crypto"
+#import, file "model.zi";
+
+GAME_PROGRESS_KIND :: "game-progress"
+GAME_PROGRESS_SCHEMA :: "entity.game-progress.v1"
+GAME_PROGRESS_LIMIT :: 4096
+GAME_PROGRESS_STATE_LIMIT :: 8192
+
+GameProgressRecord :: struct {
+    game: [97]u8
+    unlocked: s32
+    completed: [GAME_PROGRESS_LIMIT + 1]u8
+    state: [GAME_PROGRESS_STATE_LIMIT + 1]u8
+    updated_at: s64
+}
+
+GameProgressGameValid :: (game: string) -> bool {
+    if game.count < 1 || game.count > 96 { return false }
+    for byte: game {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "." || byte == #char "-" || byte == #char "_") { return false }
+    }
+    return true
+}
+
+// Every host derives the same record ID for one game. The account remains
+// the record's owner; no device, installation or wrapper goes into its ID.
+GameProgressID :: (game: string, output: []u8) -> bool {
+    if output.count < 33 || !GameProgressGameValid(game) { return false }
+    context: Sha256Context
+    Sha256Initialize(*context)
+    for byte: "waozi.game-progress.v1:" {
+        one: [1]u8 = .[byte]
+        Sha256Update(*context, *one[0], 1)
+    }
+    for byte: game {
+        one: [1]u8 = .[byte]
+        Sha256Update(*context, *one[0], 1)
+    }
+    digest: [32]u8
+    Sha256Finish(*context, *digest[0])
+    alphabet := "0123456789abcdef"
+    for index: cast(s32)0..15 {
+        output[index * 2] = alphabet[digest[index] >> 4]
+        output[index * 2 + 1] = alphabet[digest[index] & 15]
+    }
+    output[32] = 0
+    return true
+}
+
+GameProgressRead :: (text: string, output: *GameProgressRecord) -> bool {
+    if Space(text, 0) != 0 || text.count < 2 || text[0] != #char "{" ||
+    ValueEnd(text, 0, 0) != text.count { return false }
+    value: GameProgressRecord
+    game_count := ReadStringText(text, FieldAt(text, 0, "game"), value.game[:])
+    completed_count := ReadStringText(text, FieldAt(text, 0, "completed"), value.completed[:])
+    state_count := ReadStringText(text, FieldAt(text, 0, "state"), value.state[:])
+    if game_count <= 0 || completed_count < 0 || state_count < 0 ||
+    TextUntilNul(value.state[:]).count != state_count { return false }
+    if !GameProgressGameValid(TextView(value.game[:game_count])) { return false }
+    unlocked := ReadNumber(text, FieldAt(text, 0, "unlocked"))
+    if !unlocked.valid || unlocked.value < 1.0 || unlocked.value > cast(float64)GAME_PROGRESS_LIMIT ||
+    unlocked.value != cast(float64)cast(s32)unlocked.value { return false }
+    value.unlocked = cast(s32)unlocked.value
+    for mark: value.completed[:completed_count] {
+        if mark != #char "0" && mark != #char "1" { return false }
+    }
+    stamp_at := FieldAt(text, 0, "updated_at")
+    if stamp_at >= 0 {
+        stamp := ReadNumber(text, stamp_at)
+        if !stamp.valid || stamp.value < 0.0 || stamp.value > 9007199254740991.0 ||
+        stamp.value != cast(float64)cast(s64)stamp.value { return false }
+        value.updated_at = cast(s64)stamp.value
+    }
+    output.* = value
+    return true
+}
+
+GameProgressWrite :: (value: *GameProgressRecord, output: *Vec(u8)) {
+    BuilderPrint(output, "{\"game\":")
+    EntityQuote(output, TextUntilNul(value.game[:]))
+    BuilderPrint(output, ",\"unlocked\":%,\"completed\":", value.unlocked)
+    EntityQuote(output, TextUntilNul(value.completed[:]))
+    BuilderPrint(output, ",\"state\":")
+    EntityQuote(output, TextUntilNul(value.state[:]))
+    BuilderPrint(output, ",\"updated_at\":%}", value.updated_at)
+}
+
+// The caller chooses the newer position from its record revision. Even an
+// older reply can carry earned progress this device has not seen yet.
+GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecord,
+    incoming_position: bool) -> bool {
+    if TextUntilNul(current.game[:]) != TextUntilNul(incoming.game[:]) { return false }
+    use_incoming := incoming.unlocked > current.unlocked ||
+    (incoming.unlocked == current.unlocked && incoming_position)
+    merged := ifx use_incoming then incoming.* else current.*
+    if current.unlocked > merged.unlocked { merged.unlocked = current.unlocked }
+    if incoming.unlocked > merged.unlocked { merged.unlocked = incoming.unlocked }
+    if current.updated_at > merged.updated_at { merged.updated_at = current.updated_at }
+    if incoming.updated_at > merged.updated_at { merged.updated_at = incoming.updated_at }
+    {
+        left := TextUntilNul(current.completed[:])
+        right := TextUntilNul(incoming.completed[:])
+        count := ifx left.count > right.count then left.count else right.count
+        for index: cast(s32)0..cast(s32)count - 1 {
+            merged.completed[index] = ifx (index < left.count && left[index] == #char "1") ||
+            (index < right.count && right[index] == #char "1") then #char "1" else #char "0"
+        }
+        merged.completed[count] = 0
+    }
+    current.* = merged
+    return true
+}
+
+GameProgressSame :: (left: *GameProgressRecord, right: *GameProgressRecord) -> bool {
+    return TextUntilNul(left.game[:]) == TextUntilNul(right.game[:]) && left.unlocked == right.unlocked &&
+    TextUntilNul(left.completed[:]) == TextUntilNul(right.completed[:]) &&
+    TextUntilNul(left.state[:]) == TextUntilNul(right.state[:])
+}

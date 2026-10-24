@@ -23,6 +23,7 @@
 #import "recovery"
 #import "native_files"
 #import "model"
+#import "game_progress"
 #import "std/file"
 #import "std/json_scan"
 #import "std/text_buffer"
@@ -105,6 +106,9 @@ records_last: s64 = -1000000000;
 records_rounds: s32;
 // Syncs that reached the node's latest version since the host started.
 records_completed: s64;
+// Fetch account progress before uploading a device's old/default campaign.
+// Otherwise its newer clock can replace progress it has never downloaded.
+records_pull_first: bool = true;
 records_pending: PendingSync;
 records_session: Auth.Session;
 records_session_owner: [65]u8;
@@ -321,6 +325,7 @@ RecordsOpen :: () {
     records_since = 0
     records_cursor = .{}
     records_failed = false
+    records_pull_first = true
     unused CopyCString(owner, records_owner[:])
     RecordsReadState(owner)
     for kind: cast(s32)0..records_kind_count - 1 { RecordsReadIndex(owner, kind) }
@@ -374,6 +379,7 @@ RecordsServe :: (name: string) -> s32 {
     records_kind_count += 1
     records_since = 0
     records_cursor = .{}
+    records_pull_first = true
     if !RecordsSaveKinds() { records_kind_count -= 1; return -1 }
     records_due = RecordsNow()
     return records_kind_count - 1
@@ -507,8 +513,20 @@ RecordsPut :: (request: string, kind: s32) -> string {
     id_bytes: [40]u8
     schema := RecordsString(request, "schema", schema_bytes[:])
     if !RecordsSchemaValid(schema) { return RecordsRejected("invalid schema") }
+    if RecordsKindName(kind) == GAME_PROGRESS_KIND && schema != GAME_PROGRESS_SCHEMA {
+        return RecordsRejected("invalid game progress schema")
+    }
     drawn: [40]u8
-    if FieldAt(request, 0, "id") < 0 {
+    if RecordsKindName(kind) == GAME_PROGRESS_KIND {
+        at := FieldAt(request, 0, "document")
+        end := ifx at < 0 then -1 else ValueEnd(request, at, 0)
+        game: GameProgressRecord
+        if end < 0 || !GameProgressRead(request[at:end], *game) ||
+        !GameProgressID(TextUntilNul(game.game[:]), drawn[:]) { return RecordsRejected("invalid game progress") }
+        if FieldAt(request, 0, "id") >= 0 && RecordsString(request, "id", id_bytes[:]) != TextUntilNul(drawn[:]) {
+            return RecordsRejected("game progress needs its canonical id")
+        }
+    } else if FieldAt(request, 0, "id") < 0 {
         random: [16]u8
         if SecureRandom(*random[0], random.count) == 0 { return RecordsRejected("no random id") }
         BytesToHex(*random[0], random.count, *drawn[0], drawn.count)
@@ -528,7 +546,24 @@ RecordsPut :: (request: string, kind: s32) -> string {
     text := BuilderFinish(plain)
     defer { EntityFree(text) }
     owner := TextUntilNul(records_owner[:])
-    if !RecordsWriteDocument(owner, kind, id, text) { return RecordsRejected("the record could not be saved") }
+    game_text: string
+    defer { EntityFree(game_text) }
+    if RecordsKindName(kind) == GAME_PROGRESS_KIND {
+        next: GameProgressRecord
+        if !GameProgressRead(text, *next) { return RecordsRejected("invalid game progress") }
+        if at >= 0 && !records_entries[at].deleted {
+            previous: GameProgressRecord
+            if !GameProgressRead(RecordsReadDocument(owner, kind, id), *previous) ||
+            !GameProgressMerge(*previous, *next, true) { return RecordsRejected("game progress does not match") }
+            next = previous
+        }
+        bytes: Vec(u8)
+        GameProgressWrite(*next, *bytes)
+        game_text = BuilderFinish(bytes)
+    }
+    if !RecordsWriteDocument(owner, kind, id, ifx game_text != "" then game_text else text) {
+        return RecordsRejected("the record could not be saved")
+    }
     if at < 0 {
         at = records_count
         records_count += 1
@@ -777,6 +812,7 @@ RecordsBody :: () -> bool {
     for index: cast(s32)0..records_count - 1 {
         if records_upload_count >= RECORDS_UPLOADS { break }
         if !records_entries[index].dirty { continue }
+        if records_pull_first && RecordsKindName(records_entries[index].kind) == GAME_PROGRESS_KIND { continue }
         record: Vec(u8)
         sealed := RecordsUploadText(index, *record)
         text := BuilderFinish(record)
@@ -812,14 +848,16 @@ RecordsApply :: (text: string, at: s32) -> bool {
     changed := RecordsTime(TextView(time_bytes[0:time_length]))
     if !RecordsIdValid(id) || changed < 0 { return false }
     found := RecordsFind(kind, id)
-    if found >= 0 && records_entries[found].changed >= changed { return false }
+    game_progress := RecordsKindName(kind) == GAME_PROGRESS_KIND
+    if found >= 0 && records_entries[found].changed >= changed &&
+    (!game_progress || records_entries[found].deleted) { return false }
     if found < 0 && records_count >= RECORDS_ENTRIES { return false }
     owner := TextUntilNul(records_owner[:])
     deleted := ReadNumber(text, FieldAt(text, at, "deleted_at"))
     entry := RecordsEntry.{.kind = kind, .changed = changed, .updated_at = changed / 1000}
     unused CopyCString(id, entry.id[:])
     if deleted.valid && deleted.value != 0.0 {
-        if found < 0 { return false }
+        if found < 0 || records_entries[found].changed >= changed { return false }
         entry.schema = records_entries[found].schema
         entry.deleted = true
         RecordsRemoveDocument(owner, kind, id)
@@ -837,7 +875,34 @@ RecordsApply :: (text: string, at: s32) -> bool {
         document := TextView(records_seal[0:plain])
         stamp := ReadNumber(document, FieldAt(document, 0, "updated_at"))
         if stamp.valid && stamp.value > 0.0 { entry.updated_at = cast(s64)stamp.value }
-        if !RecordsWriteDocument(owner, kind, id, document) { return false }
+        game_text: string
+        defer { EntityFree(game_text) }
+        if game_progress {
+            incoming: GameProgressRecord
+            canonical: [33]u8
+            if TextUntilNul(entry.schema[:]) != GAME_PROGRESS_SCHEMA || !GameProgressRead(document, *incoming) ||
+            !GameProgressID(TextUntilNul(incoming.game[:]), canonical[:]) || TextUntilNul(canonical[:]) != id { return false }
+            if found >= 0 && !records_entries[found].deleted {
+                current: GameProgressRecord
+                if !GameProgressRead(RecordsReadDocument(owner, kind, id), *current) { return false }
+                before := current
+                newer := changed > records_entries[found].changed
+                if !GameProgressMerge(*current, *incoming, newer) { return false }
+                if !newer && GameProgressSame(*current, *before) { return false }
+                if !GameProgressSame(*current, *incoming) {
+                    entry.changed = RecordsChangeTime(found)
+                    if entry.changed <= changed { entry.changed = changed + 1 }
+                    entry.updated_at = entry.changed / 1000
+                    entry.dirty = true
+                    current.updated_at = entry.updated_at
+                    records_due = RecordsNow() + RECORDS_DELAY
+                }
+                bytes: Vec(u8)
+                GameProgressWrite(*current, *bytes)
+                game_text = BuilderFinish(bytes)
+            }
+        }
+        if !RecordsWriteDocument(owner, kind, id, ifx game_text != "" then game_text else document) { return false }
     }
     if found < 0 { found = records_count; records_count += 1 }
     records_entries[found] = entry
@@ -876,7 +941,10 @@ RecordsAccept :: () -> bool {
         return true
     }
     complete := FieldAt(text, 0, "changes_complete")
-    if complete < 0 || MatchLiteral(text, complete, "true") { records_since = cast(s64)version.value }
+    if complete < 0 || MatchLiteral(text, complete, "true") {
+        records_since = cast(s64)version.value
+        records_pull_first = false
+    }
     return RecordsSaveKinds()
 }
 
@@ -929,7 +997,7 @@ EntityRecordsPump :: () {
     }
     records_failed = false
     more := records_cursor[0] != cast(u8)0 || records_upload_count == RECORDS_UPLOADS
-    for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty && records_upload_count > 0 { more = true; break } }
+    for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty && !records_pull_first { more = true; break } }
     if more && records_rounds < 200 {
         if !RecordsRound() { records_failed = true; return }
         records_running = true
