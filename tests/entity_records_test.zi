@@ -1,0 +1,70 @@
+// The entity.records service on this device alone: saving, listing with
+// fields, reading, replacing, deleting and the private files it keeps.
+#import "account_store"
+#import "entity_records"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/file"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import "native_files"
+
+RecordsCheckField :: (reply: string, name: string, expected: string) -> bool {
+    value: [128]u8
+    length := ReadStringText(reply, FieldAt(reply, 0, name), value[:])
+    return length >= 0 && TextView(value[0:length]) == expected
+}
+
+#program_export
+Check :: () -> s32 {
+    root := NativeEnvironment("ENTITY_DATA")
+    if root == "" || !AccountStoreStartAt(root, "entity-test") { return 1 }
+    status := EntityRecordsAnswer("{\"operation\":\"status\"}")
+    if !RecordsCheckField(status, "sync", "local") || !RecordsCheckField(status, "account", "") { return 2 }
+    put := EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"First \\\"one\\\"\",\"updated_at\":5,\"levels\":[{\"name\":\"a\",\"cells\":[\"00\"],\"route\":\"2\"}]}}")
+    if !RecordsCheckField(put, "status", "done") { return 3 }
+    id: [40]u8
+    if ReadStringText(put, FieldAt(put, 0, "id"), id[:]) != 32 { return 4 }
+    first := TextUntilNul(id[:])
+    named := EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"island\",\"title\":\"Second\",\"levels\":[]}}")
+    if !RecordsCheckField(named, "id", "0123456789abcdef0123456789abcdef") { return 5 }
+    list := EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"levels\",\"fields\":[\"edition\",\"title\",\"levels\"]}")
+    records := FieldAt(list, 0, "records")
+    if records < 0 || ArrayCount(list, records) != 2 { return 6 }
+    one := ElementAt(list, records, 0)
+    if !RecordsCheckField(list[one:ValueEnd(list, one, 0)], "title", "First \"one\"") ||
+    FieldAt(list[one:ValueEnd(list, one, 0)], 0, "levels") >= 0 { return 7 }
+    get := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}")
+    document := FieldAt(get, 0, "document")
+    if document < 0 || !RecordsCheckField(get[document:ValueEnd(get, document, 0)], "edition", "island") { return 8 }
+    // The record's own time replaces whatever the app wrote.
+    again := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"")
+    if !RecordsCheckField(again, "status", "rejected") { return 9 }
+    path: [4096]u8
+    text: [4096]u8
+    length := NativeRead(RecordsDocumentPath("local", 0, first, path[:]), text[:])
+    stamp := ReadNumber(TextView(text[0:length]), FieldAt(TextView(text[0:length]), 0, "updated_at"))
+    if length <= 0 || !stamp.valid || stamp.value < 1700000000.0 { return 10 }
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}"), "status", "done") { return 11 }
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}"), "status", "missing") { return 12 }
+    list = EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"levels\"}")
+    if ArrayCount(list, FieldAt(list, 0, "records")) != 1 { return 13 }
+    if !RecordsCheckField(EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"Levels!\"}"), "status", "rejected") { return 14 }
+    big: Vec(u8)
+    BuilderPrint(*big, "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"document\":{\"title\":\"")
+    for index: 0..150000 { BuilderPrint(*big, "x") }
+    BuilderPrint(*big, "\"}}")
+    request := BuilderFinish(big)
+    if !RecordsCheckField(EntityRecordsAnswer(request), "status", "rejected") { return 15 }
+    // A fresh start reads the same records back from the device.
+    records_owner = .{}
+    list = EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"levels\",\"fields\":[\"title\"]}")
+    if ArrayCount(list, FieldAt(list, 0, "records")) != 1 { return 16 }
+    one = ElementAt(list, FieldAt(list, 0, "records"), 0)
+    if !RecordsCheckField(list[one:ValueEnd(list, one, 0)], "id", first) { return 17 }
+    status = EntityRecordsAnswer("{\"operation\":\"status\"}")
+    pending := ReadNumber(status, FieldAt(status, 0, "pending"))
+    if !pending.valid || pending.value != 2.0 { return 18 }
+    return 0
+}

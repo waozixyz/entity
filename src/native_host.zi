@@ -2,6 +2,7 @@
 // account keys remain in this provider and never enter a game bundle.
 #import "account_store"
 #import "dew_native"
+#import "entity_records"
 #import "model"
 #import "native_files"
 #import "native_management"
@@ -172,6 +173,7 @@ EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s3
 EntityHostPump :: () {
     AccountStorePump()
     DewPump()
+    EntityRecordsPump()
 }
 
 EntityHostClose :: () -> bool {

@@ -37,8 +37,9 @@ subprocess.run([ZIRAN, 'build', '--target=c', '--root', str(ROOT), *paths,
 flags = subprocess.check_output(['pkg-config', '--libs', 'gtk+-3.0'], text=True).split()
 executable = output / 'test'
 subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-ffunction-sections', '-fdata-sections',
-                '-Wl,--gc-sections', f'-I{std_root / "include"}', f'-I{generated}',
+                '-Wl,--gc-sections', f'-I{std_root / "include"}', f'-I{generated}', f'-I{monocypher / "src"}',
                 *map(str, generated.rglob('*.c')), str(monocypher / 'src/monocypher.c'),
+                str(monocypher / 'src/optional/monocypher-ed25519.c'),
                 str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-o', str(executable)], check=True, env=ENV)
 data = output / 'data'
 shutil.rmtree(data, ignore_errors=True)

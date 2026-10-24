@@ -19,6 +19,15 @@
       "url": "https://github.com/LoupVaillant/Monocypher.git"
     },
     {
+      "commit": "e1f480f382d9443c4412133b55948374c77a5c21",
+      "dependencies": {},
+      "id": "p4b0a50b49959e674",
+      "name": "liboqs",
+      "ref": "main",
+      "source": true,
+      "url": "https://github.com/open-quantum-safe/liboqs.git"
+    },
+    {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
       "dependencies": {},
       "id": "p5a77c9c35110e925",
@@ -29,7 +38,7 @@
     },
     {
       "commit": "22d2ddbdc236796953c905a05a2cebf5ab1b4ff3",
-      "dependencies": {"liboqs": "pfb3df7cb222b1bdc"},
+      "dependencies": {"liboqs": "p4b0a50b49959e674"},
       "id": "p7098ac9cd92f7e5f",
       "name": "Oqs",
       "ref": "master",
@@ -44,25 +53,16 @@
       "url": "https://github.com/kryonlabs/kryon.git"
     },
     {
-      "commit": "aa843632f1a1f6c58385771c4b4d9def4a438125",
+      "commit": "1429fe912f9f47ea06514231ee48ae8be6e41dcf",
       "dependencies": {"oqs": "p7098ac9cd92f7e5f"},
-      "id": "pb64e76ded5e7220b",
+      "id": "pf64f159dfdbd5ee5",
       "name": "DaochiClient",
       "ref": "master",
       "url": "https://github.com/ziranlang/daochi-client.git"
-    },
-    {
-      "commit": "fd44469daeffe6b28f031f54f9bb66cbae69a572",
-      "dependencies": {},
-      "id": "pfb3df7cb222b1bdc",
-      "name": "liboqs",
-      "ref": "main",
-      "source": true,
-      "url": "https://github.com/open-quantum-safe/liboqs.git"
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "pb64e76ded5e7220b", "kryon": "pac3bbc70c330905a", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "pf64f159dfdbd5ee5", "kryon": "pac3bbc70c330905a", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Entity"
   },
   "toolchain": {

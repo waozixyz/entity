@@ -1,0 +1,105 @@
+// Two devices of one account share entity records through a node: run with
+// ENTITY_DATA set to the device's folder and ENTITY_RECORDS_STEP naming the
+// step (scripts/records_sync_test.py starts a private node and the steps).
+#import "account_store"
+#import "entity_records"
+#import "recovery"
+#import "model"
+#import "native_files"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/timer_linux"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "daochi_client/keys"
+
+SyncField :: (reply: string, name: string, expected: string) -> bool {
+    value: [128]u8
+    length := ReadStringText(reply, FieldAt(reply, 0, name), value[:])
+    return length >= 0 && TextView(value[0:length]) == expected
+}
+
+// Pumps until a sync has reached the node's latest version and nothing
+// waits to upload. The app first names its kind, as an app's list does.
+SyncSettle :: () -> bool {
+    unused EntityRecordsAnswer("{\"operation\":\"list\",\"kind\":\"levels\"}")
+    records_due = 0
+    start := records_completed
+    for round: 0..1200 {
+        EntityRecordsPump()
+        status := EntityRecordsAnswer("{\"operation\":\"status\"}")
+        if SyncField(status, "sync", "failed") { return false }
+        if records_completed > start && SyncField(status, "sync", "synced") { return true }
+        if records_completed > start && !records_running { records_due = 0 }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
+
+SyncTitle :: (id: string, expected: string) -> bool {
+    request: [128]u8
+    length: s64 = 0
+    for byte: "{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"" { request[length] = byte; length += 1 }
+    for byte: id { request[length] = byte; length += 1 }
+    for byte: "\"}" { request[length] = byte; length += 1 }
+    reply := EntityRecordsAnswer(TextView(request[0:length]))
+    document := FieldAt(reply, 0, "document")
+    if document < 0 { return false }
+    title: [64]u8
+    title_length := ReadStringText(reply, FieldAt(reply, document, "title"), title[:])
+    return title_length >= 0 && TextView(title[0:title_length]) == expected
+}
+
+#program_export
+Check :: () -> s32 {
+    root := NativeEnvironment("ENTITY_DATA")
+    step := NativeEnvironment("ENTITY_RECORDS_STEP")
+    if step == "create" {
+        recovery: Recovery
+        if CreateAccountKeys(*recovery.keys) != 1 || !NativeDirectory(root) { return 1 }
+        text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+        path: [4096]u8
+        if !RecoveryEncode(*recovery, "", text[:]) || !NativeWrite(NativeJoin(path[:], root, "account.key"), TextUntilNul(text[:])) { return 2 }
+        state := EntityDefault()
+        unused CopyCString(TextUntilNul(recovery.keys.public_id[:]), state.owner_id[:])
+        unused CopyCString(NativeEnvironment("ENTITY_RECORDS_NODE"), state.nodes[0][:])
+        document := EntityEncode(state)
+        if !NativeWrite(NativeJoin(path[:], root, "entity.json"), document) { return 3 }
+        return 0
+    }
+    if root == "" || !AccountStoreStartAt(root, "entity-test") { return 4 }
+    one := "0123456789abcdef0123456789abcdef"
+    two := "fedcba9876543210fedcba9876543210"
+    if step == "local" {
+        // No account yet: kept on this device until one is connected.
+        if account_standalone_ready { return 5 }
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"00000000000000000000000000000003\",\"document\":{\"title\":\"Offline\"}}"), "status", "done") { return 6 }
+        return ifx SyncField(EntityRecordsAnswer("{\"operation\":\"status\"}"), "sync", "local") then 0 else 7
+    }
+    if !account_standalone_ready { return 8 }
+    if step == "first" {
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[]}}"), "status", "done") ||
+        !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"fedcba9876543210fedcba9876543210\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"island\",\"title\":\"Shore\",\"levels\":[]}}"), "status", "done") { return 9 }
+        return ifx SyncSettle() then 0 else 10
+    }
+    if step == "second" {
+        if !SyncSettle() { return 11 }
+        if !SyncTitle(one, "Garden") || !SyncTitle(two, "Shore") { return 12 }
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden at night\",\"levels\":[]}}"), "status", "done") ||
+        !SyncField(EntityRecordsAnswer("{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"fedcba9876543210fedcba9876543210\"}"), "status", "done") { return 13 }
+        return ifx SyncSettle() then 0 else 14
+    }
+    if step == "third" {
+        if !SyncSettle() { return 15 }
+        if !SyncTitle(one, "Garden at night") { return 16 }
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"fedcba9876543210fedcba9876543210\"}"), "status", "missing") { return 17 }
+        if !SyncTitle("00000000000000000000000000000003", "Offline") { return 18 }
+        return 0
+    }
+    if step == "adopt" {
+        // The records kept before the account now belong to it and upload.
+        if !SyncTitle("00000000000000000000000000000003", "Offline") { return 19 }
+        return ifx SyncSettle() then 0 else 20
+    }
+    return 21
+}

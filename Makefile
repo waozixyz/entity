@@ -7,6 +7,8 @@ DAOCHI_CLIENT_DIR = $(shell $(ZIRAN) pkg path daochi_client $(LOCK_FLAGS))
 OQS_DIR = $(shell $(ZIRAN) pkg path oqs $(LOCK_FLAGS))
 LIBOQS_DIR = $(shell $(ZIRAN) pkg path liboqs $(LOCK_FLAGS))
 MONOCYPHER_DIR = $(shell $(ZIRAN) pkg path monocypher $(LOCK_FLAGS))
+# Device keys sign with Monocypher's standard Ed25519.
+MONOCYPHER_SOURCES = $(MONOCYPHER_DIR)/src/monocypher.c $(MONOCYPHER_DIR)/src/optional/monocypher-ed25519.c
 LIBOQS_LIBRARY ?= build/liboqs/lib/liboqs.a
 MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/backend --module-path kryon=$(KRYON_DIR)/src/ui \
@@ -25,7 +27,7 @@ build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.loc
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
-test: build/entity.zx native-test model-test achievement-view-test
+test: build/entity.zx native-test records-test model-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
@@ -52,7 +54,7 @@ build/generated/native/.complete: $(SOURCES) $(UI_SOURCES) ziran.lock Makefile
 	touch $@
 build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_LIBRARY) Makefile
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/generated/native $$(find build/generated/native -type d -printf ' -iquote %p') \
-		$$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) \
+		-I$(MONOCYPHER_DIR)/src $$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) \
 		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -o $@
 native: build/entity
 # Publishes a JSON document as a public Daochi publication; see tools/publication.zi.
@@ -61,7 +63,13 @@ build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) b
 	rm -rf build/publication-c
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry publication:main -o build/publication-c tools/publication.zi
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/publication-c $$(find build/publication-c -type d -printf ' -iquote %p') \
-		$$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_DIR)/src/monocypher.c build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -o $@
+		-I$(MONOCYPHER_DIR)/src $$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -o $@
+# The entity.records service alone and between two devices through a
+# private local Daochi node (DAOCHI_BIN, by default the checkout's build).
+.PHONY: records-test
+records-test: $(LIBOQS_LIBRARY)
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
+		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/records_test.py
 native-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py

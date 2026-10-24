@@ -1,0 +1,939 @@
+// The "entity.records" app service: the account's own records of each kind
+// (Daochi docs/entity-data.md), such as Shovey's levels, kept once for the
+// account and shared by every app. A request is answered at once from this
+// device's copy, so saving never waits for the node; the records then sync
+// in the account's signed sync as the entity app, sealed with the record key
+// of their kind. Without an account they stay on this device, and they
+// upload once one is connected. Nothing here is shared: publishing stays a
+// separate, explicit request. Requests:
+//   {"operation":"list","kind":K,"fields":["edition",…]} answers
+//       {"status":"done","account":ID,"records":[{"id","schema","updated_at",…}]}
+//       with those top-level fields of each document; deleted ones are left out
+//   {"operation":"get","kind":K,"id":ID} answers {"status":"done","id","schema",
+//       "updated_at","document":{…}} or {"status":"missing"}
+//   {"operation":"put","kind":K,"schema":S,"id":ID?,"document":{…}} answers
+//       {"status":"done","id":ID,"updated_at":T}; without id a random one is
+//       drawn. The stored document carries updated_at, Unix seconds.
+//   {"operation":"delete","kind":K,"id":ID} answers {"status":"done"}
+//   {"operation":"status"} answers {"status":"done","account":ID,"sync":
+//       "local|pending|syncing|synced|failed","pending":N,"revision":R}; the
+//       revision grows whenever another device's change arrives.
+// Anything else answers {"status":"rejected","error":"…"}.
+#import "account_store"
+#import "recovery"
+#import "native_files"
+#import "model"
+#import "std/file"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/number_text"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import "std/net_http"
+#import "std/date_time_linux"
+#import "daochi_client/entity"
+#import "daochi_client/crypto"
+#import "daochi_client/keys"
+#import "daochi_client/client"
+#import "daochi_client/sync"
+#import "daochi_client/async_client"
+#import "daochi_client/async_sync"
+Auth :: #import "daochi_client/auth";
+#import "kryon/http_transfer"
+
+records_c :: #system_library "c";
+RecordsDeviceKeyPair :: (secret_key: *u8, public_key: *u8, seed: *u8) #foreign records_c "crypto_ed25519_key_pair";
+RecordsDeviceSign :: (signature: *u8, secret_key: *u8, message: *u8, size: usize) #foreign records_c "crypto_ed25519_sign";
+RecordsAllocate :: (size: usize) -> *u8 #foreign records_c "calloc";
+
+ENTITY_RECORDS_SERVICE :: "entity.records"
+RECORDS_ENTRIES :: 4096
+RECORDS_KINDS :: 8
+// The node keeps 256 KiB of sealed text per record, a plain text of about
+// 143 KiB; the document leaves room for its updated_at.
+RECORDS_DOCUMENT_MAX :: 143360
+RECORDS_SCHEMA_MAX :: 128
+RECORDS_BODY_MAX :: 1000000
+// A page of the node's records: at most 4 MiB of them, with room for its JSON.
+RECORDS_OUTPUT_MAX :: 5242880
+RECORDS_FILE_MAX :: 1048576
+RECORDS_UPLOADS :: 64
+// A change reaches the node shortly after it is made; other devices'
+// changes arrive at least this often.
+RECORDS_INTERVAL :: 60000
+RECORDS_DELAY :: 2000
+
+RecordsEntry :: struct {
+    kind: s32
+    id: [33]u8
+    schema: [RECORDS_SCHEMA_MAX + 1]u8
+    // Unix seconds, as the document says; changed orders changes (ms).
+    updated_at: s64
+    changed: s64
+    deleted: bool
+    dirty: bool
+}
+
+RecordsUpload :: struct {
+    entry: s32
+    changed: s64
+}
+
+records_entries: [RECORDS_ENTRIES]RecordsEntry;
+records_count: s32;
+records_kinds: [RECORDS_KINDS][49]u8;
+records_kind_count: s32;
+// "local" without an account, else the account's public id.
+records_owner: [65]u8;
+records_since: s64;
+records_cursor: [512]u8;
+records_revision: s64;
+records_reply: string;
+records_file: [RECORDS_FILE_MAX]u8;
+records_output: []u8;
+records_uploads: [RECORDS_UPLOADS]RecordsUpload;
+records_request: string;
+records_seal: [ENTITY_RECORD_PLAIN_MAX + 16]u8;
+records_sealed_text: [ENTITY_RECORD_TEXT_MAX + 1]u8;
+records_envelope: [ENTITY_RECORD_TEXT_MAX]u8;
+records_upload_count: s32;
+records_running: bool;
+records_failed: bool;
+records_due: s64 = -1;
+records_last: s64 = -1000000000;
+records_rounds: s32;
+// Syncs that reached the node's latest version since the host started.
+records_completed: s64;
+records_pending: PendingSync;
+records_session: Auth.Session;
+records_session_owner: [65]u8;
+records_transfer: HttpTransfer;
+records_device_secret: [64]u8;
+records_device_public: [65]u8;
+records_device_id: [65]u8;
+records_private: [2560]u8;
+
+// ---------------------------------------------------------------------------
+// Names and paths
+
+RecordsIdValid :: (id: string) -> bool {
+    if id.count != 32 { return false }
+    for byte: id {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) || (byte >= cast(u8)97 && byte <= cast(u8)102)) { return false }
+    }
+    return true
+}
+
+RecordsSchemaValid :: (schema: string) -> bool {
+    if schema.count < 1 || schema.count > RECORDS_SCHEMA_MAX { return false }
+    for byte: schema {
+        if !((byte >= cast(u8)48 && byte <= cast(u8)57) || (byte >= cast(u8)65 && byte <= cast(u8)90) ||
+            (byte >= cast(u8)97 && byte <= cast(u8)122) || byte == cast(u8)45 || byte == cast(u8)46 ||
+            byte == cast(u8)58 || byte == cast(u8)95) { return false }
+    }
+    return true
+}
+
+RecordsKindName :: (kind: s32) -> string { return TextUntilNul(records_kinds[kind][:]) }
+
+RecordsKindIndex :: (name: string) -> s32 {
+    for index: cast(s32)0..records_kind_count - 1 { if RecordsKindName(index) == name { return index } }
+    return -1
+}
+
+// records/<owner>[/<name>] under the host's account folder.
+RecordsPath :: (owner: string, name: string, output: []u8) -> string {
+    folder: [4096]u8
+    store: [4096]u8
+    path := NativeJoin(store[:], NativeJoin(folder[:], TextUntilNul(account_root[:]), "records"), owner)
+    if name == "" || path == "" { return ifx path == "" then "" else NativeJoin(output, path, "") }
+    return NativeJoin(output, path, name)
+}
+
+RecordsFolder :: (owner: string, output: []u8) -> string {
+    folder: [4096]u8
+    return NativeJoin(output, NativeJoin(folder[:], TextUntilNul(account_root[:]), "records"), owner)
+}
+
+RecordsDocumentPath :: (owner: string, kind: s32, id: string, output: []u8) -> string {
+    folder: [4096]u8
+    kind_folder: [4096]u8
+    name: [64]u8
+    length: s64 = 0
+    for byte: id { name[length] = byte; length += 1 }
+    for byte: ".json" { name[length] = byte; length += 1 }
+    kinds := NativeJoin(kind_folder[:], RecordsFolder(owner, folder[:]), RecordsKindName(kind))
+    if kinds == "" || !NativeDirectory(kinds) { return "" }
+    return NativeJoin(output, kinds, TextView(name[0:length]))
+}
+
+RecordsIndexPath :: (owner: string, kind: s32, output: []u8) -> string {
+    folder: [4096]u8
+    name: [64]u8
+    length: s64 = 0
+    for byte: RecordsKindName(kind) { name[length] = byte; length += 1 }
+    for byte: ".index" { name[length] = byte; length += 1 }
+    return NativeJoin(output, RecordsFolder(owner, folder[:]), TextView(name[0:length]))
+}
+
+RecordsOwnerNow :: () -> string {
+    return ifx account_standalone_ready then TextUntilNul(account_recovery.keys.public_id[:]) else "local"
+}
+
+RecordsNow :: () -> s64 { return UnixMilliseconds() }
+
+// ---------------------------------------------------------------------------
+// The device's copy: one index per kind, one document file per record.
+//   <id> <updated_at> <changed> <d or -><u or -> <schema>
+
+RecordsFind :: (kind: s32, id: string) -> s32 {
+    for index: cast(s32)0..records_count - 1 {
+        if records_entries[index].kind == kind && TextUntilNul(records_entries[index].id[:]) == id { return index }
+    }
+    return -1
+}
+
+RecordsNumber :: (word: string) -> s64 {
+    if word.count == 0 || word.count > 18 { return -1 }
+    value: s64 = 0
+    for byte: word {
+        if byte < cast(u8)48 || byte > cast(u8)57 { return -1 }
+        value = value * 10 + cast(s64)(byte - cast(u8)48)
+    }
+    return value
+}
+
+RecordsWord :: (line: string, at: *s64) -> string {
+    start := at.*
+    while at.* < line.count && line[at.*] != cast(u8)32 { at.* += 1 }
+    word := line[start:at.*]
+    if at.* < line.count { at.* += 1 }
+    return word
+}
+
+RecordsReadIndex :: (owner: string, kind: s32) {
+    path: [4096]u8
+    length := NativeRead(RecordsIndexPath(owner, kind, path[:]), records_file[:])
+    if length <= 0 { return }
+    text := TextView(records_file[0:length])
+    at: s64 = 0
+    while at < text.count && records_count < RECORDS_ENTRIES {
+        end := at
+        while end < text.count && text[end] != cast(u8)10 { end += 1 }
+        line := text[at:end]
+        at = end + 1
+        cursor: s64 = 0
+        id := RecordsWord(line, *cursor)
+        updated := RecordsNumber(RecordsWord(line, *cursor))
+        changed := RecordsNumber(RecordsWord(line, *cursor))
+        flags := RecordsWord(line, *cursor)
+        schema := line[cursor:]
+        if !RecordsIdValid(id) || updated < 0 || changed < 0 || flags.count != 2 || !RecordsSchemaValid(schema) ||
+        RecordsFind(kind, id) >= 0 { continue }
+        entry := *records_entries[records_count]
+        entry.* = RecordsEntry.{.kind = kind, .updated_at = updated, .changed = changed,
+            .deleted = flags[0] == cast(u8)100, .dirty = flags[1] == cast(u8)117}
+        unused CopyCString(id, entry.id[:])
+        unused CopyCString(schema, entry.schema[:])
+        records_count += 1
+    }
+}
+
+RecordsSaveIndex :: (kind: s32) -> bool {
+    out: Vec(u8)
+    for index: cast(s32)0..records_count - 1 {
+        entry := *records_entries[index]
+        if entry.kind != kind { continue }
+        flags: [2]u8 = .[ifx entry.deleted then cast(u8)100 else cast(u8)45, ifx entry.dirty then cast(u8)117 else cast(u8)45]
+        BuilderPrint(*out, "% % % % %\n", TextUntilNul(entry.id[:]), entry.updated_at, entry.changed,
+            TextView(flags[:]), TextUntilNul(entry.schema[:]))
+    }
+    text := BuilderFinish(out)
+    defer { EntityFree(text) }
+    folder: [4096]u8
+    path: [4096]u8
+    owner := TextUntilNul(records_owner[:])
+    return NativeDirectory(RecordsFolder(owner, folder[:])) && NativeWrite(RecordsIndexPath(owner, kind, path[:]), text) &&
+    AccountStorePersist()
+}
+
+RecordsSaveKinds :: () -> bool {
+    out: Vec(u8)
+    for index: cast(s32)0..records_kind_count - 1 { BuilderPrint(*out, "%\n", RecordsKindName(index)) }
+    BuilderPrint(*out, "since %\n", records_since)
+    text := BuilderFinish(out)
+    defer { EntityFree(text) }
+    folder: [4096]u8
+    path: [4096]u8
+    owner := TextUntilNul(records_owner[:])
+    return NativeDirectory(RecordsFolder(owner, folder[:])) &&
+    NativeWrite(NativeJoin(path[:], RecordsFolder(owner, folder[:]), "state"), text) && AccountStorePersist()
+}
+
+// Kinds this device keeps, and how far it has synced.
+RecordsReadState :: (owner: string) {
+    folder: [4096]u8
+    path: [4096]u8
+    length := NativeRead(NativeJoin(path[:], RecordsFolder(owner, folder[:]), "state"), records_file[:])
+    if length <= 0 { return }
+    text := TextView(records_file[0:length])
+    at: s64 = 0
+    while at < text.count {
+        end := at
+        while end < text.count && text[end] != cast(u8)10 { end += 1 }
+        line := text[at:end]
+        at = end + 1
+        if line.count > 6 && line[0:6] == "since " { records_since = RecordsNumber(line[6:]); continue }
+        if EntityKindValid(line) && records_kind_count < RECORDS_KINDS && RecordsKindIndex(line) < 0 {
+            unused CopyCString(line, records_kinds[records_kind_count][:])
+            records_kind_count += 1
+        }
+    }
+    if records_since < 0 { records_since = 0 }
+}
+
+RecordsReadDocument :: (owner: string, kind: s32, id: string) -> string {
+    path: [4096]u8
+    length := NativeRead(RecordsDocumentPath(owner, kind, id, path[:]), records_file[:])
+    return ifx length > 0 then TextView(records_file[0:length]) else ""
+}
+
+RecordsWriteDocument :: (owner: string, kind: s32, id: string, text: string) -> bool {
+    path: [4096]u8
+    return NativeWrite(RecordsDocumentPath(owner, kind, id, path[:]), text)
+}
+
+RecordsRemoveDocument :: (owner: string, kind: s32, id: string) {
+    path: [4096]u8
+    address := RecordsDocumentPath(owner, kind, id, path[:])
+    if address != "" && PathExists(address) { unused RemoveFile(address) }
+}
+
+// Opens the copy of whoever is signed in now. Records kept before an account
+// was connected become that account's own, to upload.
+RecordsOpen :: () {
+    owner := RecordsOwnerNow()
+    if TextUntilNul(records_owner[:]) == owner { return }
+    if records_running { CancelSync(*records_pending); records_running = false }
+    records_count = 0
+    records_kind_count = 0
+    records_since = 0
+    records_cursor = .{}
+    records_failed = false
+    unused CopyCString(owner, records_owner[:])
+    RecordsReadState(owner)
+    for kind: cast(s32)0..records_kind_count - 1 { RecordsReadIndex(owner, kind) }
+    if owner != "local" { RecordsAdoptLocal() }
+    records_due = RecordsNow()
+}
+
+RecordsAdoptLocal :: () {
+    local_count := records_count
+    saved_since := records_since
+    kinds_before := records_kind_count
+    RecordsReadState("local")
+    records_since = saved_since
+    for kind: cast(s32)0..records_kind_count - 1 { RecordsReadIndex("local", kind) }
+    if records_count == local_count && records_kind_count == kinds_before { return }
+    now := RecordsNow()
+    owner := TextUntilNul(records_owner[:])
+    for index: local_count..records_count - 1 {
+        entry := *records_entries[index]
+        id := TextUntilNul(entry.id[:])
+        if !entry.deleted {
+            document := RecordsReadDocument("local", entry.kind, id)
+            if document == "" || !RecordsWriteDocument(owner, entry.kind, id, document) { entry.deleted = true }
+        }
+        entry.dirty = !entry.deleted
+        entry.changed = now
+    }
+    for kind: cast(s32)0..records_kind_count - 1 { if !RecordsSaveIndex(kind) { return } }
+    if !RecordsSaveKinds() { return }
+    // The account holds them now; the device-only copies go.
+    for index: local_count..records_count - 1 {
+        RecordsRemoveDocument("local", records_entries[index].kind, TextUntilNul(records_entries[index].id[:]))
+    }
+    for kind: cast(s32)0..records_kind_count - 1 {
+        path: [4096]u8
+        address := RecordsIndexPath("local", kind, path[:])
+        if PathExists(address) { unused RemoveFile(address) }
+    }
+    folder: [4096]u8
+    path: [4096]u8
+    state := NativeJoin(path[:], RecordsFolder("local", folder[:]), "state")
+    if PathExists(state) { unused RemoveFile(state) }
+}
+
+// A kind the device has not kept before; the next sync fetches all of it.
+RecordsServe :: (name: string) -> s32 {
+    known := RecordsKindIndex(name)
+    if known >= 0 { return known }
+    if !EntityKindValid(name) || records_kind_count >= RECORDS_KINDS { return -1 }
+    unused CopyCString(name, records_kinds[records_kind_count][:])
+    records_kind_count += 1
+    records_since = 0
+    records_cursor = .{}
+    if !RecordsSaveKinds() { records_kind_count -= 1; return -1 }
+    records_due = RecordsNow()
+    return records_kind_count - 1
+}
+
+// ---------------------------------------------------------------------------
+// Answers
+
+RecordsAnswer :: (out: *Vec(u8)) -> string {
+    EntityFree(records_reply)
+    records_reply = BuilderFinish(out.*)
+    return records_reply
+}
+
+RecordsText :: (text: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", text)
+    return RecordsAnswer(*out)
+}
+
+RecordsRejected :: (error: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"rejected\",\"error\":")
+    EntityQuote(*out, error)
+    BuilderPrint(*out, "}")
+    return RecordsAnswer(*out)
+}
+
+RecordsString :: (text: string, field: string, output: []u8) -> string {
+    at := FieldAt(text, 0, field)
+    if at < 0 { return "" }
+    length := ReadStringText(text, at, output)
+    return ifx length < 0 then "" else TextView(output[0:length])
+}
+
+RecordsStatusName :: () -> string {
+    if TextUntilNul(records_owner[:]) == "local" { return "local" }
+    if records_running { return "syncing" }
+    if records_failed { return "failed" }
+    for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty { return "pending" } }
+    return "synced"
+}
+
+RecordsAccount :: () -> string {
+    owner := TextUntilNul(records_owner[:])
+    return ifx owner == "local" then "" else owner
+}
+
+// The document's top-level members without updated_at, then the record's
+// updated_at, into out; false for anything but one JSON object.
+RecordsPlain :: (document: string, updated_at: s64, out: *Vec(u8)) -> bool {
+    start := Space(document, 0)
+    if start != 0 || document.count < 2 || document[0] != cast(u8)123 || ValueEnd(document, 0, 0) != cast(s32)document.count { return false }
+    BuilderPrint(out, "{")
+    first := true
+    at := Space(document, 1)
+    while at >= 0 && at < cast(s32)document.count && document[at] != cast(u8)125 {
+        key := ReadString(document, at)
+        if !key.valid { return false }
+        colon := Space(document, key.after)
+        if colon < 0 || document[colon] != cast(u8)58 { return false }
+        end := ValueEnd(document, colon + 1, 0)
+        if end < 0 { return false }
+        if document[key.start:key.end] != "updated_at" {
+            if !first { BuilderPrint(out, ",") }
+            BuilderPrint(out, "%", document[at:end])
+            first = false
+        }
+        at = Space(document, end)
+        if at >= 0 && at < cast(s32)document.count && document[at] == cast(u8)44 { at = Space(document, at + 1) }
+    }
+    BuilderPrint(out, "%\"updated_at\":%}", ifx first then "" else ",", updated_at)
+    return true
+}
+
+RecordsList :: (request: string, kind: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"done\",\"account\":\"%\",\"records\":[", RecordsAccount())
+    fields_at := FieldAt(request, 0, "fields")
+    fields: [16]s32
+    field_count := ifx fields_at >= 0 && request[fields_at] == cast(u8)91 then ArrayPositions(request, fields_at, fields[:]) else 0
+    first := true
+    owner := TextUntilNul(records_owner[:])
+    for index: cast(s32)0..records_count - 1 {
+        entry := *records_entries[index]
+        if entry.kind != kind || entry.deleted { continue }
+        BuilderPrint(*out, "%{\"id\":\"%\",\"schema\":\"%\",\"updated_at\":%", ifx first then "" else ",",
+            TextUntilNul(entry.id[:]), TextUntilNul(entry.schema[:]), entry.updated_at)
+        first = false
+        if field_count > 0 {
+            document := RecordsReadDocument(owner, kind, TextUntilNul(entry.id[:]))
+            for field: cast(s32)0..field_count - 1 {
+                name: [64]u8
+                length := ReadStringText(request, fields[field], name[:])
+                if length <= 0 || TextView(name[0:length]) == "id" || TextView(name[0:length]) == "schema" ||
+                TextView(name[0:length]) == "updated_at" { continue }
+                value := FieldAt(document, 0, TextView(name[0:length]))
+                end := ifx value < 0 then -1 else ValueEnd(document, value, 0)
+                if end < 0 || document[value] == cast(u8)123 || document[value] == cast(u8)91 { continue }
+                BuilderPrint(*out, ",")
+                EntityQuote(*out, TextView(name[0:length]))
+                BuilderPrint(*out, ":%", document[value:end])
+            }
+        }
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]}")
+    return RecordsAnswer(*out)
+}
+
+RecordsGet :: (kind: s32, id: string) -> string {
+    at := RecordsFind(kind, id)
+    if at < 0 || records_entries[at].deleted { return RecordsText("{\"status\":\"missing\"}") }
+    document := RecordsReadDocument(TextUntilNul(records_owner[:]), kind, id)
+    if document == "" { return RecordsText("{\"status\":\"missing\"}") }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"done\",\"id\":\"%\",\"schema\":\"%\",\"updated_at\":%,\"document\":%}",
+        id, TextUntilNul(records_entries[at].schema[:]), records_entries[at].updated_at, document)
+    return RecordsAnswer(*out)
+}
+
+// The next change time: never earlier than the record's last one.
+RecordsChangeTime :: (at: s32) -> s64 {
+    now := RecordsNow()
+    if at >= 0 && records_entries[at].changed >= now { now = records_entries[at].changed + 1 }
+    return now
+}
+
+RecordsPut :: (request: string, kind: s32) -> string {
+    schema_bytes: [RECORDS_SCHEMA_MAX + 2]u8
+    id_bytes: [40]u8
+    schema := RecordsString(request, "schema", schema_bytes[:])
+    if !RecordsSchemaValid(schema) { return RecordsRejected("invalid schema") }
+    drawn: [40]u8
+    if FieldAt(request, 0, "id") < 0 {
+        random: [16]u8
+        if SecureRandom(*random[0], random.count) == 0 { return RecordsRejected("no random id") }
+        BytesToHex(*random[0], random.count, *drawn[0], drawn.count)
+    }
+    id := ifx drawn[0] != cast(u8)0 then TextUntilNul(drawn[:]) else RecordsString(request, "id", id_bytes[:])
+    if !RecordsIdValid(id) { return RecordsRejected("invalid id") }
+    document_at := FieldAt(request, 0, "document")
+    document_end := ifx document_at < 0 then -1 else ValueEnd(request, document_at, 0)
+    if document_end < 0 || request[document_at] != cast(u8)123 { return RecordsRejected("the document must be an object") }
+    if document_end - document_at > RECORDS_DOCUMENT_MAX { return RecordsRejected("the document is too large") }
+    at := RecordsFind(kind, id)
+    if at < 0 && records_count >= RECORDS_ENTRIES { return RecordsRejected("too many records") }
+    changed := RecordsChangeTime(at)
+    updated_at := changed / 1000
+    plain: Vec(u8)
+    if !RecordsPlain(request[document_at:document_end], updated_at, *plain) { VecFree(plain); return RecordsRejected("the document must be an object") }
+    text := BuilderFinish(plain)
+    defer { EntityFree(text) }
+    owner := TextUntilNul(records_owner[:])
+    if !RecordsWriteDocument(owner, kind, id, text) { return RecordsRejected("the record could not be saved") }
+    if at < 0 {
+        at = records_count
+        records_count += 1
+        records_entries[at] = RecordsEntry.{.kind = kind}
+        unused CopyCString(id, records_entries[at].id[:])
+    }
+    previous := records_entries[at]
+    unused CopyCString(schema, records_entries[at].schema[:])
+    records_entries[at].updated_at = updated_at
+    records_entries[at].changed = changed
+    records_entries[at].deleted = false
+    records_entries[at].dirty = true
+    if !RecordsSaveIndex(kind) {
+        records_entries[at] = previous
+        return RecordsRejected("the record could not be saved")
+    }
+    records_due = changed + RECORDS_DELAY
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"done\",\"id\":\"%\",\"updated_at\":%}", id, updated_at)
+    return RecordsAnswer(*out)
+}
+
+RecordsDelete :: (kind: s32, id: string) -> string {
+    at := RecordsFind(kind, id)
+    if at < 0 || records_entries[at].deleted { return RecordsText("{\"status\":\"done\"}") }
+    previous := records_entries[at]
+    records_entries[at].changed = RecordsChangeTime(at)
+    records_entries[at].updated_at = records_entries[at].changed / 1000
+    records_entries[at].deleted = true
+    records_entries[at].dirty = true
+    if !RecordsSaveIndex(kind) {
+        records_entries[at] = previous
+        return RecordsRejected("the record could not be deleted")
+    }
+    RecordsRemoveDocument(TextUntilNul(records_owner[:]), kind, id)
+    records_due = records_entries[at].changed + RECORDS_DELAY
+    return RecordsText("{\"status\":\"done\"}")
+}
+
+// The text a request answers, valid until the next request.
+EntityRecordsAnswer :: (request: string) -> string {
+    if account_root[0] == cast(u8)0 { return RecordsRejected("no account folder") }
+    RecordsOpen()
+    if Space(request, 0) != 0 || request.count < 2 || request[0] != cast(u8)123 ||
+    ValueEnd(request, 0, 0) != cast(s32)request.count { return RecordsRejected("malformed request") }
+    operation_bytes: [16]u8
+    operation := RecordsString(request, "operation", operation_bytes[:])
+    if operation == "status" {
+        pending: s32 = 0
+        for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty { pending += 1 } }
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"status\":\"done\",\"account\":\"%\",\"sync\":\"%\",\"pending\":%,\"revision\":%}",
+            RecordsAccount(), RecordsStatusName(), pending, records_revision)
+        return RecordsAnswer(*out)
+    }
+    kind_bytes: [64]u8
+    kind := RecordsServe(RecordsString(request, "kind", kind_bytes[:]))
+    if kind < 0 { return RecordsRejected("invalid kind") }
+    if operation == "list" { return RecordsList(request, kind) }
+    if operation == "put" { return RecordsPut(request, kind) }
+    id_bytes: [40]u8
+    id := RecordsString(request, "id", id_bytes[:])
+    if !RecordsIdValid(id) { return RecordsRejected("invalid id") }
+    if operation == "get" { return RecordsGet(kind, id) }
+    if operation == "delete" { return RecordsDelete(kind, id) }
+    return RecordsRejected("unsupported operation")
+}
+
+// ---------------------------------------------------------------------------
+// Sync: the account's signed v6 sync as the entity app.
+
+RecordsDigits :: (output: []u8, at: s64, value: s64, width: s64) {
+    index := width - 1
+    remaining := value
+    while index >= 0 {
+        output[at + index] = cast(u8)(48 + remaining % 10)
+        remaining = remaining / 10
+        index -= 1
+    }
+}
+
+// RFC 3339 UTC time of a Unix time in milliseconds, as the node keeps it.
+RecordsUtc :: (milliseconds: s64, output: []u8) -> string {
+    seconds := milliseconds / 1000
+    days := seconds / 86400
+    rest := seconds % 86400
+    shifted := days + 719468
+    era := shifted / 146097
+    day_of_era := shifted - era * 146097
+    year_of_era := (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+    year := year_of_era + era * 400
+    day_of_year := day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+    month_index := (5 * day_of_year + 2) / 153
+    day := day_of_year - (153 * month_index + 2) / 5 + 1
+    month := ifx month_index < 10 then month_index + 3 else month_index - 9
+    if month <= 2 { year += 1 }
+    if output.count < 25 { return "" }
+    RecordsDigits(output, 0, year, 4)
+    output[4] = cast(u8)45
+    RecordsDigits(output, 5, month, 2)
+    output[7] = cast(u8)45
+    RecordsDigits(output, 8, day, 2)
+    output[10] = cast(u8)84
+    RecordsDigits(output, 11, rest / 3600, 2)
+    output[13] = cast(u8)58
+    RecordsDigits(output, 14, rest % 3600 / 60, 2)
+    output[16] = cast(u8)58
+    RecordsDigits(output, 17, rest % 60, 2)
+    output[19] = cast(u8)46
+    RecordsDigits(output, 20, milliseconds % 1000, 3)
+    output[23] = cast(u8)90
+    output[24] = cast(u8)0
+    return TextView(output[0:24])
+}
+
+RecordsDigitsAt :: (text: string, at: s64, width: s64) -> s64 {
+    if at + width > text.count { return -1 }
+    return RecordsNumber(text[at:at + width])
+}
+
+// Milliseconds of an RFC 3339 UTC time (YYYY-MM-DDTHH:MM:SS[.fff…]Z), or -1.
+RecordsTime :: (text: string) -> s64 {
+    year := RecordsDigitsAt(text, 0, 4)
+    month := RecordsDigitsAt(text, 5, 2)
+    day := RecordsDigitsAt(text, 8, 2)
+    hour := RecordsDigitsAt(text, 11, 2)
+    minute := RecordsDigitsAt(text, 14, 2)
+    second := RecordsDigitsAt(text, 17, 2)
+    if year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 ||
+    minute > 59 || second < 0 || second > 60 || text[4] != cast(u8)45 || text[10] != cast(u8)84 { return -1 }
+    milliseconds: s64 = 0
+    if text.count > 20 && text[19] == cast(u8)46 {
+        scale: s64 = 100
+        at: s64 = 20
+        while at < text.count && text[at] >= cast(u8)48 && text[at] <= cast(u8)57 {
+            milliseconds += cast(s64)(text[at] - cast(u8)48) * scale
+            scale /= 10
+            at += 1
+        }
+    }
+    shifted_year := ifx month <= 2 then year - 1 else year
+    era := shifted_year / 400
+    year_of_era := shifted_year - era * 400
+    month_shift := ifx month > 2 then month - 3 else month + 9
+    day_of_year := (153 * month_shift + 2) / 5 + day - 1
+    day_of_era := year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
+    days := era * 146097 + day_of_era - 719468
+    return ((days * 86400 + hour * 3600 + minute * 60 + second) * 1000) + milliseconds
+}
+
+RecordsDigest :: (body: string, output: []u8) -> bool {
+    if body.count == 0 || output.count < 65 { return false }
+    descriptor := cast(*TextDescriptor)(*body)
+    Sha256Hex(descriptor.data, body.count, *output[0])
+    return output[0] != cast(u8)0
+}
+
+RecordsNonce :: (context: *void, output: []u8) -> bool {
+    if output.count < 65 { return false }
+    random: [32]u8
+    if SecureRandom(*random[0], random.count) == 0 { return false }
+    BytesToHex(*random[0], random.count, *output[0], output.count)
+    SecureWipe(*random[0], random.count)
+    return true
+}
+
+RecordsSignDevice :: (context: *void, message: string, output: []u8) -> bool {
+    if message.count == 0 || output.count < 129 { return false }
+    signature: [64]u8
+    descriptor := cast(*TextDescriptor)(*message)
+    RecordsDeviceSign(*signature[0], *records_device_secret[0], descriptor.data, cast(usize)message.count)
+    BytesToHex(*signature[0], 64, *output[0], output.count)
+    return true
+}
+
+// This installation's Ed25519 device key, kept beside the account key.
+RecordsDeviceReady :: () -> bool {
+    if records_device_id[0] != cast(u8)0 { return true }
+    path: [4096]u8
+    text: [80]u8
+    seed: [32]u8
+    defer { SecureWipe(*seed[0], 32); SecureWipe(*text[0], text.count) }
+    address := AccountStorePath("device.key", path[:])
+    if NativeRead(address, text[:]) != 64 || HexToBytes(TextUntilNul(text[:]), *seed[0], 32) != 1 {
+        if SecureRandom(*seed[0], 32) == 0 { return false }
+        BytesToHex(*seed[0], 32, *text[0], text.count)
+        if !NativeWrite(address, TextUntilNul(text[:])) || !AccountStorePersist() { return false }
+    }
+    public_key: [32]u8
+    RecordsDeviceKeyPair(*records_device_secret[0], *public_key[0], *seed[0])
+    BytesToHex(*public_key[0], 32, *records_device_public[0], records_device_public.count)
+    Sha256Hex(*public_key[0], 32, *records_device_id[0])
+    return records_device_id[0] != cast(u8)0
+}
+
+RecordsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*records_transfer, request, output, 30000)
+}
+RecordsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*records_transfer, status) }
+RecordsCancel :: (context: *void) { HttpTransferCancel(*records_transfer) }
+
+// One dirty record as the sync request carries it, sealed now; false when
+// it cannot be sealed.
+RecordsUploadText :: (index: s32, out: *Vec(u8)) -> bool {
+    entry := *records_entries[index]
+    collection_bytes: [96]u8
+    collection := EntityRecordCollection(RecordsKindName(entry.kind), collection_bytes[:])
+    time_bytes: [32]u8
+    time := RecordsUtc(entry.changed, time_bytes[:])
+    if collection == "" || time == "" { return false }
+    if entry.deleted {
+        BuilderPrint(out, "{\"collection\":\"%\",\"id\":\"%\",\"key_id\":\"entity-v1\",\"updated_at\":\"%\",\"deleted_at\":%}",
+            collection, TextUntilNul(entry.id[:]), time, entry.changed)
+        return true
+    }
+    path: [4096]u8
+    length := NativeRead(RecordsDocumentPath(TextUntilNul(records_owner[:]), entry.kind, TextUntilNul(entry.id[:]), path[:]),
+        records_file[:])
+    if length <= 0 || cast(s64)length > ENTITY_RECORD_PLAIN_MAX { return false }
+    nonce: [ENTITY_RECORD_NONCE_BYTES]u8
+    if SecureRandom(*nonce[0], nonce.count) == 0 { return false }
+    metadata := EntityRecordMetadata.{.account_id = TextUntilNul(records_owner[:]), .kind = RecordsKindName(entry.kind),
+        .id = TextUntilNul(entry.id[:]), .schema = TextUntilNul(entry.schema[:])}
+    sealed := SealEntityRecord(records_private[:], metadata, records_file[0:length], nonce[:], records_seal[:], records_sealed_text[:])
+    if sealed < 0 { return false }
+    nonce_bytes: [40]u8
+    BuilderPrint(out, "{\"collection\":\"%\",\"id\":\"%\",\"key_id\":\"entity-v1\",\"nonce\":\"%\",\"ciphertext\":\"%\",\"updated_at\":\"%\",\"schema_version\":1}",
+        collection, TextUntilNul(entry.id[:]), EntityRecordNonceText(nonce[:], nonce_bytes[:]),
+        TextView(records_sealed_text[0:sealed]), time)
+    return true
+}
+
+// The request body: this device's unsynced records, as many as fit.
+RecordsBody :: () -> bool {
+    EntityFree(records_request)
+    records_request = ""
+    records_upload_count = 0
+    if HexToBytes(TextUntilNul(account_recovery.keys.private_key_hex[:]), *records_private[0], records_private.count) != 1 { return false }
+    defer { SecureWipe(*records_private[0], records_private.count) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"protocol_version\":6,\"app_id\":\"entity\",\"user_id_hash\":\"%\",\"client_id\":\"%\",\"since_server_version\":%,\"encrypted_records_only\":true,\"record_limit\":16",
+        TextUntilNul(records_owner[:]), TextUntilNul(account_client_id[:]), records_since)
+    if records_cursor[0] != cast(u8)0 { BuilderPrint(*out, ",\"record_cursor\":%", TextUntilNul(records_cursor[:])) }
+    BuilderPrint(*out, ",\"encrypted_records\":[")
+    size: s64 = 400
+    for index: cast(s32)0..records_count - 1 {
+        if records_upload_count >= RECORDS_UPLOADS { break }
+        if !records_entries[index].dirty { continue }
+        record: Vec(u8)
+        sealed := RecordsUploadText(index, *record)
+        text := BuilderFinish(record)
+        if !sealed { EntityFree(text); continue }
+        // The node reads bodies of at most 1 MiB.
+        if size + text.count + 1 > RECORDS_BODY_MAX && records_upload_count > 0 { EntityFree(text); break }
+        if records_upload_count > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "%", text)
+        size += text.count + 1
+        EntityFree(text)
+        records_uploads[records_upload_count] = RecordsUpload.{.entry = index, .changed = records_entries[index].changed}
+        records_upload_count += 1
+    }
+    BuilderPrint(*out, "]}")
+    records_request = BuilderFinish(out)
+    return true
+}
+
+// One record from the node, opened with the record key of its kind; the
+// later change wins. Records altered in transit or of other kinds stay out.
+RecordsApply :: (text: string, at: s32) -> bool {
+    collection_bytes: [96]u8
+    id_bytes: [40]u8
+    key_bytes: [32]u8
+    time_bytes: [48]u8
+    collection_length := ReadStringText(text, FieldAt(text, at, "collection"), collection_bytes[:])
+    if collection_length <= 0 { return false }
+    kind := RecordsKindIndex(EntityRecordKind(TextView(collection_bytes[0:collection_length])))
+    id_length := ReadStringText(text, FieldAt(text, at, "id"), id_bytes[:])
+    time_length := ReadStringText(text, FieldAt(text, at, "updated_at"), time_bytes[:])
+    if kind < 0 || id_length != 32 || time_length < 20 { return false }
+    id := TextView(id_bytes[0:id_length])
+    changed := RecordsTime(TextView(time_bytes[0:time_length]))
+    if !RecordsIdValid(id) || changed < 0 { return false }
+    found := RecordsFind(kind, id)
+    if found >= 0 && records_entries[found].changed >= changed { return false }
+    if found < 0 && records_count >= RECORDS_ENTRIES { return false }
+    owner := TextUntilNul(records_owner[:])
+    deleted := ReadNumber(text, FieldAt(text, at, "deleted_at"))
+    entry := RecordsEntry.{.kind = kind, .changed = changed, .updated_at = changed / 1000}
+    unused CopyCString(id, entry.id[:])
+    if deleted.valid && deleted.value != 0.0 {
+        if found < 0 { return false }
+        entry.schema = records_entries[found].schema
+        entry.deleted = true
+        RecordsRemoveDocument(owner, kind, id)
+    } else {
+        if ReadStringText(text, FieldAt(text, at, "key_id"), key_bytes[:]) < 0 || TextUntilNul(key_bytes[:]) != ENTITY_RECORD_KEY_ID { return false }
+        cipher := ReadString(text, FieldAt(text, at, "ciphertext"))
+        if !cipher.valid { return false }
+        envelope := EntityRecordEnvelope(text[cipher.start:cipher.end], records_envelope[:])
+        if envelope < 0 { return false }
+        metadata := EntityRecordMetadata.{.account_id = owner, .kind = RecordsKindName(kind), .id = id}
+        if HexToBytes(TextUntilNul(account_recovery.keys.private_key_hex[:]), *records_private[0], records_private.count) != 1 { return false }
+        plain := OpenEntityRecord(records_private[:], metadata, TextView(records_envelope[0:envelope]), entry.schema[:], records_seal[:])
+        SecureWipe(*records_private[0], records_private.count)
+        if plain < 0 || !RecordsSchemaValid(TextUntilNul(entry.schema[:])) { return false }
+        document := TextView(records_seal[0:plain])
+        stamp := ReadNumber(document, FieldAt(document, 0, "updated_at"))
+        if stamp.valid && stamp.value > 0.0 { entry.updated_at = cast(s64)stamp.value }
+        if !RecordsWriteDocument(owner, kind, id, document) { return false }
+    }
+    if found < 0 { found = records_count; records_count += 1 }
+    records_entries[found] = entry
+    return true
+}
+
+// The node's answer: the records sent are kept, its records merged, and the
+// next page or the version reached remembered.
+RecordsAccept :: () -> bool {
+    text := TextUntilNul(records_output)
+    version := ReadNumber(text, FieldAt(text, 0, "server_version"))
+    if !version.valid { return false }
+    for index: cast(s32)0..records_upload_count - 1 {
+        upload := records_uploads[index]
+        if upload.entry < records_count && records_entries[upload.entry].changed == upload.changed {
+            records_entries[upload.entry].dirty = false
+        }
+    }
+    changed := false
+    changes := FieldAt(text, 0, "changes")
+    records := ifx changes < 0 then -1 else FieldAt(text, changes, "encrypted_records")
+    if records >= 0 && text[records] == cast(u8)91 {
+        positions: [256]s32
+        count := ArrayPositions(text, records, positions[:])
+        for element: cast(s32)0..count - 1 {
+            if element < 256 && RecordsApply(text, positions[element]) { changed = true }
+        }
+    }
+    if changed { records_revision += 1 }
+    for kind: cast(s32)0..records_kind_count - 1 { if !RecordsSaveIndex(kind) { return false } }
+    cursor := FieldAt(text, 0, "record_cursor")
+    records_cursor = .{}
+    if cursor >= 0 && text[cursor] == cast(u8)123 {
+        end := ValueEnd(text, cursor, 0)
+        if end > cursor && end - cursor < 511 { unused CopyCString(text[cursor:end], records_cursor[:]) }
+        return true
+    }
+    complete := FieldAt(text, 0, "changes_complete")
+    if complete < 0 || MatchLiteral(text, complete, "true") { records_since = cast(s64)version.value }
+    return RecordsSaveKinds()
+}
+
+RecordsRound :: () -> bool {
+    if records_output.count == 0 {
+        data := RecordsAllocate(cast(usize)RECORDS_OUTPUT_MAX)
+        if data == null { return false }
+        records_output = BytesFromPointer(data, cast(u64)RECORDS_OUTPUT_MAX)
+    }
+    if !RecordsBody() || records_request == "" { return false }
+    client: Client
+    if !AccountStoreClient(null, *client) { return false }
+    client.app_id = ENTITY_RECORD_APP
+    client.digest = RecordsDigest
+    if TextUntilNul(records_session_owner[:]) != TextUntilNul(records_owner[:]) {
+        records_session = Auth.Session.{}
+        records_session_owner = records_owner
+    }
+    device := Device.{.key_id = TextUntilNul(records_device_id[:]), .public_key_hex = TextUntilNul(records_device_public[:]),
+        .signer = RecordsSignDevice}
+    transport := AsyncTransport.{.start = RecordsStart, .poll = RecordsPoll, .cancel = RecordsCancel}
+    records_rounds += 1
+    records_output[0] = cast(u8)0
+    return BeginSync(*records_pending, client, *records_session, device, UnixNow(), null, RecordsNonce, transport,
+        records_request, records_output)
+}
+
+// Advances the sync; hosts call it once per frame. A sync starts soon after
+// a change and at least once a minute while the account is connected.
+EntityRecordsPump :: () {
+    if account_root[0] == cast(u8)0 { return }
+    RecordsOpen()
+    if TextUntilNul(records_owner[:]) == "local" || records_kind_count == 0 { return }
+    now := RecordsNow()
+    if !records_running {
+        if !((records_due >= 0 && now >= records_due) || now - records_last >= RECORDS_INTERVAL) { return }
+        records_due = -1
+        records_last = now
+        // A sync that stopped between pages goes on from its page.
+        records_rounds = 0
+        if !RecordsDeviceReady() || !RecordsRound() { records_failed = true; return }
+        records_running = true
+        return
+    }
+    if !PollSync(*records_pending) { return }
+    records_running = false
+    if records_pending.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK || !RecordsAccept() {
+        records_failed = true
+        return
+    }
+    records_failed = false
+    more := records_cursor[0] != cast(u8)0 || records_upload_count == RECORDS_UPLOADS
+    for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty && records_upload_count > 0 { more = true; break } }
+    if more && records_rounds < 200 {
+        if !RecordsRound() { records_failed = true; return }
+        records_running = true
+        return
+    }
+    records_completed += 1
+}

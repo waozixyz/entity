@@ -80,6 +80,20 @@ QR payloads, cancellation, one-time actions and account-scoped persistence.
 `scripts/native_ui_test.py` checks the standalone native account flows and must
 run with `ENTITY_PRIVATE_DISPLAY=1` on a private Xvfb display.
 
+## Entity records
+
+The `entity.records` app service (`entity/entity_records`) keeps the account's
+own records of each kind an app names, such as Shovey's level drafts in
+`private.entity.v1.levels` (Daochi `docs/entity-data.md`). Requests (`list`,
+`get`, `put`, `delete`, `status`) answer at once from the device's copy, so a
+save never waits for the node; the native host then syncs the records in the
+account's signed sync as the `entity` app, sealed with the record key of
+their kind. Records saved before an account is connected stay on the device
+and become that account's own once it is. Documents are JSON objects of at
+most 140 KiB. Native hosts route the service and call `EntityHostPump` each
+frame. `make records-test` checks one device and two devices of a throwaway
+account through a private local Daochi node.
+
 ## Standalone hosts and Dew
 
 The `entity/native_host` export opens the same profile bundle for native hosts.
