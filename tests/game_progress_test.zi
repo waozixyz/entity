@@ -1,6 +1,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "game_progress"
+#import "game_progress_id"
 #import "model"
 
 #program_export

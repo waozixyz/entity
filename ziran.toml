@@ -26,6 +26,7 @@ browser_host = "src/browser_host.zi"
 publications_read = "src/publications_read.zi"
 entity_records = "src/entity_records.zi"
 game_progress = "src/game_progress.zi"
+game_progress_id = "src/game_progress_id.zi"
 pairing = "src/pairing.zi"
 pairing_client = "src/pairing_client.zi"
 

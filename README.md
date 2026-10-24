@@ -125,10 +125,12 @@ this provider for browser applications with the locked cryptography packages.
 ## Shared game progress
 
 `entity/game_progress` defines `entity.game-progress.v1` records in the
-`game-progress` kind. `GameProgressID(game, output)` derives one stable 32-digit
+`game-progress` kind. Native account providers use `entity/game_progress_id` to derive one stable 32-digit
 record ID from the game's stable name, independent of its wrapper or device.
 The record service derives this ID when omitted and rejects another ID, so
-standalone and hosted games use the same account record.
+standalone and hosted games use the same account record. Portable games get
+that record with `{"operation":"get","kind":"game-progress","game":NAME}`;
+they do not implement record IDs or account cryptography.
 
 A document contains `game`, `unlocked` (1–4096), a `completed` string of up to
 4096 zero/one marks, an opaque `state` string (up to 8192 bytes), and

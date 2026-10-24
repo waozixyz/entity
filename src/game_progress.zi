@@ -4,7 +4,6 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
-#import "daochi_client/crypto"
 #import, file "model.zi";
 
 GAME_PROGRESS_KIND :: "game-progress"
@@ -26,31 +25,6 @@ GameProgressGameValid :: (game: string) -> bool {
         if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
             (byte >= #char "0" && byte <= #char "9") || byte == #char "." || byte == #char "-" || byte == #char "_") { return false }
     }
-    return true
-}
-
-// Every host derives the same record ID for one game. The account remains
-// the record's owner; no device, installation or wrapper goes into its ID.
-GameProgressID :: (game: string, output: []u8) -> bool {
-    if output.count < 33 || !GameProgressGameValid(game) { return false }
-    context: Sha256Context
-    Sha256Initialize(*context)
-    for byte: "waozi.game-progress.v1:" {
-        one: [1]u8 = .[byte]
-        Sha256Update(*context, *one[0], 1)
-    }
-    for byte: game {
-        one: [1]u8 = .[byte]
-        Sha256Update(*context, *one[0], 1)
-    }
-    digest: [32]u8
-    Sha256Finish(*context, *digest[0])
-    alphabet := "0123456789abcdef"
-    for index: cast(s32)0..15 {
-        output[index * 2] = alphabet[digest[index] >> 4]
-        output[index * 2 + 1] = alphabet[digest[index] & 15]
-    }
-    output[32] = 0
     return true
 }
 

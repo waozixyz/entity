@@ -24,6 +24,7 @@
 #import "native_files"
 #import "model"
 #import "game_progress"
+#import "game_progress_id"
 #import "std/file"
 #import "std/json_scan"
 #import "std/text_buffer"
