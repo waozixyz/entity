@@ -92,10 +92,23 @@ EntityHostAssetAllowed :: (path: string) -> bool {
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
 }
 
+// A key or connection code someone copied, read here so it never passes
+// through the profile bundle.
+EntityHostPaste :: (context: *void, output: []u8) -> bool {
+    if output.count < 2 { return false }
+    length := EntityHostClipboardLength(output[:output.count - 1])
+    output[length] = cast(u8)0
+    return length > 0
+}
+EntityHostClipboardLength :: (buffer: []u8) -> s64 {
+    return SystemClipboardText(buffer).count
+}
+
 EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigation: bool = false) -> bool {
     entity_host_navigation = host_navigation
     entity_host_game = client_id == "arcade"
     if !AccountStoreStartAt(root, client_id) || !CopyCString(root, asset_folder[:]) { return false }
+    account_provider.paste = EntityHostPaste
     portable = AppContext.{.expected_id = "entity", .allows = EntityHostAllows,
         .services = EntityHostServices, .widgets = WidgetHostCall}
     if !AppContextOpen(*portable, bytes) { return false }

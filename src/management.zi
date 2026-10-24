@@ -18,6 +18,8 @@ ACCOUNT_LOGOUT :: 128
 ACCOUNT_CLEAR_REMOTE :: 256
 ACCOUNT_SWITCH :: 512
 NODE_MEDIA :: 1024
+// The host reads a key or connection code from the system clipboard itself.
+ACCOUNT_PASTE :: 2048
 
 ManagementNode :: struct {
     address: [256]u8
@@ -80,6 +82,7 @@ ManagementOperation :: (operation: string) -> s32 {
     if operation == "link_show" || operation == "link_join" ||
     operation == "link_confirm" || operation == "link_cancel" { return ACCOUNT_LINK }
     if operation == "link_scan" { return ACCOUNT_SCAN }
+    if operation == "import_paste" || operation == "link_paste" { return ACCOUNT_PASTE }
     if operation == "logout" { return ACCOUNT_LOGOUT }
     if operation == "clear_remote" { return ACCOUNT_CLEAR_REMOTE }
     if operation == "switch_apply" || operation == "switch_cancel" { return ACCOUNT_SWITCH }
@@ -214,7 +217,7 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     account := ManagementReadNumber(text, "account", 0, 1)
     busy := ManagementReadNumber(text, "busy", 0, 1)
     enabled := ManagementReadNumber(text, "enabled", 0, 1)
-    state.capabilities = ManagementReadNumber(text, "capabilities", 0, 2047)
+    state.capabilities = ManagementReadNumber(text, "capabilities", 0, 4095)
     state.sequence = ManagementReadNumber(text, "sequence", 0, 2147483646)
     state.completed = ManagementReadNumber(text, "completed", 0, 2147483646)
     state.queued = ManagementReadNumber(text, "queued", 0, 2147483646)

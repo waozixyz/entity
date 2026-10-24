@@ -29,6 +29,10 @@ Auth :: #import "daochi_client/auth";
 #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
     Dialog :: #import "file_dialog_linux";
 }
+#if #defined(ANDROID_BUILD) {
+    // Android's document pickers answer later, through the activity.
+    #import "kryon/android_picker"
+}
 
 account_profile: EntityState;
 account_recovery: Recovery;
@@ -39,6 +43,18 @@ account_standalone_ready: bool;
 account_root: [4096]u8;
 account_client_id: [64]u8;
 account_application_id: [64]u8;
+// What the account's node last reported, for the node list.
+account_node_connected: bool;
+account_node_used: s64;
+account_node_limit: s64;
+ACCOUNT_PICKER_REQUEST :: 7401
+account_picker_open: bool;
+account_picker_save: bool;
+// 0 waiting, 1 chosen, 2 cancelled, 3 failed.
+account_picker_result: s32;
+account_picker_path: [512]u8;
+// The private copy of an opened key file, removed once it has been read.
+account_picker_copy: [512]u8;
 
 AccountStorePath :: (name: string, output: []u8) -> string {
     return NativeJoin(output, TextUntilNul(account_root[:]), name)
@@ -48,7 +64,23 @@ AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         return PickFile(FilePickerProps.{.title = ifx save then "Back up account key" else "Import account key",
                 .filter = "Account keys | *.key *.json", .suggested_name = "entity-account.key", .save = save}, output)
     } else #if #defined(ANDROID_BUILD) {
-        return -1
+        if account_picker_result != 0 {
+            result := account_picker_result
+            account_picker_result = 0
+            if result != 1 { return ifx result == 2 then 0 else -1 }
+            if !save { account_picker_copy = account_picker_path }
+            return ifx CopyCString(TextUntilNul(account_picker_path[:]), output) then 1 else -1
+        }
+        opened := false
+        if save {
+            opened = AndroidSavePickerOpen(ACCOUNT_PICKER_REQUEST, "entity-account.key", "application/octet-stream")
+        } else {
+            opened = AndroidPickerOpen(ACCOUNT_PICKER_REQUEST, "*/*")
+        }
+        if !opened { return -1 }
+        account_picker_open = true
+        account_picker_save = save
+        return 2
     } else {
         patterns: [2]string = .["*.key", "*.json"]
         props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
@@ -77,6 +109,9 @@ AccountStoreDeliverFile :: (context: *void, path: string) -> bool {
         unused WebCall1(urls, WebName("revokeObjectURL"), url)
         unused RemoveFile(path)
         return !WebFailed()
+    } else #if #defined(ANDROID_BUILD) {
+        // The backup was written to the picker's staging file.
+        return AndroidSavePickerCommit(path)
     } else {
         return true
     }
@@ -135,16 +170,20 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
     output.public_id = account_recovery.keys.public_id
     output.alias = account_alias
     output.capabilities = ACCOUNT_CREATE | ACCOUNT_IMPORT | ACCOUNT_SWITCH | ACCOUNT_LINK
+    // Hosts with a clipboard hand the provider their paste.
+    if account_provider.paste != null { output.capabilities |= ACCOUNT_PASTE }
     if account_standalone_ready { output.capabilities |= ACCOUNT_BACKUP | ACCOUNT_ALIAS | ACCOUNT_LOGOUT | ACCOUNT_CLEAR_REMOTE }
-    #if #defined(ANDROID_BUILD) {
-        output.capabilities &= ~(ACCOUNT_IMPORT | ACCOUNT_BACKUP)
-    }
     output.node_count = account_profile.node_count
     for index: 0..output.node_count - 1 {
         output.nodes[index].address = account_profile.nodes[index]
-        // Standalone Entity shares public preferences locally; it does not
-        // claim a sync connection or storage quota it has not fetched.
-        output.nodes[index].active = false
+        // Connected only once the node has answered for this account; no
+        // sync or quota is claimed before then.
+        if account_standalone_ready && account_node_connected && index == account_profile.preferred {
+            output.nodes[index].active = true
+            output.nodes[index].known = account_node_limit > 0
+            output.nodes[index].used = account_node_used
+            output.nodes[index].limit = account_node_limit
+        }
     }
     unused CopyCString(ifx account_standalone_ready then "Account connected on this device" else "Connect an account to share your profile", output.status[:])
     output.link_stage = cast(s32)device_link.stage
@@ -270,14 +309,36 @@ AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])
     unused SharedProfileLoad(TextUntilNul(account_recovery.keys.public_id[:]), *account_profile)
     account_provider = ManagementProvider.{.snapshot = AccountStoreSnapshot, .load = AccountStoreLoad,
-        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient, .choose_file = AccountStoreChooseFile, .deliver_file = AccountStoreDeliverFile}
+        .apply = AccountStoreApply, .action = AccountStoreAction, .client = AccountStoreClient, .choose_file = AccountStoreChooseFile,
+        .deliver_file = AccountStoreDeliverFile}
     AccountStoreReadAlias()
     pairing_load = AccountStoreLoad
     pairing_server = AccountStoreServer
     return true
 }
 AccountStorePump :: () {
+    #if #defined(ANDROID_BUILD) {
+        if account_picker_open {
+            path: [512]u8
+            answer := AndroidPickerPoll(ACCOUNT_PICKER_REQUEST, path[:])
+            if answer != AndroidPickerResult.AndroidPickerNone {
+                account_picker_open = false
+                account_picker_path = path
+                account_picker_result = 1
+                if path[0] == cast(u8)0 { account_picker_result = 3 }
+                if answer == AndroidPickerResult.AndroidPickerCancelled { account_picker_result = 2 }
+                // The import or backup resumes with the answer.
+                account_provider.delegated = false
+            }
+        }
+    }
     ProviderPump(*account_provider)
+    #if #defined(ANDROID_BUILD) {
+        if account_picker_copy[0] != cast(u8)0 && !account_provider.delegated {
+            unused RemoveFile(TextUntilNul(account_picker_copy[:]))
+            account_picker_copy = .{}
+        }
+    }
     DeviceLinkPump()
     if cast(s32)device_link.stage == 8 && !account_pairing_delivered {
         account_provider.incoming.keys = device_link_pending.account

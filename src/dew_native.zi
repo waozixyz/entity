@@ -50,6 +50,7 @@ DewReset :: () {
     dew_address = .{}
     dew_attempt = .{}
     dew_error = false
+    account_node_connected = false
 }
 
 DewAttemptPath :: (output: []u8) -> string {
@@ -138,6 +139,9 @@ DewPump :: () {
                 if DewParseAccount(TextUntilNul(dew_response[:]), TextUntilNul(dew_owner[:]), *account) {
                     dew_plan = dew_response
                     dew_error = false
+                    account_node_connected = true
+                    account_node_used = account.used_bytes
+                    account_node_limit = account.limit_bytes
                     if purchase_request {
                         path: [4096]u8
                         if NativeWrite(DewAttemptPath(path[:]), "{}") { dew_attempt = .{} }

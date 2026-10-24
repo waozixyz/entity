@@ -26,6 +26,8 @@ ProviderClient :: #type (context: *void, output: *Client) -> bool;
 // A host resumes a pending picker by clearing delegated before its next pump.
 ProviderFile :: #type (context: *void, save: bool, output: []u8) -> s32;
 ProviderDeliver :: #type (context: *void, path: string) -> bool;
+// Copies the system clipboard's text into output; false when it has none.
+ProviderPaste :: #type (context: *void, output: []u8) -> bool;
 
 ManagementProvider :: struct {
     context: *void
@@ -36,6 +38,7 @@ ManagementProvider :: struct {
     client: ProviderClient
     choose_file: ProviderFile
     deliver_file: ProviderDeliver
+    paste: ProviderPaste
     queue: ManagementQueue
     incoming: Recovery
     has_incoming: bool
@@ -115,10 +118,34 @@ ProviderImport :: (provider: *ManagementProvider, passphrase: string) {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     if NativeRead(TextUntilNul(path[:]), text[:]) <= 0 { ProviderFinish(provider, "error", "Could not read the account key"); return }
+    ProviderImportText(provider, TextUntilNul(text[:]), passphrase)
+}
+
+// A key someone copied: the host reads the clipboard, so the key never
+// passes through the profile bundle.
+ProviderImportPaste :: (provider: *ManagementProvider, passphrase: string) {
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if provider.paste == null || !provider.paste(provider.context, text[:]) || ProviderTrim(TextUntilNul(text[:])) == "" {
+        ProviderFinish(provider, "error", "Copy your key, then paste it here")
+        return
+    }
+    ProviderImportText(provider, ProviderTrim(TextUntilNul(text[:])), passphrase)
+}
+
+ProviderTrim :: (text: string) -> string {
+    start: s64 = 0
+    end := text.count
+    while start < end && text[start] <= cast(u8)32 { start += 1 }
+    while end > start && text[end - 1] <= cast(u8)32 { end -= 1 }
+    return text[start:end]
+}
+
+ProviderImportText :: (provider: *ManagementProvider, text: string, passphrase: string) {
     incoming: Recovery
     defer { RecoveryClear(*incoming) }
-    if !RecoveryDecode(TextUntilNul(text[:]), passphrase, *incoming) {
-        ProviderFinish(provider, "error", "The account key or passphrase is not valid")
+    if !RecoveryDecode(text, passphrase, *incoming) {
+        ProviderFinish(provider, "error", ifx passphrase == "" then "That is not an account key, or it needs its passphrase" else "The key or passphrase is not valid")
         return
     }
     RecoveryClear(*provider.incoming)
@@ -253,6 +280,24 @@ ProviderPump :: (provider: *ManagementProvider) {
         for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
         ProviderImport(provider, TextUntilNul(passphrase[:]))
         SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "import_paste" {
+        passphrase: [1024]u8
+        for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
+        ProviderImportPaste(provider, TextUntilNul(passphrase[:]))
+        SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "link_paste" {
+        // A pasted connection code joins like a typed one.
+        code: [1024]u8
+        request := provider.queue.request
+        if provider.paste == null || !provider.paste(provider.context, code[:]) ||
+        !CopyCString(ProviderTrim(TextUntilNul(code[:])), request.value[:]) || request.value[0] == cast(u8)0 {
+            ProviderFinish(provider, "error", "Copy a connection code, then paste it here")
+            return
+        }
+        unused CopyCString("link_join", request.operation[:])
+        result := ifx provider.action == null then 0 else provider.action(provider.context, *request)
+        if result == 1 { ProviderFinish(provider, "ok", "") }
+        else { ProviderFinish(provider, "error", "That is not a connection code") }
     } else if operation == "backup" {
         passphrase: [1024]u8
         for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
