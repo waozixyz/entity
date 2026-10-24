@@ -69,7 +69,7 @@ Draw :: (session: UI.Session) -> bool {
 }
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
-    path := ifx argc > 1 then TextFromCString(argv[1]) else "build/entity.zib"
+    path := ifx argc > 1 then TextFromCString(argv[1]) else "build/entity.zx"
     if !OpenEntity(path) { return 1 }
     if !Desktop.OpenDesktopSized(480, 800) { return 1 }
     title: [16]u8

@@ -54,7 +54,7 @@ def main():
     packager = Path(shutil.which(emcc) or emcc).resolve().parent / 'tools/file_packager'
     preload = work / 'game-preload.js'
     subprocess.run([str(packager), str(output.with_suffix('.data')), '--preload',
-                    str(args.bundle.resolve()) + '@/app.zib', '--js-output=' + str(preload),
+                    str(args.bundle.resolve()) + '@/app.zx', '--js-output=' + str(preload),
                     '--no-node'], check=True, env=env)
     subprocess.run([emcc, '-O2', '-ffunction-sections', '-fdata-sections',
                     '-I' + str(toolchain / 'include'), '-iquote', str(generated),
@@ -64,12 +64,12 @@ def main():
                     '--js-library', str(toolchain / 'web/ziran_web.js'), '-lidbfs.js',
                     '--embed-file', str(kryon / 'assets/fonts/LiberationSans-Regular.ttf') + '@/kryon-font.ttf',
                     '--pre-js', str(preload),
-                    '--embed-file', str(args.profile.resolve()) + '@/entity.zib',
+                    '--embed-file', str(args.profile.resolve()) + '@/entity.zx',
                     '-sASYNCIFY', '-sALLOW_MEMORY_GROWTH=1', '-sFORCE_FILESYSTEM=1',
                     '-sSTACK_SIZE=16777216', '-sASYNCIFY_STACK_SIZE=1048576', '-sENVIRONMENT=web',
                     '-sEXPORTED_RUNTIME_METHODS=FS',
                     '-sEXPORTED_FUNCTIONS=_main',
-                    '--shell-file', str(kryon / 'mk/zib-shell.html'), '-o', str(output)], check=True, env=env)
+                    '--shell-file', str(kryon / 'mk/zx-shell.html'), '-o', str(output)], check=True, env=env)
 
 
 if __name__ == '__main__':

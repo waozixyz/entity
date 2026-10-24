@@ -2,7 +2,7 @@
 
 Entity is one portable profile app shared by Inner Breeze, Werkzeug and standalone Shovey/Arcade. It also
 runs independently with its own native account provider. The portable profile
-preferences also run in Kryon's generic ZIB player, without account capabilities.
+preferences also run in Kryon's generic ZX player, without account capabilities.
 
 ```sh
 make test

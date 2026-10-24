@@ -33,7 +33,7 @@ def command(*args):
 
 def start():
     global APP, WINDOW
-    APP = subprocess.Popen([str(ROOT / 'build/entity'), str(ROOT / 'build/entity.zib')], env=ENV)
+    APP = subprocess.Popen([str(ROOT / 'build/entity'), str(ROOT / 'build/entity.zx')], env=ENV)
     for _ in range(100):
         assert APP.poll() is None, 'Entity exited before opening'
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(APP.pid)], env=ENV, capture_output=True, text=True)

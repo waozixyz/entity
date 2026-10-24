@@ -73,8 +73,8 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
     if !BundleStorageOpen() { return 1 }
     while !BundleStorageReady() && !BundleStorageFailed() { WebSleep(10) }
     if !BundleStorageReady() { return 1 }
-    game_bytes, game_found := ReadEntireFile("/app.zib")
-    profile_bytes, profile_found := ReadEntireFile("/entity.zib")
+    game_bytes, game_found := ReadEntireFile("/app.zx")
+    profile_bytes, profile_found := ReadEntireFile("/entity.zx")
     defer { AppFileFree(game_bytes); AppFileFree(profile_bytes) }
     if !game_found || !profile_found || !BundleAppOpen(*browser_game, game_bytes, "/kryon-apps") { return 1 }
     defer BundleAppClose(*browser_game)
