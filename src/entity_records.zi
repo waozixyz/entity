@@ -626,6 +626,12 @@ EntityRecordsAnswer :: (request: string) -> string {
     if operation == "put" { return RecordsPut(request, kind) }
     id_bytes: [40]u8
     id := RecordsString(request, "id", id_bytes[:])
+    canonical: [33]u8
+    if operation == "get" && id == "" && RecordsKindName(kind) == GAME_PROGRESS_KIND {
+        game: [97]u8
+        if !GameProgressID(RecordsString(request, "game", game[:]), canonical[:]) { return RecordsRejected("invalid game") }
+        id = TextUntilNul(canonical[:])
+    }
     if !RecordsIdValid(id) { return RecordsRejected("invalid id") }
     if operation == "get" { return RecordsGet(kind, id) }
     if operation == "delete" { return RecordsDelete(kind, id) }
