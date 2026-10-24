@@ -339,6 +339,7 @@ RecordsAdoptLocal :: () {
     kinds_before := records_kind_count
     RecordsReadState("local")
     records_since = saved_since
+    if !RecordsAdoptProgress() { return }
     for kind: cast(s32)0..records_kind_count - 1 { RecordsReadIndex("local", kind) }
     if records_count == local_count && records_kind_count == kinds_before { return }
     now := RecordsNow()
@@ -368,6 +369,49 @@ RecordsAdoptLocal :: () {
     path: [4096]u8
     state := NativeJoin(path[:], RecordsFolder("local", folder[:]), "state")
     if PathExists(state) { unused RemoveFile(state) }
+}
+
+// A device-only campaign may have the same stable ID as a cached account
+// campaign. Merge it before the ordinary index loader skips duplicate IDs.
+RecordsAdoptProgress :: () -> bool {
+    kind := RecordsKindIndex(GAME_PROGRESS_KIND)
+    if kind < 0 { return true }
+    path: [4096]u8
+    length := NativeRead(RecordsIndexPath("local", kind, path[:]), records_file[:])
+    if length <= 0 { return true }
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "%", TextView(records_file[:length]))
+    index_text := BuilderFinish(bytes)
+    defer { EntityFree(index_text) }
+    owner := TextUntilNul(records_owner[:])
+    at: s64 = 0
+    for line_end: cast(s64)0..index_text.count - 1 {
+        if index_text[line_end] != #char "\n" { continue }
+        line := index_text[at:line_end]
+        at = line_end + 1
+        cursor: s64 = 0
+        id := RecordsWord(line, *cursor)
+        found := RecordsFind(kind, id)
+        if found < 0 || records_entries[found].deleted { continue }
+        incoming: GameProgressRecord
+        current: GameProgressRecord
+        if !GameProgressRead(RecordsReadDocument("local", kind, id), *incoming) { continue }
+        if !GameProgressRead(RecordsReadDocument(owner, kind, id), *current) ||
+        !GameProgressMerge(*current, *incoming, true) { return false }
+        current.updated_at = RecordsNow() / 1000
+        encoded: Vec(u8)
+        GameProgressWrite(*current, *encoded)
+        text := BuilderFinish(encoded)
+        written := RecordsWriteDocument(owner, kind, id, text)
+        EntityFree(text)
+        if !written { return false }
+        records_entries[found].changed = RecordsChangeTime(found)
+        records_entries[found].updated_at = current.updated_at
+        records_entries[found].dirty = true
+        if !RecordsSaveIndex(kind) { return false }
+        RecordsRemoveDocument("local", kind, id)
+    }
+    return true
 }
 
 // A kind the device has not kept before; the next sync fetches all of it.

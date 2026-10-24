@@ -111,11 +111,17 @@ with (node_folder / 'node.log').open('w') as log:
         step('second', 'second')
         for name in ('account.key', 'entity.json'):
             shutil.copy2(devices['first'] / name, devices['third'] / name)
+        # Returning to an account may already have its cached campaign while
+        # the signed-out device also earned progress under that same ID.
+        for folder in (devices['first'] / 'records').iterdir():
+            if folder.name != 'local' and folder.is_dir():
+                shutil.copytree(folder, devices['third'] / 'records' / folder.name)
         step('third', 'adopt')
         step('first', 'third')
         for folder in devices.values():
             private(folder)
         assert not list((devices['third'] / 'records/local').glob('levels/*.json')), 'Device-only copies stayed behind'
+        assert not list((devices['third'] / 'records/local').glob('game-progress/*.json')), 'Device-only campaign stayed behind'
     finally:
         node.terminate()
         node.wait(timeout=10)

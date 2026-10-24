@@ -74,6 +74,7 @@ Check :: () -> s32 {
     if step == "local" {
         // No account yet: kept on this device until one is connected.
         if account_standalone_ready { return 5 }
+        if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":5,\"completed\":\"001\",\"state\":\"local\"}}"), "status", "done") { return 26 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"00000000000000000000000000000003\",\"document\":{\"title\":\"Offline\"}}"), "status", "done") { return 6 }
         return ifx SyncField(EntityRecordsAnswer("{\"operation\":\"status\"}"), "sync", "local") then 0 else 7
     }
