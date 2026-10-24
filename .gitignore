@@ -2,3 +2,6 @@
 /backup/
 /ziran.local.toml
 __pycache__/
+
+# Generated previews from the image tools stay local.
+/.yue/
