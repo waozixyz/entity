@@ -91,6 +91,22 @@ EntityDewAnswer :: (request: string) -> string {
     return DewAnswerText(out)
 }
 
+// The account's Dew as an app shows it beside its Profile: the number alone,
+// 0 without a connected account or until the node has answered.
+EntityDewBalanceText :: (output: []u8) -> string {
+    units: s64 = 0
+    if DewReady() {
+        account: DewAccount
+        if DewParseAccount(TextUntilNul(dew_plan[:]), TextUntilNul(dew_owner[:]), *account) {
+            units = account.balance
+        } else if !dew_active && dew_queued[0] == cast(u8)0 {
+            dew_queued = DewOperation("refresh")
+        }
+    }
+    if !DewFormat(units, DewUnits, output) { return "0" }
+    return TextUntilNul(output)
+}
+
 // Advances a claim each frame; a credited reward refreshes the balance.
 EntityDewPump :: () {
     if !dew_reward_active { return }
