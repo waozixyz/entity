@@ -47,7 +47,7 @@ Auth :: #import "daochi_client/auth";
 records_c :: #system_library "c";
 RecordsDeviceKeyPair :: (secret_key: *u8, public_key: *u8, seed: *u8) #foreign records_c "crypto_ed25519_key_pair";
 RecordsDeviceSign :: (signature: *u8, secret_key: *u8, message: *u8, size: usize) #foreign records_c "crypto_ed25519_sign";
-RecordsAllocate :: (size: usize) -> *u8 #foreign records_c "calloc";
+RecordsAllocate :: (count: usize, size: usize) -> *u8 #foreign records_c "calloc";
 
 ENTITY_RECORDS_SERVICE :: "entity.records"
 RECORDS_ENTRIES :: 4096
@@ -660,7 +660,7 @@ EntityRecordsAnswer :: (request: string) -> string {
         pending: s32 = 0
         for index: cast(s32)0..records_count - 1 { if records_entries[index].dirty { pending += 1 } }
         out: Vec(u8)
-        BuilderPrint(*out, "{\"status\":\"done\",\"account\":\"%\",\"sync\":\"%\",\"pending\":%,\"revision\":%}",
+        BuilderPrint(*out, "{\"status\":\"done\",\"account\":\"%\",\"sync\":\"%\",\"pending\":%,\"revision\":%,\"game_progress\":\"account-v1\"}",
             RecordsAccount(), RecordsStatusName(), pending, records_revision)
         return RecordsAnswer(*out)
     }
@@ -1001,7 +1001,7 @@ RecordsAccept :: () -> bool {
 
 RecordsRound :: () -> bool {
     if records_output.count == 0 {
-        data := RecordsAllocate(cast(usize)RECORDS_OUTPUT_MAX)
+        data := RecordsAllocate(1, cast(usize)RECORDS_OUTPUT_MAX)
         if data == null { return false }
         records_output = BytesFromPointer(data, cast(u64)RECORDS_OUTPUT_MAX)
     }
