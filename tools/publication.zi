@@ -28,8 +28,6 @@ SleepMicroseconds :: (microseconds: u32) -> s32 #foreign libc "usleep";
 publication_transfer: HttpTransfer;
 publication_keys: AccountKeys;
 publication_answer: [262144]u8;
-publication_body: [262144]u8;
-publication_document: [262144]u8;
 publication_key_text: [ACCOUNT_EXPORT_TEXT_SIZE]u8;
 
 Say :: (fd: s32, text: string) {
@@ -117,14 +115,14 @@ AppendJsonString :: (builder: *Vec(u8), text: string) {
     BuilderPrint(builder, "%", TextView(escaped[:length]))
 }
 
-// The document without the spaces and line breaks between its values, so a
-// pretty-printed file fits the node's 256 KiB publication limit; "" when even
-// that is too large.
-CompactJson :: (text: string) -> string {
+// Copies the document without the spaces and line breaks between its values,
+// which players then need not download.
+AppendCompactJson :: (builder: *Vec(u8), text: string) {
     quoted := false
     escaped := false
-    length: s64 = 0
-    for byte: text {
+    start: s64 = 0
+    for at: cast(s64)0..text.count - 1 {
+        byte := text[at]
         if quoted {
             if escaped { escaped = false }
             else if byte == cast(u8)92 { escaped = true }
@@ -132,13 +130,11 @@ CompactJson :: (text: string) -> string {
         } else if byte == cast(u8)34 {
             quoted = true
         } else if byte == cast(u8)32 || byte == cast(u8)10 || byte == cast(u8)13 || byte == cast(u8)9 {
-            continue
+            if at > start { BuilderPrint(builder, "%", text[start:at]) }
+            start = at + 1
         }
-        if length >= publication_document.count { return "" }
-        publication_document[length] = byte
-        length += 1
     }
-    return TextView(publication_document[:length])
+    if text.count > start { BuilderPrint(builder, "%", text[start:]) }
 }
 
 Publish :: (key_path: string, server: string, format: string, title: string,
@@ -163,13 +159,10 @@ Publish :: (key_path: string, server: string, format: string, title: string,
         BuilderPrint(*builder, ",\"id\":")
         AppendJsonString(*builder, id)
     }
-    compact := CompactJson(document)
-    BuilderPrint(*builder, ",\"document\":%}", compact)
+    BuilderPrint(*builder, ",\"document\":")
+    AppendCompactJson(*builder, document)
+    BuilderPrint(*builder, "}")
     body := BuilderFinish(builder)
-    if compact == "" || body.count + 1 > publication_body.count {
-        Say(2, "publication: the document is too large\n")
-        return 1
-    }
     client := Client.{.server_url = server, .app_id = "",
         .identity = Auth.Identity.{.account_id = TextUntilNul(publication_keys.public_id[:]),
             .public_key = TextUntilNul(publication_keys.public_key_hex[:]), .client_id = "publication",

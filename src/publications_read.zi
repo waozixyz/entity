@@ -16,17 +16,22 @@
 #import "model"
 
 PUBLICATIONS_READ_SERVICE :: "publications.read"
-// A public document holds at most 256 KiB; the answer adds its description.
-PUBLICATIONS_READ_ANSWER :: 270336
+// The node limits a publication only by its author's storage; the answer
+// takes the largest fixed array, 1 MiB, with room before it for the reply's
+// start, so a finished reply is the answer itself and never a second copy.
+PUBLICATIONS_READ_LEAD :: 32
+PUBLICATIONS_READ_ANSWER :: 1048576 - PUBLICATIONS_READ_LEAD
 
 publications_read_transfer: HttpTransfer;
-publications_read_answer: [PUBLICATIONS_READ_ANSWER]u8;
+publications_read_answer: [PUBLICATIONS_READ_LEAD + PUBLICATIONS_READ_ANSWER]u8;
 publications_read_request: s32;
 // 0 idle, 1 running, 2 done, 3 failed.
 publications_read_state: s32;
 publications_read_status: s32;
-// The latest reply, which the host value borrows until the app copies it.
-publications_read_reply: [PUBLICATIONS_READ_ANSWER + 64]u8;
+// Where the finished reply starts in the answer, once it is formed.
+publications_read_done: s64 = -1;
+// A short reply, which the host value borrows until the app copies it.
+publications_read_reply: [256]u8;
 publications_read_url: [256]u8;
 
 // Keeps first, second and third, joined, as the reply; a reply that cannot
@@ -61,6 +66,19 @@ PublicationsReadPump :: () {
     HttpTransferCancel(*publications_read_transfer)
 }
 
+// The length of the node's answer.
+PublicationsReadLength :: () -> s64 {
+    return TextUntilNul(publications_read_answer[PUBLICATIONS_READ_LEAD:]).count
+}
+
+// Where the node's answer opens its object, or -1 when it has none.
+PublicationsReadBrace :: () -> s64 {
+    body := TextUntilNul(publications_read_answer[PUBLICATIONS_READ_LEAD:])
+    start := Space(body, 0)
+    if start < 0 || start >= cast(s32)body.count || body[start] != #char "{" { return -1 }
+    return cast(s64)start
+}
+
 // The text a request answers, valid until the next request.
 PublicationsReadAnswer :: (request: string) -> string {
     PublicationsReadPump()
@@ -84,7 +102,8 @@ PublicationsReadAnswer :: (request: string) -> string {
         request_value := HttpRequest.{.method = "GET", .url = TextView(publications_read_url[:length]), .accept = "application/json"}
         publications_read_request += 1
         publications_read_state = 0
-        if !HttpTransferStart(*publications_read_transfer, request_value, publications_read_answer[:], 20000) {
+        publications_read_done = -1
+        if !HttpTransferStart(*publications_read_transfer, request_value, publications_read_answer[PUBLICATIONS_READ_LEAD:], 20000) {
             return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"the node is unavailable\"}")
         }
         publications_read_state = 1
@@ -104,13 +123,20 @@ PublicationsReadAnswer :: (request: string) -> string {
             status_text := FormatInteger(cast(s64)publications_read_status, digits[:])
             return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"the node answered ", status_text, "\"}")
         }
-        // The node's answer is {"publication":...,"document":...}.
-        body := TextUntilNul(publications_read_answer[:])
-        start := Space(body, 0)
-        if start < 0 || start >= cast(s32)body.count || body[start] != #char "{" {
-            return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"malformed answer\"}")
+        // The node's answer is {"publication":...,"document":...}; the
+        // reply's start replaces its opening brace in place.
+        end := PUBLICATIONS_READ_LEAD + PublicationsReadLength()
+        if publications_read_done < 0 {
+            brace := PublicationsReadBrace()
+            if brace < 0 {
+                return PublicationsReadReply("{\"status\":\"failed\",\"error\":\"malformed answer\"}")
+            }
+            lead := "{\"status\":\"done\","
+            at := PUBLICATIONS_READ_LEAD + brace + 1 - lead.count
+            publications_read_done = at
+            for byte: lead { publications_read_answer[at] = byte; at += 1 }
         }
-        return PublicationsReadReply("{\"status\":\"done\",", body[start + 1:])
+        return TextView(publications_read_answer[publications_read_done:end])
     }
     return PublicationsReadReply("{\"status\":\"rejected\",\"error\":\"unsupported operation\"}")
 }
