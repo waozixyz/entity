@@ -53,7 +53,7 @@
       "url": "https://github.com/kryonlabs/kryon.git"
     },
     {
-      "commit": "1429fe912f9f47ea06514231ee48ae8be6e41dcf",
+      "commit": "a92a9f32e3666c760b31632affa13e664fcf8f1c",
       "dependencies": {"oqs": "p7098ac9cd92f7e5f"},
       "id": "pf64f159dfdbd5ee5",
       "name": "DaochiClient",

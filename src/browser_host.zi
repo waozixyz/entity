@@ -47,7 +47,7 @@ browser_mini: bool;
 BrowserAllows :: (context: *void, name: string) -> bool {
     if name == PUBLICATIONS_READ_SERVICE { return true }
     if browser_mini { return name == MINI_MODE_CAPABILITY || BundleAppAllows(context, name) }
-    return name == "entity.profile" || name == ENTITY_RECORDS_SERVICE || BundleAppAllows(context, name)
+    return name == "entity.profile" || name == ENTITY_RECORDS_SERVICE || name == ENTITY_DEW_SERVICE || BundleAppAllows(context, name)
 }
 BrowserServices :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
@@ -60,6 +60,12 @@ BrowserServices :: (context: *void, module: *u8, function: *u8,
     if TextFromCString(function) == "AppServiceHost" && count == 2 &&
     AppArgumentText(arguments[0]) == ENTITY_RECORDS_SERVICE && !browser_mini {
         result.* = EntityHostText(EntityRecordsAnswer(AppArgumentText(arguments[1])))
+        return 1
+    }
+    // The account's Dew and rewards it claims, on a page with a Profile.
+    if TextFromCString(function) == "AppServiceHost" && count == 2 &&
+    AppArgumentText(arguments[0]) == ENTITY_DEW_SERVICE && !browser_mini {
+        result.* = EntityHostText(EntityDewAnswer(AppArgumentText(arguments[1])))
         return 1
     }
     if TextFromCString(function) == "AppServiceHost" && count == 2 &&
