@@ -19,6 +19,7 @@ std_root = Path(os.environ.get('ZIRAN_ROOT') or package('ziran'))
 kryon = package('kryon')
 daochi = package('daochi_client')
 oqs = package('oqs')
+crypto = package('crypto')
 monocypher = package('monocypher')
 liboqs = Path(os.environ['LIBOQS_LIBRARY'])
 output = ROOT / 'build/native-test'
@@ -28,7 +29,7 @@ shutil.rmtree(generated, ignore_errors=True)
 paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(std_root / 'std'),
          '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/backend'), '--module-path', str(kryon / 'src/ui'),
          '--module-path', f'daochi_client={daochi}', '--module-path', str(daochi),
-         '--module-path', f'oqs={oqs / "src"}']
+         '--module-path', f'oqs={oqs / "src"}', '--module-path', f'crypto={crypto / "src"}']
 subprocess.run([ZIRAN, 'build', '--target=c', '--root', str(ROOT), *paths,
                 '--entry', 'management_test:Check', '-o', str(generated),
                 str(ROOT / 'tests/management_test.zi')], check=True, env=ENV)

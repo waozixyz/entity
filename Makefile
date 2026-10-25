@@ -4,6 +4,7 @@ KRYON_DIR = $(shell $(ZIRAN) pkg path kryon $(LOCK_FLAGS))
 ZIRAN_ROOT = $(shell $(ZIRAN) pkg path ziran $(LOCK_FLAGS))
 QRCODE_DIR = $(shell $(ZIRAN) pkg path qrcode $(LOCK_FLAGS))
 DAOCHI_CLIENT_DIR = $(shell $(ZIRAN) pkg path daochi_client $(LOCK_FLAGS))
+CRYPTO_DIR = $(shell $(ZIRAN) pkg path crypto $(LOCK_FLAGS))
 OQS_DIR = $(shell $(ZIRAN) pkg path oqs $(LOCK_FLAGS))
 LIBOQS_DIR = $(shell $(ZIRAN) pkg path liboqs $(LOCK_FLAGS))
 MONOCYPHER_DIR = $(shell $(ZIRAN) pkg path monocypher $(LOCK_FLAGS))
@@ -14,7 +15,7 @@ MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/backend --module-path kryon=$(KRYON_DIR)/src/ui \
 	--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 	--module-path qrcode=$(QRCODE_DIR)/src --module-path daochi_client=$(DAOCHI_CLIENT_DIR) \
-	--module-path $(DAOCHI_CLIENT_DIR) --module-path oqs=$(OQS_DIR)/src
+	--module-path $(DAOCHI_CLIENT_DIR) --module-path crypto=$(CRYPTO_DIR)/src --module-path oqs=$(OQS_DIR)/src
 SOURCES := $(wildcard src/*.zi)
 ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
@@ -68,10 +69,10 @@ build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) b
 # private local Daochi node (DAOCHI_BIN, by default the checkout's build).
 .PHONY: records-test
 records-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/records_test.py
 native-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py
 run: all
 	./build/entity build/entity.zx
