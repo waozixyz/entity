@@ -36,6 +36,7 @@ using Canvas :: #import "kryon/Canvas";
 #import "native_host"
 #import "publications_read"
 #import "entity_records"
+#import "entity_dew"
 #import "model"
 
 browser_game: BundleApp;
