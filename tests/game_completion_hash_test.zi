@@ -1,0 +1,20 @@
+#import "game_completion"
+#import "std/text_buffer"
+
+#program_export
+Check :: () -> s32 {
+    map: [1440]u8
+    for index: cast(s32)0..1439 { map[index] = #char "0" }
+    hash: [65]u8
+    if !GameCompletionMapHash("shovey.classic", 29, TextView(map[:]), hash[:]) { return 1 }
+    if TextUntilNul(hash[:]) != "cca1c7be641ebadd4b23437e69fe178d20816cfb98ef5e307fbc44c075522cc5" { return 2 }
+    changed: [65]u8
+    map[0] = #char "1"
+    if !GameCompletionMapHash("shovey.classic", 29, TextView(map[:]), changed[:]) || TextUntilNul(hash[:]) == TextUntilNul(changed[:]) { return 3 }
+    if GameCompletionMapHash("shovey.classic", 0, TextView(map[:]), hash[:]) { return 4 }
+    if GameCompletionMapHash("shovey.classic", 29, TextView(map[:1439]), hash[:]) { return 5 }
+    if GameCompletionMapHash("shovey.classic", 29, TextView(map[:]), hash[:64]) { return 6 }
+    map[0] = #char "A"
+    if GameCompletionMapHash("shovey.classic", 29, TextView(map[:]), hash[:]) { return 7 }
+    return 42
+}

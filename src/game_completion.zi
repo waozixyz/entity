@@ -1,0 +1,36 @@
+// Pure map identity shared by offline games and their account providers.
+#import "daochi_client/crypto"
+#import "std/number_text"
+
+#scope_file
+HashPart :: (context: *Sha256Context, text: string) {
+    Sha256UpdateText(context, text)
+}
+
+#scope_export
+// Full lowercase SHA-256, followed by NUL. The stored solution is excluded.
+// Classic has three 240-byte layers; Island has terrain and objects.
+GameCompletionMapHash :: (game: string, level: s32, map_hex: string, output: []u8) -> bool {
+    expected := ifx game == "shovey.classic" then 1440 else ifx game == "shovey.island" then 960 else 0
+    if expected == 0 || level < 1 || level > 4096 || map_hex.count != expected || output.count < 65 { return false }
+    for byte: map_hex {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    context: Sha256Context
+    Sha256Initialize(*context)
+    HashPart(*context, game)
+    HashPart(*context, ".map.v1\n")
+    digits: [24]u8
+    HashPart(*context, FormatInteger(cast(s64)level, digits[:]))
+    HashPart(*context, "\n")
+    HashPart(*context, map_hex)
+    digest: [32]u8
+    Sha256FinishBytes(*context, digest[:])
+    alphabet := "0123456789abcdef"
+    for index: cast(s32)0..31 {
+        output[index * 2] = alphabet[digest[index] >> 4]
+        output[index * 2 + 1] = alphabet[digest[index] & 15]
+    }
+    output[64] = 0
+    return true
+}
