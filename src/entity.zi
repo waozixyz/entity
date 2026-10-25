@@ -1035,6 +1035,8 @@ dew_profile_busy: bool;
 dew_profile_error: bool;
 dew_profile_host_actions: bool;
 dew_profile_manage_data: bool;
+// Whether the host sells Dew here; a host answering "top_up":false does not.
+dew_profile_top_up: bool;
 dew_profile_worth: [256]u8;
 dew_profile_plan: [256]u8;
 dew_profile_usage: [256]u8;
@@ -1052,6 +1054,7 @@ ProfileDewRead :: () {
     dew_profile_error = MatchLiteral(json, FieldAt(json, 0, "error"), "true")
     dew_profile_host_actions = MatchLiteral(json, FieldAt(json, 0, "host_actions"), "true")
     dew_profile_manage_data = dew_profile_host_actions && MatchLiteral(json, FieldAt(json, 0, "manage_data"), "true")
+    dew_profile_top_up = !MatchLiteral(json, FieldAt(json, 0, "top_up"), "false")
     dew_profile_account = .{}
     dew_profile_worth = .{}
     dew_profile_plan = .{}
@@ -1102,7 +1105,7 @@ ProfileDewBalance :: (x: float32, y: float32, width: float32, draw: bool) -> Dew
     result := DewBalance(session, DewBalanceProps.{.bounds = Rectangle.{x, y, width, 0.0}, .scale = scale,
             .title = Label("profile_dew_title", "Dew balance"), .balance = TextUntilNul(amount[:]),
             .worth = TextUntilNul(dew_profile_worth[:]), .plan = plan, .usage = usage, .notice = notice,
-            .top_up = Label("profile_dew_topup", "Top up"), .plans = Label("profile_dew_plans", "Storage plans"),
+            .top_up = ifx dew_profile_top_up then Label("profile_dew_topup", "Top up") else "", .plans = Label("profile_dew_plans", "Storage plans"),
             .data = ifx dew_profile_manage_data then Label("entity.manage_data", "Manage data") else "",
             .ready = dew_profile_available, .known = account.known, .busy = dew_profile_busy, .enabled = account.enabled,
             .has_usage = account.limit_bytes > 0,

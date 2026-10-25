@@ -29,6 +29,7 @@ DewBalanceProps :: struct {
     plan: string
     usage: string
     notice: string
+    // Empty hides the top-up, for a build that sells no Dew.
     top_up: string
     plans: string
     // Hosts that manage local data name the action; empty hides it.
@@ -89,9 +90,12 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
     DewBalanceLine(session, key + 1, props.title, x, *y, width, font, scale, draw)
     value_font := cast(s32)(24.0 * scale)
     if props.ready && props.known {
-        button_width := cast(float32)TextWidth(session, TextProps.{.text = props.top_up, .font = font}) + 32.0 * scale
-        if button_width > width * 0.5 { button_width = width * 0.5 }
-        text_width := width - button_width - 12.0 * scale
+        button_width: float32 = 0.0
+        if props.top_up != "" {
+            button_width = cast(float32)TextWidth(session, TextProps.{.text = props.top_up, .font = font}) + 32.0 * scale
+            if button_width > width * 0.5 { button_width = width * 0.5 }
+        }
+        text_width := ifx button_width > 0.0 then width - button_width - 12.0 * scale else width
         value_height := DewLineHeight(session, props.balance, text_width, value_font)
         worth_height := DewLineHeight(session, props.worth, text_width, small)
         if worth_height > 0.0 { worth_height += 2.0 * scale }
@@ -103,7 +107,7 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
             worth_y := y + (row_height - value_height - worth_height) * 0.5 + value_height + 2.0 * scale
             DewBalanceLine(session, key + 3, props.worth, x, *worth_y, text_width, small, scale, draw)
         }
-        if draw && Button(session, ButtonProps.{.key = key + 4, .id = cast(s32)(key + 4),
+        if draw && props.top_up != "" && Button(session, ButtonProps.{.key = key + 4, .id = cast(s32)(key + 4),
                 .label = props.top_up, .bounds = Rectangle.{x + width - button_width,
                     y + (row_height - 44.0 * scale) * 0.5, button_width, 44.0 * scale},
                 .disabled = props.busy, .tone = ButtonTone.ButtonToneAccent,
