@@ -1,0 +1,7 @@
+#import, file "game_progress_rules.zi";
+#law UnlocksNeverGoBack theorem current: s32, incoming: s32 => GameProgressUnlocked(current, incoming) >= current;
+#proof UnlocksNeverGoBack { unfold GameProgressUnlocked; cases; order; }
+#law UnlockMergeCommutes theorem left: s32, right: s32 => GameProgressUnlocked(left, right) == GameProgressUnlocked(right, left);
+#proof UnlockMergeCommutes { unfold GameProgressUnlocked; cases; order; }
+#law CompletedStaysCompleted custom GameProgressCompleted(true, false);
+#law ReceivedCompletionIsKept custom GameProgressCompleted(false, true);

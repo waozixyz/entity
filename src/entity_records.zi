@@ -398,7 +398,7 @@ RecordsAdoptProgress :: () -> bool {
         current: GameProgressRecord
         if !GameProgressRead(RecordsReadDocument("local", kind, id), *incoming) { continue }
         if !GameProgressRead(RecordsReadDocument(owner, kind, id), *current) ||
-        !GameProgressMerge(*current, *incoming, true) { return false }
+        !GameProgressMerge(*current, *incoming) { return false }
         current.updated_at = RecordsNow() / 1000
         encoded: Vec(u8)
         GameProgressWrite(*current, *encoded)
@@ -599,7 +599,7 @@ RecordsPut :: (request: string, kind: s32) -> string {
         if at >= 0 && !records_entries[at].deleted {
             previous: GameProgressRecord
             if !GameProgressRead(RecordsReadDocument(owner, kind, id), *previous) ||
-            !GameProgressMerge(*previous, *next, true) { return RecordsRejected("game progress does not match") }
+            !GameProgressMerge(*previous, *next) { return RecordsRejected("game progress does not match") }
             next = previous
         }
         bytes: Vec(u8)
@@ -938,7 +938,7 @@ RecordsApply :: (text: string, at: s32) -> bool {
                 if !GameProgressRead(RecordsReadDocument(owner, kind, id), *current) { return false }
                 before := current
                 newer := changed > records_entries[found].changed
-                if !GameProgressMerge(*current, *incoming, newer) { return false }
+                if !GameProgressMerge(*current, *incoming) { return false }
                 if !newer && GameProgressSame(*current, *before) { return false }
                 if !GameProgressSame(*current, *incoming) {
                     entry.changed = RecordsChangeTime(found)
@@ -952,6 +952,13 @@ RecordsApply :: (text: string, at: s32) -> bool {
                 GameProgressWrite(*current, *bytes)
                 game_text = BuilderFinish(bytes)
             }
+        }
+        if game_progress && game_text == "" {
+            progress: GameProgressRecord
+            if !GameProgressRead(document, *progress) { return false }
+            bytes: Vec(u8)
+            GameProgressWrite(*progress, *bytes)
+            game_text = BuilderFinish(bytes)
         }
         if !RecordsWriteDocument(owner, kind, id, ifx game_text != "" then game_text else document) { return false }
     }

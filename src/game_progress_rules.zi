@@ -1,0 +1,7 @@
+// Account progress can only grow. Boards and moves are device data.
+GameProgressUnlocked :: (current: s32, incoming: s32) -> s32 {
+    return ifx incoming > current then incoming else current
+}
+GameProgressCompleted :: (current: bool, incoming: bool) -> bool {
+    return current || incoming
+}

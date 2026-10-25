@@ -119,5 +119,5 @@ SyncProgress :: () -> bool {
     document := reply[at:ValueEnd(reply, at, 0)]
     unlocked := ReadNumber(document, FieldAt(document, 0, "unlocked"))
     return unlocked.valid && unlocked.value == 40.0 && SyncField(document, "completed", "111") &&
-    SyncField(document, "state", "advanced")
+    FieldAt(document, 0, "state") < 0
 }

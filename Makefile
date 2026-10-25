@@ -79,6 +79,7 @@ run: all
 
 .PHONY: game-progress-test
 game-progress-test:
+	$(ZIRAN) check --root src src/game_progress_laws.zi
 	mkdir -p build/game-progress-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry game_progress_test:main -o build/game-progress-test tests/game_progress_test.zi
 	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/game-progress-test $$(rg --files build/game-progress-test -g '*.c') -lm -o build/game-progress-test/test

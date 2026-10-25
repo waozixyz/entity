@@ -1,4 +1,5 @@
 #import "std/text_buffer"
+#import "std/json_scan"
 #import "std/vec"
 #import "game_progress"
 #import "game_progress_id"
@@ -13,16 +14,12 @@ main :: () -> s32 {
     if !GameProgressRead("{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"1101\",\"state\":\"newer\",\"updated_at\":20}", *left) { return 1 }
     if !GameProgressRead("{\"game\":\"shovey.classic\",\"unlocked\":20,\"completed\":\"101\",\"state\":\"older\",\"updated_at\":10}", *right) { return 2 }
     original := left
-    if !GameProgressMerge(*left, *right, false) || left.unlocked != 40 ||
-    TextUntilNul(left.completed[:]) != "1111" || TextUntilNul(left.state[:]) != "newer" { return 3 }
-    if !GameProgressMerge(*right, *original, true) || !GameProgressSame(*left, *right) { return 4 }
-    if !GameProgressMerge(*left, *right, true) || TextUntilNul(left.state[:]) != "newer" { return 9 }
-    right.state = .{}
-    right.state[0] = #char "x"
-    if !GameProgressMerge(*left, *right, false) || TextUntilNul(left.state[:]) != "newer" { return 10 }
-    if !GameProgressMerge(*left, *right, true) || TextUntilNul(left.state[:]) != "x" { return 11 }
+    if !GameProgressMerge(*left, *right) || left.unlocked != 40 ||
+    TextUntilNul(left.completed[:]) != "1111" { return 3 }
+    if !GameProgressMerge(*right, *original) || !GameProgressSame(*left, *right) { return 4 }
     out: Vec(u8)
     GameProgressWrite(*left, *out)
+    if FieldAt(TextView(VecSlice(out, 0, out.count)), 0, "state") >= 0 { return 11 }
     restored: GameProgressRecord
     valid := GameProgressRead(TextView(VecSlice(out, 0, out.count)), *restored)
     VecFree(out)
@@ -31,6 +28,6 @@ main :: () -> s32 {
     GameProgressRead("{\"game\":\"g\",\"unlocked\":1.5,\"completed\":\"1\",\"state\":\"\"}", *restored) ||
     GameProgressRead("{\"game\":\"g\",\"unlocked\":2,\"completed\":\"2\",\"state\":\"\"}", *restored) { return 6 }
     restored.game[0] = #char "x"
-    if GameProgressMerge(*left, *restored, true) || TextUntilNul(left.game[:]) != "shovey.classic" { return 7 }
+    if GameProgressMerge(*left, *restored) || TextUntilNul(left.game[:]) != "shovey.classic" { return 7 }
     return 0
 }

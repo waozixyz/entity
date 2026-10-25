@@ -1,21 +1,20 @@
-// A game's one account record. Unlocks and completed levels only grow;
-// the position at the furthest unlocked level stays opaque to the provider.
+// Account progress contains earned unlocks and completion marks only.
+// A device's unfinished board and player position never enter this model.
 #import "std/json_scan"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
 #import, file "model.zi";
+#import, file "game_progress_rules.zi";
 
 GAME_PROGRESS_KIND :: "game-progress"
 GAME_PROGRESS_SCHEMA :: "entity.game-progress.v1"
 GAME_PROGRESS_LIMIT :: 4096
-GAME_PROGRESS_STATE_LIMIT :: 8192
 
 GameProgressRecord :: struct {
     game: [97]u8
     unlocked: s32
     completed: [GAME_PROGRESS_LIMIT + 1]u8
-    state: [GAME_PROGRESS_STATE_LIMIT + 1]u8
     updated_at: s64
 }
 
@@ -34,9 +33,8 @@ GameProgressRead :: (text: string, output: *GameProgressRecord) -> bool {
     value: GameProgressRecord
     game_count := ReadStringText(text, FieldAt(text, 0, "game"), value.game[:])
     completed_count := ReadStringText(text, FieldAt(text, 0, "completed"), value.completed[:])
-    state_count := ReadStringText(text, FieldAt(text, 0, "state"), value.state[:])
-    if game_count <= 0 || completed_count < 0 || state_count < 0 ||
-    TextUntilNul(value.state[:]).count != state_count { return false }
+    // Old documents may contain state; ignore it and never serialize it.
+    if game_count <= 0 || completed_count < 0 { return false }
     if !GameProgressGameValid(TextView(value.game[:game_count])) { return false }
     unlocked := ReadNumber(text, FieldAt(text, 0, "unlocked"))
     if !unlocked.valid || unlocked.value < 1.0 || unlocked.value > cast(float64)GAME_PROGRESS_LIMIT ||
@@ -61,21 +59,14 @@ GameProgressWrite :: (value: *GameProgressRecord, output: *Vec(u8)) {
     EntityQuote(output, TextUntilNul(value.game[:]))
     BuilderPrint(output, ",\"unlocked\":%,\"completed\":", value.unlocked)
     EntityQuote(output, TextUntilNul(value.completed[:]))
-    BuilderPrint(output, ",\"state\":")
-    EntityQuote(output, TextUntilNul(value.state[:]))
     BuilderPrint(output, ",\"updated_at\":%}", value.updated_at)
 }
 
-// The caller chooses the newer position from its record revision. Even an
-// older reply can carry earned progress this device has not seen yet.
-GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecord,
-    incoming_position: bool) -> bool {
+// Even an older reply can carry earned progress this device has not seen.
+GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecord) -> bool {
     if TextUntilNul(current.game[:]) != TextUntilNul(incoming.game[:]) { return false }
-    use_incoming := incoming.unlocked > current.unlocked ||
-    (incoming.unlocked == current.unlocked && incoming_position)
-    merged := ifx use_incoming then incoming.* else current.*
-    if current.unlocked > merged.unlocked { merged.unlocked = current.unlocked }
-    if incoming.unlocked > merged.unlocked { merged.unlocked = incoming.unlocked }
+    merged := current.*
+    merged.unlocked = GameProgressUnlocked(current.unlocked, incoming.unlocked)
     if current.updated_at > merged.updated_at { merged.updated_at = current.updated_at }
     if incoming.updated_at > merged.updated_at { merged.updated_at = incoming.updated_at }
     {
@@ -83,8 +74,8 @@ GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecor
         right := TextUntilNul(incoming.completed[:])
         count := ifx left.count > right.count then left.count else right.count
         for index: cast(s32)0..cast(s32)count - 1 {
-            merged.completed[index] = ifx (index < left.count && left[index] == #char "1") ||
-            (index < right.count && right[index] == #char "1") then #char "1" else #char "0"
+            merged.completed[index] = ifx GameProgressCompleted(index < left.count && left[index] == #char "1",
+                index < right.count && right[index] == #char "1") then #char "1" else #char "0"
         }
         merged.completed[count] = 0
     }
@@ -94,6 +85,5 @@ GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecor
 
 GameProgressSame :: (left: *GameProgressRecord, right: *GameProgressRecord) -> bool {
     return TextUntilNul(left.game[:]) == TextUntilNul(right.game[:]) && left.unlocked == right.unlocked &&
-    TextUntilNul(left.completed[:]) == TextUntilNul(right.completed[:]) &&
-    TextUntilNul(left.state[:]) == TextUntilNul(right.state[:])
+    TextUntilNul(left.completed[:]) == TextUntilNul(right.completed[:])
 }
