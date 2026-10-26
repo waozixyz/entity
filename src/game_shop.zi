@@ -1,0 +1,43 @@
+// Fixed-price cosmetic purchases use the existing Dew ledger. The product's
+// stable idempotency key makes retries and purchases on two devices one debit.
+#import "std/json_scan"
+#import "std/text_buffer"
+
+GAME_SHOP_SERVICE :: "entity.game-shop"
+GameShopPrice :: (product: s32) -> s64 {
+    if product < 1 || product > 3 { return 0 }
+    return cast(s64)product * 1000000
+}
+GameShopProduct :: (product: s32) -> string {
+    if product == 1 { return "wurm.mint" }
+    if product == 2 { return "wurm.berry" }
+    if product == 3 { return "wurm.rose" }
+    return ""
+}
+GameShopKey :: (product: s32) -> string {
+    if product == 1 { return "skin-wurm-mint-v1" }
+    if product == 2 { return "skin-wurm-berry-v1" }
+    if product == 3 { return "skin-wurm-rose-v1" }
+    return ""
+}
+GameShopReference :: (product: s32) -> string {
+    if product == 1 { return "wurm.mint:skin-wurm-mint-v1" }
+    if product == 2 { return "wurm.berry:skin-wurm-berry-v1" }
+    if product == 3 { return "wurm.rose:skin-wurm-rose-v1" }
+    return ""
+}
+GameShopField :: (text: string, field: string, expected: string) -> bool {
+    bytes: [128]u8
+    return ReadStringText(text, FieldAt(text, 0, field), bytes[:]) >= 0 && TextUntilNul(bytes[:]) == expected
+}
+GameShopReceipt :: (text: string, owner: string) -> s32 {
+    if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
+    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
+    amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
+    for product: 1..3 {
+        if amount.valid && amount.value == -cast(float64)GameShopPrice(cast(s32)product) &&
+        GameShopField(text, "source_ref", GameShopReference(cast(s32)product)) { return cast(s32)product }
+    }
+    return 0
+}

@@ -1,0 +1,27 @@
+#import, file "../src/game_shop.zi";
+#import "std/vec"
+#import "std/text_buffer"
+
+Receipt :: (product: s32, owner: string, amount: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"spend\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, GameShopReference(product), amount)
+    return BuilderFinish(out)
+}
+#program_export
+main :: () -> s32 {
+    owner := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    other := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    for product: 1..3 {
+        p := cast(s32)product
+        text := Receipt(p, owner, -GameShopPrice(p))
+        if GameShopReceipt(text, owner) != p { return 1 }
+        if GameShopReceipt(text, other) != 0 { return 2 }
+        if GameShopReceipt(Receipt(p, owner, -1), owner) != 0 { return 3 }
+        if GameShopReceipt(Receipt(p, owner, GameShopPrice(p)), owner) != 0 { return 4 }
+        if GameShopKey(p) == "" || GameShopKey(p) != GameShopKey(p) { return 5 }
+    }
+    if GameShopPrice(0) != 0 || GameShopPrice(4) != 0 || GameShopReceipt("{}", owner) != 0 { return 6 }
+    if GameShopKey(1) == GameShopKey(2) || GameShopKey(1) == GameShopKey(3) || GameShopKey(2) == GameShopKey(3) { return 7 }
+    print("Game shop local tests: exact paid receipt, account isolation, amount validation and stable purchase keys.\n")
+    return 0
+}

@@ -113,7 +113,15 @@ are saved before sending. An uncertain result retains its request ID for an
 explicit retry; it never becomes a new debit. Switching or logging out cancels
 the old account's in-flight requests. The `entity/dew_model` export shares strict
 integer balance, allowance and funding-address validation with Inner Breeze.
-No currency transfer or game-specific shop is added.
+Game hosts can also expose `entity.game-shop` from `game_shop_native`. Its fixed
+Apfelwurm cosmetics cost 1, 2 and 3 Dew. `status` and `refresh` return the
+current public owner, device ID, ownership mask and request status; naming a
+product (`wurm.mint`, `wurm.berry`, `wurm.rose`) buys it after the game confirms
+the price. The provider uses authenticated Dew spending with one stable key
+per account and product. Retrying from another device cannot debit twice.
+Ownership is restored from exact ledger receipts; enqueueing or a failed
+request never grants a skin. Hosts call `EntityGameShopPump` after frames
+(included in `EntityHostPump`).
 
 The Profile shows Inbe's shared `DewBalance` card inline. Game hosts hide the
 Name and Intention fields and identify players by their alias or public ID.

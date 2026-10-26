@@ -37,6 +37,7 @@ using Canvas :: #import "kryon/Canvas";
 #import "publications_read"
 #import "entity_records"
 #import "entity_dew"
+#import "game_shop_native"
 #import "model"
 
 browser_game: BundleApp;
@@ -48,10 +49,15 @@ browser_mini: bool;
 BrowserAllows :: (context: *void, name: string) -> bool {
     if name == PUBLICATIONS_READ_SERVICE { return true }
     if browser_mini { return name == MINI_MODE_CAPABILITY || BundleAppAllows(context, name) }
-    return name == "entity.profile" || name == ENTITY_RECORDS_SERVICE || name == ENTITY_DEW_SERVICE || BundleAppAllows(context, name)
+    return name == "entity.profile" || name == "entity.game-shop" || name == ENTITY_RECORDS_SERVICE || name == ENTITY_DEW_SERVICE || BundleAppAllows(context, name)
 }
 BrowserServices :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(function) == "AppServiceHost" && count == 2 &&
+    AppArgumentText(arguments[0]) == "entity.game-shop" && !browser_mini {
+        result.* = EntityHostText(EntityGameShopAnswer(AppArgumentText(arguments[1])))
+        return 1
+    }
     if TextFromCString(function) == "AppServiceHost" && count == 2 &&
     AppArgumentText(arguments[0]) == PUBLICATIONS_READ_SERVICE {
         result.* = EntityHostText(PublicationsReadAnswer(AppArgumentText(arguments[1])))
