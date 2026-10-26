@@ -214,6 +214,8 @@ Check :: () -> s32 {
     proof_at := FieldAt(document_text, 0, "proof")
     migration_response := document_text[response_at:ValueEnd(document_text, response_at, 0)]
     expected_proof := document_text[proof_at:ValueEnd(document_text, proof_at, 0)]
+    if RewardMigrationStatus("{\"status\":\"available\"}\n") != "available" ||
+        RewardMigrationStatus("{\"status\":\"available\"}garbage") != "" { return 61 }
     fake_private: [2560]u8
     for index: cast(s32)0..2559 { fake_private[index] = cast(u8)(index % 251) }
     proof_body: [256]u8

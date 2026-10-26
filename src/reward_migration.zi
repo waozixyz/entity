@@ -21,7 +21,8 @@ RewardMigrationScratch :: struct {
 }
 
 RewardMigrationStatus :: (response: string) -> string {
-    if response.count < 2 || response[0] != #char "{" || ValueEnd(response, 0, 0) != response.count {
+    if response.count < 2 || response[0] != #char "{" ||
+    Space(response, ValueEnd(response, 0, 0)) != response.count {
         return ""
     }
     span := ReadString(response, FieldAt(response, 0, "status"))
