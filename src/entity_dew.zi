@@ -10,6 +10,8 @@
 //     claim-status       {"status":"pending"} or, once answered,
 //                        {"status":"done","reward":"…","credited":true,"units":…,"balance":…}
 //                        or {"status":"failed","reward":"…"}
+//                        or {"status":"ineligible","reward":"…"} when the
+//                        node still requires qualifying completion histories.
 #import "account_store"
 #import "dew_model"
 #import "dew_native"
@@ -120,7 +122,8 @@ EntityDewPump :: () {
         BuilderPrint(*out, ",\"credited\":%,\"units\":%,\"balance\":%}", claim.credited, claim.units, claim.balance)
         if !dew_active && dew_queued[0] == cast(u8)0 { dew_queued = DewOperation("refresh") }
     } else {
-        BuilderPrint(*out, "{\"status\":\"failed\",\"reward\":")
+        BuilderPrint(*out, "{\"status\":\"%\",\"reward\":",
+            ifx dew_reward.request.stage == 3 && dew_reward.request.status == 403 then "ineligible" else "failed")
         EntityQuote(*out, TextUntilNul(dew_reward_name[:]))
         BuilderPrint(*out, "}")
     }

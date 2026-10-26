@@ -1,9 +1,12 @@
 #import "model"
 #import "daochi_client/keys"
+#import "daochi_client/rewards"
+#import "daochi_client/async_client"
 #import "account_store"
 #import "management"
 #import "dew_model"
 #import "dew_native"
+#import "entity_dew"
 #import "native_management"
 #import "native_files"
 #import "recovery"
@@ -183,5 +186,18 @@ Check :: () -> s32 {
     AccountStoreAction(null, *action)
     DewReset()
     if dew_active || dew_attempt[0] != cast(u8)0 || dew_plan[0] != cast(u8)0 { return 46 }
+    // A node eligibility rejection must reach the game distinctly from a
+    // connection failure. No failed response can become a credited reward.
+    unused CopyCString("shovey.secret-chest", dew_reward_name[:])
+    dew_reward_active = true
+    dew_reward.request.done = true
+    dew_reward.request.stage = 3
+    dew_reward.request.status = 403
+    EntityDewPump()
+    if EntityDewAnswer("claim-status") != "{\"status\":\"ineligible\",\"reward\":\"shovey.secret-chest\"}" { return 52 }
+    dew_reward_active = true
+    dew_reward.request.status = 503
+    EntityDewPump()
+    if EntityDewAnswer("claim-status") != "{\"status\":\"failed\",\"reward\":\"shovey.secret-chest\"}" { return 53 }
     return 0
 }
