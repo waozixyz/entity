@@ -175,6 +175,18 @@ Check :: () -> s32 {
     number: s64
     if DewInteger("9223372036854775808", 0, *number) || DewInteger("1.5", 0, *number) || DewInteger("-1", 0, *number) { return 42 }
     unused CopyCString(response, dew_plan[:])
+    // Play hosts must reject funding-address requests, while other hosts retain them.
+    funding_command: Vec(u8)
+    BuilderPrint(*funding_command, "{\"owner\":\"%\",\"sequence\":1,\"operation\":\"address\"}", TextUntilNul(fixture.keys.public_id[:]))
+    funding_request := BuilderFinish(funding_command)
+    defer { EntityFree(funding_request) }
+    DewAllowFunding(false)
+    snapshot := DewSnapshot()
+    if DewEnqueue(funding_request) || !MatchLiteral(snapshot, FieldAt(snapshot, 0, "funding_allowed"), "false") { return 55 }
+    DewAllowFunding(true)
+    if !DewEnqueue(funding_request) { return 56 }
+    dew_queued = .{}
+    dew_sequence = 0
     command: Vec(u8)
     BuilderPrint(*command, "{\"owner\":\"%\",\"sequence\":1,\"operation\":\"buy\",\"size\":\"1gb\",\"period\":\"monthly\"}", TextUntilNul(fixture.keys.public_id[:]))
     request := BuilderFinish(command)

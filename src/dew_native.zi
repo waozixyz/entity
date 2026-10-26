@@ -33,6 +33,13 @@ dew_address: [8192]u8;
 dew_attempt: [256]u8;
 dew_error: bool;
 dew_document: string;
+dew_funding_allowed: bool = true;
+
+// Hosts can disable buying Dew while leaving balances and earned rewards usable.
+DewAllowFunding :: (allowed: bool) {
+    dew_funding_allowed = allowed
+    if !allowed { dew_address = .{} }
+}
 
 DewReady :: () -> bool {
     return account_standalone_ready &&
@@ -65,8 +72,8 @@ DewSnapshot :: () -> string {
     if TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { DewReset() }
     EntityFree(dew_document)
     out: Vec(u8)
-    BuilderPrint(*out, "{\"sequence\":%,\"busy\":%,\"available\":%,\"error\":%,\"pending\":%,\"owner\":",
-        dew_sequence, dew_active || dew_queued[0] != cast(u8)0, DewReady(), dew_error, dew_attempt[0] != cast(u8)0)
+    BuilderPrint(*out, "{\"sequence\":%,\"busy\":%,\"available\":%,\"funding_allowed\":%,\"error\":%,\"pending\":%,\"owner\":",
+        dew_sequence, dew_active || dew_queued[0] != cast(u8)0, DewReady(), dew_funding_allowed, dew_error, dew_attempt[0] != cast(u8)0)
     EntityQuote(*out, TextUntilNul(dew_owner[:]))
     BuilderPrint(*out, ",\"account\":%,\"funding\":%}",
         ifx dew_plan[0] == cast(u8)0 then "null" else TextUntilNul(dew_plan[:]),
@@ -90,6 +97,7 @@ DewEnqueue :: (text: string) -> bool {
     ReadStringText(text, FieldAt(text, 0, "operation"), operation[:]) <= 0 { return false }
     op := TextUntilNul(operation[:])
     if op != "refresh" && op != "address" && op != "buy" && op != "retry" { return false }
+    if op == "address" && !dew_funding_allowed { return false }
     if op == "buy" {
         account: DewAccount
         if dew_attempt[0] != cast(u8)0 || !DewParseAccount(TextUntilNul(dew_plan[:]), TextUntilNul(owner[:]), *account) || !account.enabled { return false }

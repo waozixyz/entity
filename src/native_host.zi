@@ -28,6 +28,8 @@ entity_host_navigation: bool;
 entity_host_game: bool;
 entity_paste: [16384]u8;
 
+EntityHostAllowFunding :: (allowed: bool) { DewAllowFunding(allowed) }
+
 EntityHostText :: (text: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
         .data = HostTextData(text), .length = cast(usize)text.count}

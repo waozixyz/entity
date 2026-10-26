@@ -1262,12 +1262,15 @@ DrawDew :: () {
     }
     if !busy && Action(45007, Label("entity.refresh", "Refresh"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("refresh", sequence) }
     y += 56.0 * scale
-    if !busy && Action(45008, Label("entity.dew_fund", "Add Dew with Monero"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("address", sequence) }
-    y += 56.0 * scale
+    funding_allowed := !MatchLiteral(json, FieldAt(json, 0, "funding_allowed"), "false")
+    if funding_allowed {
+        if !busy && Action(45008, Label("entity.dew_fund", "Add Dew with Monero"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("address", sequence) }
+        y += 56.0 * scale
+    }
     funding: DewFunding
     at = FieldAt(json, 0, "funding")
     funding_end := ValueEnd(json, at, 0)
-    if at >= 0 && funding_end > at && DewParseFunding(json[at:funding_end], TextUntilNul(owner[:]), *funding) {
+    if funding_allowed && at >= 0 && funding_end > at && DewParseFunding(json[at:funding_end], TextUntilNul(owner[:]), *funding) {
         minimum := DewDecimal(funding.minimum, 1000000000000, "XMR")
         explanation: Vec(u8)
         BuilderPrint(*explanation, "%: % · %: %", Label("entity.dew_minimum", "Minimum"), minimum,
