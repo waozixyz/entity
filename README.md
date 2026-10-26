@@ -141,3 +141,13 @@ uploading its local save. These rules apply both when
 saving locally and when receiving another device's record, including an
 older reply that carries a newly earned completion. Games migrate their old
 saves into this record and keep those saves until the account confirms sync.
+
+Older Shovey saves can retain earned reward eligibility during the node's
+security upgrade. After an eligibility refusal, the native provider attempts
+one migration of the account's frozen pre-upgrade progress and retries the
+normal claim once. It validates the frozen encrypted record locally and sends
+only that random version's nonce-prefix opening subkey; account private keys
+and reusable record keys stay on the device. The node retains earned unlocks
+and completion marks separately from new route evidence. Migration never
+credits Dew, and normal claims remain once per account. Missing snapshots and
+connection failures remain visible failures rather than successful claims.

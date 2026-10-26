@@ -1,0 +1,92 @@
+// Open only the node's immutable pre-upgrade Shovey progress snapshot. The
+// proof is the XChaCha nonce-prefix subkey for that version, never the account
+// private key or the reusable game-progress record key.
+#import "daochi_client/entity"
+#import "daochi_client/crypto"
+#import "daochi_client/keys"
+Wire :: #import "daochi_client/wire";
+#import "game_progress"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+
+REWARD_MIGRATION_PATH :: "/api/v1/rewards/migration"
+REWARD_MIGRATION_RECORD :: "fd65a3d7ac3d5ceb2d4d96cc5224a740"
+REWARD_MIGRATION_RESPONSE_MAX :: 263168
+
+RewardMigrationScratch :: struct {
+    envelope: [ENTITY_RECORD_TEXT_MAX]u8
+    plain: [ENTITY_RECORD_PLAIN_MAX + 16]u8
+}
+
+RewardMigrationStatus :: (response: string) -> string {
+    if response.count < 2 || response[0] != #char "{" || ValueEnd(response, 0, 0) != response.count {
+        return ""
+    }
+    span := ReadString(response, FieldAt(response, 0, "status"))
+    return ifx span.valid then response[span.start:span.end] else ""
+}
+
+// Validate the authenticated record locally before disclosing its one-version
+// opening proof. Scratch and key material are cleared on every return path.
+RewardMigrationProof :: (private_key: []u8, account: string, response: string,
+    scratch: *RewardMigrationScratch, output: []u8) -> bool {
+    if output.count < 1 { return false }
+    output[0] = 0
+    defer {
+        SecureWipe(*scratch.envelope[0], scratch.envelope.count)
+        SecureWipe(*scratch.plain[0], scratch.plain.count)
+    }
+    if RewardMigrationStatus(response) != "available" { return false }
+    snapshot := ReadString(response, FieldAt(response, 0, "snapshot"))
+    ciphertext := ReadString(response, FieldAt(response, 0, "ciphertext"))
+    nonce_text := ReadString(response, FieldAt(response, 0, "nonce_hex"))
+    if !snapshot.valid || snapshot.end - snapshot.start != 64 || !ciphertext.valid ||
+    !nonce_text.valid || nonce_text.end - nonce_text.start != 48 { return false }
+    sealed := response[ciphertext.start:ciphertext.end]
+    digest: [65]u8
+    descriptor := cast(*TextDescriptor)(*sealed)
+    Sha256Hex(descriptor.data, sealed.count, *digest[0])
+    if TextUntilNul(digest[:]) != response[snapshot.start:snapshot.end] { return false }
+    envelope_count := EntityRecordEnvelope(sealed, scratch.envelope[:])
+    if envelope_count < 1 { return false }
+    opened_envelope := TextView(scratch.envelope[:envelope_count])
+    nonce: [24]u8
+    if HexToBytes(response[nonce_text.start:nonce_text.end], *nonce[0], nonce.count) != 1 { return false }
+    encoded_nonce: [40]u8
+    inner_nonce := ReadString(opened_envelope, FieldAt(opened_envelope, 0, "nonce"))
+    if !inner_nonce.valid || opened_envelope[inner_nonce.start:inner_nonce.end] !=
+    EntityRecordNonceText(nonce[:], encoded_nonce[:]) { return false }
+    schema: [ENTITY_RECORD_SCHEMA_MAX + 1]u8
+    metadata := EntityRecordMetadata.{.account_id = account, .kind = GAME_PROGRESS_KIND,
+        .id = REWARD_MIGRATION_RECORD}
+    plain_count := OpenEntityRecord(private_key, metadata, opened_envelope, schema[:], scratch.plain[:])
+    progress: GameProgressRecord
+    if plain_count < 1 || TextUntilNul(schema[:]) != GAME_PROGRESS_SCHEMA ||
+    !GameProgressRead(TextView(scratch.plain[:plain_count]), *progress) ||
+    TextUntilNul(progress.game[:]) != "shovey.classic" { return false }
+    key: [32]u8
+    subkey: [32]u8
+    short_nonce: [12]u8
+    proof: [65]u8
+    defer {
+        SecureWipe(*key[0], key.count)
+        SecureWipe(*subkey[0], subkey.count)
+        SecureWipe(*proof[0], proof.count)
+    }
+    if !EntityRecordKey(private_key, GAME_PROGRESS_KIND, key[:]) { return false }
+    XChaChaSubkey(*key[0], *nonce[0], *subkey[0], *short_nonce[0])
+    BytesToHex(*subkey[0], subkey.count, *proof[0], proof.count)
+    writer := Wire.Writer.{output, 0, true}
+    writer = Wire.WriteText(writer, "{\"snapshot\":\"")
+    writer = Wire.WriteText(writer, TextUntilNul(digest[:]))
+    writer = Wire.WriteText(writer, "\",\"key\":\"")
+    writer = Wire.WriteText(writer, TextUntilNul(proof[:]))
+    writer = Wire.WriteText(writer, "\"}")
+    if !writer.valid {
+        SecureWipe(*output[0], output.count)
+        return false
+    }
+    return true
+}

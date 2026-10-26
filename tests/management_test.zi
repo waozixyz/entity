@@ -7,6 +7,9 @@
 #import "dew_model"
 #import "dew_native"
 #import "entity_dew"
+#import "reward_migration"
+#import "daochi_client/crypto"
+#import "std/json_scan"
 #import "native_management"
 #import "native_files"
 #import "recovery"
@@ -189,6 +192,9 @@ Check :: () -> s32 {
     // A node eligibility rejection must reach the game distinctly from a
     // connection failure. No failed response can become a credited reward.
     unused CopyCString("shovey.secret-chest", dew_reward_name[:])
+    account_standalone_ready = true
+    dew_reward_owner = account_recovery.keys.public_id
+    dew_reward_migration_tried = true
     dew_reward_active = true
     dew_reward.request.done = true
     dew_reward.request.stage = 3
@@ -199,5 +205,33 @@ Check :: () -> s32 {
     dew_reward.request.status = 503
     EntityDewPump()
     if EntityDewAnswer("claim-status") != "{\"status\":\"failed\",\"reward\":\"shovey.secret-chest\"}" { return 53 }
+    // Independent libsodium vector: account-bound opening proof, not a
+    // reusable content key. No real identity or network is used.
+    vector: [4096]u8
+    if NativeRead("tests/fixtures/reward-migration.json", vector[:]) < 1 { return 54 }
+    document_text := TextUntilNul(vector[:])
+    response_at := FieldAt(document_text, 0, "response")
+    proof_at := FieldAt(document_text, 0, "proof")
+    migration_response := document_text[response_at:ValueEnd(document_text, response_at, 0)]
+    expected_proof := document_text[proof_at:ValueEnd(document_text, proof_at, 0)]
+    fake_private: [2560]u8
+    for index: cast(s32)0..2559 { fake_private[index] = cast(u8)(index % 251) }
+    proof_body: [256]u8
+    if !RewardMigrationProof(fake_private[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        migration_response, *dew_reward_migration_scratch, proof_body[:]) ||
+        TextUntilNul(proof_body[:]) != expected_proof { return 55 }
+    if RewardMigrationProof(fake_private[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        migration_response, *dew_reward_migration_scratch, proof_body[:]) || proof_body[0] != 0 { return 56 }
+    fake_private[0] = 99
+    if RewardMigrationProof(fake_private[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        migration_response, *dew_reward_migration_scratch, proof_body[:]) || proof_body[0] != 0 { return 57 }
+    for byte: dew_reward_migration_scratch.plain { if byte != 0 { return 58 } }
+    for byte: dew_reward_migration_scratch.envelope { if byte != 0 { return 59 } }
+    // An account switch cancels a queued claim and destroys its opening proof.
+    dew_reward_active = true
+    dew_reward_migration_body[0] = 1
+    dew_reward_owner[0] = #char "z"
+    EntityDewPump()
+    if dew_reward_active || dew_reward_migration_body[0] != 0 || dew_reward_answer[0] != 0 { return 60 }
     return 0
 }
