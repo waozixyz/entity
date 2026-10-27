@@ -1295,6 +1295,46 @@ DrawDew :: () {
         if Action(45010, Label("entity.copy_address", "Copy address"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(funding.address[:]), 0) }
         y += 56.0 * scale
     }
+    // The Google Play edition sells Dew packs through Play, priced in the buyer's currency.
+    play_at := FieldAt(json, 0, "play")
+    play_end := ValueEnd(json, play_at, 0)
+    if play_at >= 0 && play_end > play_at && json[play_at] == #char "{" {
+        play := json[play_at:play_end]
+        TextLine(45050, Label("entity.dew_buy", "Buy Dew"), x, y, width, 20)
+        y += 40.0 * scale
+        products := FieldAt(play, 0, "products")
+        shown: s32 = 0
+        for index: cast(s32)0..3 {
+            item := ElementAt(play, products, index)
+            if item < 0 { break }
+            item_end := ValueEnd(play, item, 0)
+            if item_end <= item { break }
+            product := play[item:item_end]
+            id: [32]u8
+            price: [64]u8
+            if ReadStringText(product, FieldAt(product, 0, "id"), id[:]) <= 4 || ReadStringText(product, FieldAt(product, 0, "price"), price[:]) <= 0 { continue }
+            title: Vec(u8)
+            BuilderPrint(*title, "% Dew · %", TextUntilNul(id[:])[4:], TextUntilNul(price[:]))
+            label := BuilderFinish(title)
+            if !busy && Action(45051 + index, label, Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("play", sequence, TextUntilNul(id[:])) }
+            y += 56.0 * scale
+            shown += 1
+        }
+        status: [16]u8
+        unused ReadStringText(json, FieldAt(json, 0, "play_status"), status[:])
+        play_error: [64]u8
+        unused ReadStringText(play, FieldAt(play, 0, "error"), play_error[:])
+        message := ""
+        if TextUntilNul(status[:]) == "verifying" { message = Label("entity.dew_play_verifying", "Adding the Dew from your Google Play purchase…") }
+        else if TextUntilNul(status[:]) == "credited" { message = Label("entity.dew_play_credited", "Your Dew has been added.") }
+        else if TextUntilNul(status[:]) == "failed" { message = Label("entity.dew_play_failed", "Google Play took the payment, but the Dew could not be added yet. It tries again automatically.") }
+        else if shown == 0 && TextUntilNul(play_error[:]) != "" && TextUntilNul(play_error[:]) != "cancelled" { message = Label("entity.dew_play_unavailable", "Google Play purchases are not available right now.") }
+        else if shown == 0 { message = Label("entity.dew_play_loading", "Loading Google Play prices…") }
+        if message != "" {
+            Paragraph(45056, message, x, y, width, 64.0)
+            y += 72.0 * scale
+        }
+    }
     if MatchLiteral(json, FieldAt(json, 0, "pending"), "true") {
         Paragraph(45011, Label("entity.dew_pending", "A purchase is awaiting confirmation. Retry checks the same purchase."), x, y, width, 60.0)
         y += 68.0 * scale

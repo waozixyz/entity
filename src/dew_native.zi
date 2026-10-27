@@ -17,6 +17,7 @@
 #import "daochi_client/keys"
 Auth :: #import "daochi_client/auth";
 #import "kryon/http_transfer"
+#import "kryon/play_billing"
 
 dew_owner: [65]u8;
 dew_sequence: s32;
@@ -38,12 +39,68 @@ dew_attempt: [256]u8;
 dew_error: bool;
 dew_document: string;
 dew_funding_allowed: bool = true;
+// The Google Play edition buys Dew through Play Billing. Play keeps each
+// purchase until the node has credited it, so a purchase survives restarts.
+DEW_PLAY_PRODUCTS :: "dew_100,dew_500,dew_1000,dew_5000"
+dew_play: bool;
+dew_play_loaded: bool;
+dew_play_tick: s32;
+dew_play_wait: s32;
+dew_play_state: [16384]u8;
+dew_play_token: [1024]u8;
+dew_play_body: [2048]u8;
+dew_play_status: [16]u8;
 
 // Hosts can disable buying Dew while leaving balances and earned rewards usable.
 DewAllowFunding :: (allowed: bool) {
     dew_funding_allowed = allowed
     if !allowed { dew_address = .{} }
 }
+
+// Google Play builds sell Dew through Play Billing instead of Monero.
+DewUseGooglePlay :: (enabled: bool) {
+    dew_play = enabled
+    if enabled { DewAllowFunding(false) }
+}
+
+DewPlayProduct :: (id: string) -> bool {
+    return id == "dew_100" || id == "dew_500" || id == "dew_1000" || id == "dew_5000"
+}
+
+DewPlayToken :: (token: string) -> bool {
+    if token.count < 16 || token.count >= 1024 { return false }
+    for byte: token {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "." || byte == #char "-" || byte == #char "_") { return false }
+    }
+    return true
+}
+
+DewContains :: (text: string, part: string) -> bool {
+    if part.count == 0 || part.count > text.count { return false }
+    for start: 0..text.count - part.count {
+        if text[start:start + part.count] == part { return true }
+    }
+    return false
+}
+
+// The first purchase Play still lists, ready to send to the node for credit.
+DewPlayNext :: () -> bool {
+    play: PlayBillingState
+    if !PlayBillingRead(TextUntilNul(dew_play_state[:]), *play) || !play.has_purchase ||
+    TextUntilNul(play.package_name[:]) == "" || !DewPlayProduct(TextUntilNul(play.purchase.product[:])) ||
+    !DewPlayToken(TextUntilNul(play.purchase.token[:])) { return false }
+    dew_play_token = play.purchase.token
+    body: Vec(u8)
+    BuilderPrint(*body, "{\"app_id\":\"entity\",\"package_name\":\"%\",\"product_id\":\"%\",\"purchase_token\":\"%\"}",
+        TextUntilNul(play.package_name[:]), TextUntilNul(play.purchase.product[:]), TextUntilNul(dew_play_token[:]))
+    text := BuilderFinish(body)
+    defer { EntityFree(text) }
+    return CopyCString(text, dew_play_body[:])
+}
+
+// Play forgets a purchase only after the node has credited it.
+DewPlayDone :: () { unused PlayBillingDone(TextUntilNul(dew_play_token[:]), dew_play_state[:]) }
 
 DewReady :: () -> bool {
     return account_standalone_ready &&
@@ -80,9 +137,11 @@ DewSnapshot :: () -> string {
     BuilderPrint(*out, "{\"sequence\":%,\"busy\":%,\"available\":%,\"funding_allowed\":%,\"error\":%,\"pending\":%,\"owner\":",
         dew_sequence, dew_active || dew_queued[0] != cast(u8)0, DewReady(), dew_funding_allowed, dew_error, dew_attempt[0] != cast(u8)0)
     EntityQuote(*out, TextUntilNul(dew_owner[:]))
-    BuilderPrint(*out, ",\"account\":%,\"funding\":%}",
+    BuilderPrint(*out, ",\"account\":%,\"funding\":%,\"play\":%,\"play_status\":\"%\"}",
         ifx dew_plan[0] == cast(u8)0 then "null" else TextUntilNul(dew_plan[:]),
-        ifx dew_address[0] == cast(u8)0 then "null" else TextUntilNul(dew_address[:]))
+        ifx dew_address[0] == cast(u8)0 then "null" else TextUntilNul(dew_address[:]),
+        ifx dew_play && dew_play_state[0] == #char "{" then TextUntilNul(dew_play_state[:]) else "null",
+        TextUntilNul(dew_play_status[:]))
     dew_document = BuilderFinish(out)
     return dew_document
 }
@@ -101,6 +160,16 @@ DewEnqueue :: (text: string) -> bool {
     sequence <= dew_sequence || sequence > 2147483647 ||
     ReadStringText(text, FieldAt(text, 0, "operation"), operation[:]) <= 0 { return false }
     op := TextUntilNul(operation[:])
+    if op == "play" {
+        // Play's own sheet takes the payment; no node request until it completes.
+        unused ReadStringText(text, FieldAt(text, 0, "size"), size[:])
+        if !dew_play || !DewPlayProduct(TextUntilNul(size[:])) { return false }
+        dew_sequence = cast(s32)sequence
+        dew_play_status = .{}
+        unused PlayBillingBuy(TextUntilNul(size[:]), dew_play_state[:])
+        dew_play_wait = 0
+        return true
+    }
     if op != "refresh" && op != "address" && op != "buy" && op != "retry" { return false }
     if op == "address" && !dew_funding_allowed { return false }
     if op == "buy" {
@@ -141,8 +210,25 @@ DewPump :: () {
         address_request := TextUntilNul(dew_queued[:]) == "address"
         deposits_request := TextUntilNul(dew_queued[:]) == "deposits"
         purchase_request := TextUntilNul(dew_queued[:]) == "buy" || TextUntilNul(dew_queued[:]) == "retry"
+        play_request := TextUntilNul(dew_queued[:]) == "play"
         dew_queued = .{}
         dew_error = true
+        if play_request {
+            // An already consumed purchase was credited before; the node
+            // consumes a purchase only after crediting it.
+            dew_error = false
+            credited := dew_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK
+            if credited || (dew_pending.status == 400 && DewContains(TextUntilNul(dew_response[:]), "already consumed")) {
+                DewPlayDone()
+                unused CopyCString("credited", dew_play_status[:])
+                unused CopyCString("refresh", dew_queued[:])
+            } else {
+                unused CopyCString("failed", dew_play_status[:])
+                dew_play_wait = 600
+            }
+            dew_play_token = .{}
+            return
+        }
         if dew_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
             if address_request {
                 funding: DewFunding
@@ -173,12 +259,25 @@ DewPump :: () {
         }
         return
     }
+    if dew_play && dew_queued[0] == cast(u8)0 {
+        dew_play_tick += 1
+        if dew_play_wait > 0 { dew_play_wait -= 1 }
+        if dew_play_tick % 30 == 1 {
+            answer: [16384]u8
+            if PlayBillingProducts(DEW_PLAY_PRODUCTS, answer[:]) != "" { dew_play_state = answer }
+        }
+        if dew_play_wait == 0 && DewPlayNext() {
+            unused CopyCString("play", dew_queued[:])
+            unused CopyCString("verifying", dew_play_status[:])
+        }
+    }
     code: s32 = 0
     if TextUntilNul(dew_queued[:]) == "refresh" { code = 1 }
     if TextUntilNul(dew_queued[:]) == "address" { code = 2 }
     if TextUntilNul(dew_queued[:]) == "buy" { code = 3 }
     if TextUntilNul(dew_queued[:]) == "retry" { code = 4 }
     if TextUntilNul(dew_queued[:]) == "deposits" { code = 5 }
+    if TextUntilNul(dew_queued[:]) == "play" { code = 6 }
     if code == 0 { return }
     path: [4096]u8
     if code == 1 && dew_attempt[0] == cast(u8)0 {
@@ -208,6 +307,11 @@ DewPump :: () {
     purchase := code == 3 || code == 4
     dew_error = false
     route := ifx code == 2 then "/api/v1/tokens/purchases/monero/address" else "/api/v1/storage/plan"
+    body := ifx purchase then TextUntilNul(dew_attempt[:]) else ""
+    if code == 6 {
+        route = "/api/v1/tokens/purchases/google/verify"
+        body = TextUntilNul(dew_play_body[:])
+    }
     output := dew_response[:]
     if code == 5 {
         route = "/api/v1/tokens/purchases/monero/deposits"
@@ -215,7 +319,6 @@ DewPump :: () {
         output = dew_deposits_answer[:]
     }
     dew_active = BeginRequest(*dew_pending, client, *dew_session, UnixNow(), transport,
-        ifx purchase then "POST" else "GET", route,
-        ifx purchase then TextUntilNul(dew_attempt[:]) else "", output, headers[:])
+        ifx purchase || code == 6 then "POST" else "GET", route, body, output, headers[:])
     if !dew_active { dew_error = true; dew_queued = .{} }
 }

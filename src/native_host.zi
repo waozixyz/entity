@@ -41,6 +41,18 @@ entity_topup_requested: bool;
 
 EntityHostAllowFunding :: (allowed: bool) { DewAllowFunding(allowed) }
 
+// The app's edition decides how Dew is bought: the direct and F-Droid
+// editions use Monero (dew.waozi.xyz), the Google Play edition uses Google
+// Play Billing. Builds choose it with the GOOGLE_PLAY or FDROID define;
+// a host may also set it before opening the Profile.
+ENTITY_EDITION_DIRECT :: 0
+ENTITY_EDITION_FDROID :: 1
+ENTITY_EDITION_GOOGLE_PLAY :: 2
+EntityHostEdition :: (edition: s32) {
+    DewUseGooglePlay(edition == ENTITY_EDITION_GOOGLE_PLAY)
+    if edition != ENTITY_EDITION_GOOGLE_PLAY { DewAllowFunding(true) }
+}
+
 EntityHostText :: (text: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
         .data = HostTextData(text), .length = cast(usize)text.count}
@@ -136,6 +148,9 @@ EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigati
     entity_host_navigation = host_navigation
     entity_host_game = client_id == "arcade"
     entity_host_problem = ""
+    #if #defined(GOOGLE_PLAY) {
+        EntityHostEdition(ENTITY_EDITION_GOOGLE_PLAY)
+    }
     if !AccountStoreStartAt(root, client_id) || !CopyCString(root, asset_folder[:]) {
         entity_host_problem = "This browser or device does not let the profile save its data here."
         return false
