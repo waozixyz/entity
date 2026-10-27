@@ -142,7 +142,7 @@ def main():
               f'{len(body["purchaseOptions"][0]["regionalPricingAndAvailabilityConfigs"])} regions; sample {json.dumps(sample)}')
         if not apply:
             continue
-        status, answer = play.call('PATCH', f'/onetimeproducts/dew_{dew}?allowMissing=true&regionsVersion.version={version}', body)
+        status, answer = play.call('PATCH', f'/onetimeproducts/dew_{dew}?allowMissing=true&updateMask=listings,purchaseOptions&regionsVersion.version={version}', body)
         print('  save', status, answer if status != 200 else 'ok')
         if status != 200:
             continue
