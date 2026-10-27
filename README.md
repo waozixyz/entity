@@ -109,8 +109,14 @@ the host's existing Back control when the host supplies navigation.
 Hosts that draw their own top-up page, such as dew.waozi.xyz, read the
 balance and the account's Monero funding address with `EntityHostDewStatus`
 and ask the node for either with `EntityHostDewRequest("refresh")` or
-`EntityHostDewRequest("address")`. `scripts/build-web.py` links such a host
-without `--bundle`.
+`EntityHostDewRequest("address")`. `EntityHostDewRequest("deposits")` lists
+the account's recent Monero deposits for `EntityHostDewDeposits`.
+`scripts/build-web.py` links such a host without `--bundle`.
+
+The Profile's Top up opens https://dew.waozi.xyz/?account=ID for the signed-in
+account when the host is a native Entity host; hosts that answer Dew actions
+themselves keep their own top-up. A host that is the top-up page passes an
+empty `EntityHostTopUpUrl` and reads `EntityHostTopUpRequested` instead.
 
 On the Waozi node, connected native profiles can read their Dew balance, obtain
 their Monero funding address, and confirm a node-priced storage plan. Purchases

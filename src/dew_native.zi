@@ -30,6 +30,10 @@ dew_active: bool;
 dew_response: [8192]u8;
 dew_plan: [8192]u8;
 dew_address: [8192]u8;
+// The account's Monero deposits, newest first, as the node last listed them;
+// a request writes into the answer and only a complete list replaces them.
+dew_deposits: [196608]u8;
+dew_deposits_answer: [196608]u8;
 dew_attempt: [256]u8;
 dew_error: bool;
 dew_document: string;
@@ -55,6 +59,7 @@ DewReset :: () {
     dew_queued = .{}
     dew_plan = .{}
     dew_address = .{}
+    dew_deposits = .{}
     dew_attempt = .{}
     dew_error = false
     account_node_connected = false
@@ -132,6 +137,7 @@ DewPump :: () {
         if !PollRequest(*dew_pending) { return }
         dew_active = false
         address_request := TextUntilNul(dew_queued[:]) == "address"
+        deposits_request := TextUntilNul(dew_queued[:]) == "deposits"
         purchase_request := TextUntilNul(dew_queued[:]) == "buy" || TextUntilNul(dew_queued[:]) == "retry"
         dew_queued = .{}
         dew_error = true
@@ -140,6 +146,12 @@ DewPump :: () {
                 funding: DewFunding
                 if DewParseFunding(TextUntilNul(dew_response[:]), TextUntilNul(dew_owner[:]), *funding) {
                     dew_address = dew_response
+                    dew_error = false
+                }
+            } else if deposits_request {
+                answer := TextUntilNul(dew_deposits_answer[:])
+                if Space(answer, ValueEnd(answer, 0, 0)) == cast(s32)answer.count && ArrayCount(answer, FieldAt(answer, 0, "deposits")) >= 0 {
+                    dew_deposits = dew_deposits_answer
                     dew_error = false
                 }
             } else {
@@ -164,6 +176,7 @@ DewPump :: () {
     if TextUntilNul(dew_queued[:]) == "address" { code = 2 }
     if TextUntilNul(dew_queued[:]) == "buy" { code = 3 }
     if TextUntilNul(dew_queued[:]) == "retry" { code = 4 }
+    if TextUntilNul(dew_queued[:]) == "deposits" { code = 5 }
     if code == 0 { return }
     path: [4096]u8
     if code == 1 && dew_attempt[0] == cast(u8)0 {
@@ -192,9 +205,15 @@ DewPump :: () {
     headers: [0]HttpHeader
     purchase := code == 3 || code == 4
     dew_error = false
+    route := ifx code == 2 then "/api/v1/tokens/purchases/monero/address" else "/api/v1/storage/plan"
+    output := dew_response[:]
+    if code == 5 {
+        route = "/api/v1/tokens/purchases/monero/deposits"
+        dew_deposits_answer = .{}
+        output = dew_deposits_answer[:]
+    }
     dew_active = BeginRequest(*dew_pending, client, *dew_session, UnixNow(), transport,
-        ifx purchase then "POST" else "GET",
-        ifx code == 2 then "/api/v1/tokens/purchases/monero/address" else "/api/v1/storage/plan",
-        ifx purchase then TextUntilNul(dew_attempt[:]) else "", dew_response[:], headers[:])
+        ifx purchase then "POST" else "GET", route,
+        ifx purchase then TextUntilNul(dew_attempt[:]) else "", output, headers[:])
     if !dew_active { dew_error = true; dew_queued = .{} }
 }

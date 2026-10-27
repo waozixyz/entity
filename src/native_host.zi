@@ -25,12 +25,19 @@
 #import "kryon/geometry"
 #import "kryon/text_input_props"
 #import "kryon/system_clipboard"
+#import "kryon/open_uri"
 portable: AppContext;
 profile_document: string;
 asset_folder: [4096]u8;
 entity_host_navigation: bool;
 entity_host_game: bool;
 entity_paste: [16384]u8;
+// The Profile's Top up opens this page for the signed-in account; a host
+// that is that page sets it empty and takes the request itself.
+ENTITY_TOPUP_URL :: "https://dew.waozi.xyz/"
+entity_topup_url: [256]u8;
+entity_topup_custom: bool;
+entity_topup_requested: bool;
 
 EntityHostAllowFunding :: (allowed: bool) { DewAllowFunding(allowed) }
 
@@ -52,6 +59,10 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         }
         if service == "entity.dew" {
             request := AppArgumentText(arguments[1])
+            if request == "open-topup" {
+                result.* = EntityHostText(ifx EntityHostOpenTopUp() then "opened" else "rejected")
+                return 1
+            }
             result.* = EntityHostText(ifx request == "" then DewSnapshot() else ifx DewEnqueue(request) then "queued" else "rejected")
             return 1
         }
@@ -185,15 +196,50 @@ EntityHostDewStatus :: () -> EntityDewStatus {
     return status
 }
 
-// Asks the node for the balance ("refresh") or the funding address
-// ("address"); false while another Dew request is still running.
+// Asks the node for the balance ("refresh"), the funding address
+// ("address") or the recent deposits ("deposits"); false while another Dew
+// request is still running.
 EntityHostDewRequest :: (operation: string) -> bool {
-    if !DewReady() || (operation != "refresh" && operation != "address") { return false }
+    if !DewReady() || (operation != "refresh" && operation != "address" && operation != "deposits") { return false }
     if operation == "address" && !dew_funding_allowed { return false }
     if TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { DewReset() }
     if dew_active || dew_queued[0] != cast(u8)0 { return false }
     dew_queued = .{}
     return CopyCString(operation, dew_queued[:])
+}
+
+// The node's {"deposits":[…]} for the signed-in account, newest first, or ""
+// until a request has listed them.
+EntityHostDewDeposits :: () -> string {
+    if !DewReady() || TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { return "" }
+    return TextUntilNul(dew_deposits[:])
+}
+
+EntityHostTopUpUrl :: (url: string) {
+    entity_topup_url = .{}
+    entity_topup_custom = CopyCString(url, entity_topup_url[:])
+}
+
+// Whether the Profile asked to top up since the last call, for a host
+// whose own page tops up (see EntityHostTopUpUrl).
+EntityHostTopUpRequested :: () -> bool {
+    requested := entity_topup_requested
+    entity_topup_requested = false
+    return requested
+}
+
+EntityHostOpenTopUp :: () -> bool {
+    if !DewReady() || !dew_funding_allowed { return false }
+    base := ifx entity_topup_custom then TextUntilNul(entity_topup_url[:]) else ENTITY_TOPUP_URL
+    if base == "" {
+        entity_topup_requested = true
+        return true
+    }
+    link: Vec(u8)
+    BuilderPrint(*link, "%?account=%", base, TextUntilNul(account_recovery.keys.public_id[:]))
+    text := BuilderFinish(link)
+    defer { EntityFree(text) }
+    return OpenUri(text)
 }
 
 EntityHostSave :: () -> bool {

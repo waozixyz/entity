@@ -1127,6 +1127,9 @@ ProfileDewBalance :: (x: float32, y: float32, width: float32, draw: bool) -> Dew
         if dew_profile_host_actions {
             AppReply(ifx result.action == DewBalanceTopUp then "dew-topup" else ifx result.action == DewBalanceData then "dew-data" else "dew-plans")
         }
+        // Hosts that know dew.waozi.xyz open it for this account; others keep
+        // the Profile's own Dew page.
+        else if result.action == DewBalanceTopUp && AppService("entity.dew", "open-topup") == "opened" {}
         else { dew_page = true; dew_refresh = true; management_scroll = 0 }
     }
     return result
