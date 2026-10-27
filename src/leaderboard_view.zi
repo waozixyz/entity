@@ -1,0 +1,216 @@
+// Profile owns the leaderboard UI in every host. The host supplies only
+// installed boards and ranked display values through entity.leaderboard.
+#import "leaderboard_model"
+#import "achievement_view"
+#import "kryon/app_context"
+#import "kryon/dropdown_props"
+#import "kryon/dropdown_widget"
+#import "std/number_text"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "model"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/drawing_props"
+#import "kryon/button_props"
+#import "kryon/button_widget"
+#import "kryon/scroll_props"
+#import "kryon/scroll_widget"
+#import "kryon/box_props"
+#import "kryon/box_widget"
+#import "kryon/tree"
+
+profile_leaderboard_open: bool;
+profile_leaderboard_ready: bool;
+profile_leaderboard_page: ProfileLeaderboard;
+profile_leaderboard_scroll: s32;
+profile_leaderboard_ticks: s32;
+profile_leaderboard_request: [256]u8;
+
+LeaderboardLabel :: (key: string, fallback: string) -> string {
+    label := AppLocale(key)
+    return ifx label == "" || label == key then fallback else label
+}
+
+ProfileLeaderboardCommand :: (command: string) -> bool {
+    if command == "reload" {
+        profile_leaderboard_open = false
+        profile_leaderboard_ready = false
+        profile_leaderboard_page = .{}
+        return false
+    }
+    if command == "leaderboard" && AppSupports(LEADERBOARD_SERVICE) {
+        profile_leaderboard_open = true
+        profile_leaderboard_ready = false
+        profile_leaderboard_scroll = 0
+        profile_leaderboard_request = .{}
+        unused CopyCString("refresh", profile_leaderboard_request[:])
+        return true
+    }
+    if command == "back" && profile_leaderboard_open {
+        profile_leaderboard_open = false
+        profile_leaderboard_ready = false
+        AppReply("handled")
+        return true
+    }
+    return false
+}
+
+ProfileLeaderboardSelect :: (index: s32, metric: s32) {
+    if index < 0 || index >= profile_leaderboard_page.board_count { return }
+    request: Vec(u8)
+    BuilderPrint(*request, "{\"owner\":")
+    EntityQuote(*request, TextUntilNul(profile_leaderboard_page.owner[:]))
+    BuilderPrint(*request, ",\"board\":")
+    EntityQuote(*request, TextUntilNul(profile_leaderboard_page.boards[index].id[:]))
+    BuilderPrint(*request, ",\"metric\":%}", metric)
+    document := BuilderFinish(request)
+    unused CopyCString(document, profile_leaderboard_request[:])
+    AchievementRelease(document)
+    profile_leaderboard_ready = false
+    profile_leaderboard_scroll = 0
+}
+
+ProfileLeaderboardFrame :: (navigation: bool) -> bool {
+    if !profile_leaderboard_open { return false }
+    profile_leaderboard_ticks += 1
+    // Query on every frame to discard account changes and uninstalled boards
+    // immediately. Providers cache/rank results outside their network work.
+    response := AppService(LEADERBOARD_SERVICE, TextUntilNul(profile_leaderboard_request[:]))
+    profile_leaderboard_request = .{}
+    next: ProfileLeaderboard
+    if ProfileLeaderboardDecode(response, *next) {
+        if TextUntilNul(next.owner[:]) != TextUntilNul(profile_leaderboard_page.owner[:]) {
+            profile_leaderboard_scroll = 0
+        }
+        profile_leaderboard_page = next
+        profile_leaderboard_ready = true
+    } else {
+        // Never leave another account's rows on screen after a failed query.
+        profile_leaderboard_page = .{}
+        profile_leaderboard_ready = false
+    }
+    page := *profile_leaderboard_page
+    session := AppSession()
+    scale := AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    area := AppBounds()
+    width := area.width - 32.0 * scale
+    if width > 720.0 * scale { width = 720.0 * scale }
+    if width < 120.0 * scale { return true }
+    x := area.x + (area.width - width) * 0.5
+    y := area.y + 12.0 * scale
+    font := cast(s32)(14.0 * scale)
+    if navigation {
+        if Button(session, ButtonProps.{.id = 55000, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+                .label = LeaderboardLabel("entity.back", "Back")}) != 0 {
+            profile_leaderboard_open = false
+        }
+        y += 56.0 * scale
+    }
+    AchievementText(session, 55001, LeaderboardLabel("leaderboard_title", "Leaderboard"),
+        Rectangle.{x, y, width, 36.0 * scale}, cast(s32)(24.0 * scale))
+    y += 44.0 * scale
+    if !profile_leaderboard_ready || page.board_count == 0 {
+        AchievementText(session, 55002, LeaderboardLabel("profile_no_leaderboard_data", "No leaderboard data yet."),
+            Rectangle.{x, y, width, 80.0 * scale}, font)
+        return true
+    }
+    current := *page.boards[page.selected]
+    apps: [LEADERBOARD_BOARDS]DropdownOption
+    first: [LEADERBOARD_BOARDS]s32
+    app_count: s32 = 0
+    selected_app: s32 = 0
+    for index: cast(s32)0..page.board_count - 1 {
+        app := TextUntilNul(page.boards[index].app[:])
+        seen := false
+        for prior: cast(s32)0..app_count - 1 {
+            if TextUntilNul(page.boards[first[prior]].app[:]) == app { seen = true }
+        }
+        if seen { continue }
+        if app == TextUntilNul(current.app[:]) { selected_app = app_count }
+        first[app_count] = index
+        apps[app_count].label = TextUntilNul(page.boards[index].app_title[:])
+        app_count += 1
+    }
+    if app_count > 1 {
+        menu := Dropdown(session, DropdownProps.{.id = 55003, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+                .selected_index = selected_app, .scale = scale}, apps[:app_count])
+        if menu.changed && menu.selected_index >= 0 && menu.selected_index < app_count {
+            ProfileLeaderboardSelect(first[menu.selected_index], 0)
+        }
+        y += 56.0 * scale
+    }
+    choices: [LEADERBOARD_BOARDS]s32
+    count: s32 = 0
+    for index: cast(s32)0..page.board_count - 1 {
+        if TextUntilNul(page.boards[index].app[:]) == TextUntilNul(current.app[:]) {
+            choices[count] = index
+            count += 1
+        }
+    }
+    columns := cast(s32)((width + 8.0 * scale) / (168.0 * scale))
+    if columns < 2 { columns = 2 }
+    rows := (count + columns - 1) / columns
+    columns = (count + rows - 1) / rows
+    choice_width := (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
+    for index: cast(s32)0..count - 1 {
+        chosen := choices[index]
+        if Button(session, ButtonProps.{.id = 55100 + index,
+                .bounds = Rectangle.{x + cast(float32)(index % columns) * (choice_width + 8.0 * scale),
+                    y + cast(float32)(index / columns) * 48.0 * scale, choice_width, 40.0 * scale},
+                .label = TextUntilNul(page.boards[chosen].title[:]), .selected = chosen == page.selected,
+                .fit_content = true}) != 0 && chosen != page.selected {
+            ProfileLeaderboardSelect(chosen, 0)
+        }
+    }
+    y += cast(float32)rows * 48.0 * scale + 8.0 * scale
+    average := current.average[0] != cast(u8)0
+    name_width := width * (ifx average then 0.5 else 0.666667)
+    value_width := (width - name_width) / (ifx average then 2.0 else 1.0)
+    AchievementText(session, 55200, LeaderboardLabel("profile_friends_title", "Friends"),
+        Rectangle.{x, y, name_width, 36.0 * scale}, font)
+    for metric: cast(s32)0..(ifx average then 1 else 0) {
+        if Button(session, ButtonProps.{.id = 55201 + metric,
+                .bounds = Rectangle.{x + name_width + cast(float32)metric * value_width, y, value_width, 36.0 * scale},
+                .label = TextUntilNul(ifx metric == 0 then current.primary[:] else current.average[:]),
+                .selected = metric == page.metric, .fit_content = true}) != 0 && metric != page.metric {
+            ProfileLeaderboardSelect(page.selected, metric)
+        }
+    }
+    y += 44.0 * scale
+    if page.row_count == 0 {
+        AchievementText(session, 55204, LeaderboardLabel(ifx page.loading then "profile_updating_status" else "profile_no_leaderboard_data",
+            ifx page.loading then "Updating…" else "No leaderboard data yet."),
+            Rectangle.{x, y, width, 64.0 * scale}, font)
+        return true
+    }
+    row_height := cast(s32)(40.0 * scale)
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)55300,
+            .bounds = Rectangle.{x, y, width, area.y + area.height - y - 8.0 * scale},
+            .content_height = page.row_count * row_height, .scroll_offset = profile_leaderboard_scroll})
+    profile_leaderboard_scroll = scroll.scroll_offset
+    if !scroll.opened { return true }
+    for index: cast(s32)0..page.row_count - 1 {
+        row := *page.rows[index]
+        row_y := scroll.content.y + cast(float32)(index * row_height)
+        key := cast(u64)(55400 + index * 4)
+        if row.own || index % 2 == 1 {
+            Box(session, BoxProps.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},
+                    .fill = ifx row.own then Color.{156, 188, 143, 64} else Color.{156, 156, 156, 24}, .radius = 8.0 * scale})
+        }
+        name: Vec(u8)
+        BuilderPrint(*name, "%. %", index + 1, TextUntilNul(row.name[:]))
+        text := BuilderFinish(name)
+        AchievementText(session, key + 1, text, Rectangle.{x + 8.0 * scale, row_y, name_width - 16.0 * scale, cast(float32)row_height}, font)
+        AchievementRelease(text)
+        AchievementText(session, key + 2, TextUntilNul(row.value[:]), Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 8.0 * scale, cast(float32)row_height}, font)
+        if average {
+            AchievementText(session, key + 3, TextUntilNul(row.average[:]), Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 8.0 * scale, cast(float32)row_height}, font)
+        }
+    }
+    unused End(session)
+    AppKeyboard(false)
+    return true
+}

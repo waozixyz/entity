@@ -1,0 +1,67 @@
+#import "leaderboard_model"
+#import "leaderboard_native"
+#import "account_store"
+#import "recovery"
+#import "daochi_client/keys"
+#import "model"
+#import "native_files"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/file"
+#import "std/vec"
+
+installed: bool = true;
+IsInstalled :: (game: string) -> bool { return installed && game == "arcade.shovey" }
+
+Check :: () -> s32 {
+    leaderboard_installed = IsInstalled
+    if !CopyCString(NativeEnvironment("ENTITY_LEADERBOARD_TEST_DATA"), account_root[:]) { return 1 }
+    // A local score, saved and restored without connecting an account.
+    if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 12") { return 2 }
+    if EntityLeaderboardReport("arcade", "Arcade", "other/game", "Other", "levels 1") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels -1") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 100001") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels ") { return 3 }
+    page: ProfileLeaderboard
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 ||
+    page.selected != 0 || page.row_count != 0 || TextUntilNul(page.boards[0].title[:]) != "Shovey" { return 4 }
+    // A retained score must disappear as soon as its game is uninstalled.
+    installed = false
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 0 || page.selected != -1 { return 5 }
+    installed = true
+    native_leaderboard_owner = .{}
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 { return 6 }
+    // An imported account cannot inherit another account's rankings or scores.
+    unused CopyCString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", account_recovery.keys.public_id[:])
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 0 || page.row_count != 0 { return 7 }
+    if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 4") { return 8 }
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer("{\"owner\":\"stale\",\"board\":\"arcade.shovey\"}"), *page) ||
+    page.board_count != 1 || page.row_count != 1 || TextUntilNul(page.rows[0].value[:]) != "4" { return 9 }
+    unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
+    unused CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", native_leaderboard_friends[:])
+    native_leaderboard_rows_dirty = true
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
+    TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own ||
+    TextUntilNul(page.rows[2].value[:]) != "0" { return 15 }
+    // Properly escaped display data round-trips; malformed snapshots don't.
+    unused CopyCString("A \"quoted\" name", page.rows[0].name[:])
+    encoded := ProfileLeaderboardEncode(*page)
+    defer { EntityFree(encoded) }
+    decoded: ProfileLeaderboard
+    if !ProfileLeaderboardDecode(encoded, *decoded) || TextUntilNul(decoded.rows[0].name[:]) != "A \"quoted\" name" { return 10 }
+    if ProfileLeaderboardDecode("{}", *decoded) || ProfileLeaderboardDecode("[]", *decoded) ||
+    ProfileLeaderboardDecode("{\"version\":1,\"owner\":\"a\",\"selected\":0,\"metric\":0,\"loading\":0,\"error\":0,\"boards\":[],\"rows\":[]}", *decoded) { return 11 }
+    page.boards[1] = page.boards[0]
+    page.board_count = 2
+    duplicate := ProfileLeaderboardEncode(*page)
+    defer { EntityFree(duplicate) }
+    if ProfileLeaderboardDecode(duplicate, *decoded) { return 12 }
+    unused CopyCString("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", account_recovery.keys.public_id[:])
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 0 || page.board_count != 0 { return 13 }
+    account_recovery.keys.public_id = .{}
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 || page.row_count != 0 { return 14 }
+    return 0
+}
+
+#program_export
+main :: () -> s32 { return Check() }

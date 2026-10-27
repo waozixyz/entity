@@ -165,3 +165,22 @@ and reusable record keys stay on the device. The node retains earned unlocks
 and completion marks separately from new route evidence. Migration never
 credits Dew, and normal claims remain once per account. Missing snapshots and
 connection failures remain visible failures rather than successful claims.
+
+## Shared leaderboard
+
+Leaderboard lives inside Profile. Hosts provide `entity.leaderboard` with a
+bounded `ProfileLeaderboard` snapshot from `entity/leaderboard_model`: installed
+boards, the selected board, and ranked friend rows. Selection requests carry
+the snapshot's owner, a listed board ID and metric. A host rejects stale owners
+and boards it no longer has installed. The `leaderboard` command opens the page;
+Back returns to Profile. Labels use the host's existing leaderboard translations.
+
+Native game hosts use `entity/leaderboard_native`. Forward a game's `leaderboard`
+score report to `EntityLeaderboardReport` with its verified identity and title,
+and supply `leaderboard_installed` to check current installed membership.
+Profile keeps scores separately for each account, publishes the installed
+games' reported totals through the existing friend-statistics API, and fetches
+rankings asynchronously in `EntityLeaderboardPump` (part of `EntityHostPump`).
+Uninstalling hides a retained score immediately. Account changes cancel old
+requests and clear old friend rows. No game gets another game's records or keys.
+`python3 scripts/leaderboard-test.py` tests these boundaries locally.

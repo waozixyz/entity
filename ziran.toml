@@ -31,6 +31,8 @@ game_shop = "src/game_shop.zi"
 game_shop_native = "src/game_shop_native.zi"
 game_progress_id = "src/game_progress_id.zi"
 game_completion = "src/game_completion.zi"
+leaderboard_model = "src/leaderboard_model.zi"
+leaderboard_native = "src/leaderboard_native.zi"
 pairing = "src/pairing.zi"
 pairing_client = "src/pairing_client.zi"
 

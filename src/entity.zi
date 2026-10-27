@@ -2,6 +2,8 @@
 // interface; extension replies name only routes supplied by that host.
 #import "model"
 #import "achievement_view"
+#import "leaderboard_view"
+#import "leaderboard_model"
 #import "management"
 #import "dew_model"
 #import "dew_view"
@@ -872,6 +874,7 @@ Draw :: () {
         loaded = true
         dew_refresh = true
     }
+    if ProfileLeaderboardFrame(!state.host_navigation) { return }
     if AchievementViewFrame(!state.host_navigation) { return }
     if dew_page { DrawDew(); return }
     if management_page != 0 { DrawAccount(); return }
@@ -942,6 +945,12 @@ Draw :: () {
     if (state.controls & ENTITY_NODES) != 0 && ListRow(704, Label("entity.nodes", "Nodes"), NodesSummary(), x, *y, width) {
         OpenManagement(PAGE_NODES)
     }
+    if AppSupports(LEADERBOARD_SERVICE) {
+        if Action(550, Label("leaderboard_title", "Leaderboard"), Rectangle.{x, y, width, 48.0 * scale}) && Save() {
+            unused ProfileLeaderboardCommand("leaderboard")
+        }
+        y += 60.0 * scale
+    }
     ExtensionRows(x, *y, width)
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
@@ -1004,6 +1013,7 @@ Main :: () -> s64 {
         AppReply("handled")
         return 0
     }
+    if mode == APP_COMMAND && ProfileLeaderboardCommand(AppCommand()) { return 0 }
     if mode == APP_COMMAND && AchievementCommand(AppCommand()) { return 0 }
     if mode == APP_FRAME { Draw() }
     if mode == APP_COMMAND && AppCommand() == "reload" {

@@ -4,6 +4,8 @@
 #import "dew_native"
 #import "entity_records"
 #import "entity_dew"
+#import "leaderboard_native"
+#import "leaderboard_model"
 #import "model"
 #import "native_files"
 #import "native_management"
@@ -36,12 +38,16 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew"
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == LEADERBOARD_SERVICE
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
+        if service == LEADERBOARD_SERVICE {
+            result.* = EntityHostText(EntityLeaderboardAnswer(AppArgumentText(arguments[1])))
+            return 1
+        }
         if service == "entity.dew" {
             request := AppArgumentText(arguments[1])
             result.* = EntityHostText(ifx request == "" then DewSnapshot() else ifx DewEnqueue(request) then "queued" else "rejected")
@@ -178,6 +184,7 @@ EntityHostPump :: () {
     DewPump()
     EntityDewPump()
     EntityRecordsPump()
+    EntityLeaderboardPump()
 }
 
 EntityHostClose :: () -> bool {

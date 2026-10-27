@@ -1,0 +1,405 @@
+// Game reports are accepted only with a verified host-supplied identity.
+// Installed membership stays with the host; retained scores never install apps.
+#import "leaderboard_model"
+#import "account_store"
+#import "recovery"
+#import "daochi_client/keys"
+#import "native_files"
+#import "std/number_text"
+#import "std/date_time_linux"
+#import "std/net_http"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "model"
+#import "daochi_client/client"
+#import "daochi_client/async_client"
+#import "daochi_client/social"
+Auth :: #import "daochi_client/auth";
+#import "kryon/http_transfer"
+
+LeaderboardInstalled :: #type (game: string) -> bool;
+leaderboard_installed: LeaderboardInstalled;
+leaderboard_transport: AsyncTransport;
+
+NativeGameScore :: struct {
+    board: ProfileBoard
+    value: s64
+}
+
+native_scores: [LEADERBOARD_BOARDS]NativeGameScore;
+native_score_count: s32;
+native_leaderboard_owner: [97]u8;
+native_leaderboard_page: ProfileLeaderboard;
+native_leaderboard_selected: [65]u8;
+native_leaderboard_requested: bool;
+native_leaderboard_loaded: bool;
+native_leaderboard_error: bool;
+native_leaderboard_stage: s32;
+native_leaderboard_pending: PendingRequest;
+native_leaderboard_session: Auth.Session;
+native_leaderboard_transfer: HttpTransfer;
+native_leaderboard_response: [16384]u8;
+native_leaderboard_stats: [16384]u8;
+native_leaderboard_friends: [16384]u8;
+native_leaderboard_body: string;
+native_leaderboard_path: [768]u8;
+native_leaderboard_answer: string;
+native_leaderboard_rows: [LEADERBOARD_ROWS]ProfileRank;
+native_leaderboard_row_count: s32;
+native_leaderboard_rows_dirty: bool = true;
+
+LeaderboardNameValid :: (name: string, maximum: s64) -> bool {
+    if name.count == 0 || name.count > maximum { return false }
+    for byte: name {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "." || byte == #char "_" || byte == #char ":" || byte == #char "-") { return false }
+    }
+    return true
+}
+
+NativeLeaderboardFile :: (output: []u8) -> string {
+    directory: [4096]u8
+    root := AccountStorePath("leaderboards", directory[:])
+    if !NativeDirectory(root) { return "" }
+    return NativeJoin(output, root, TextUntilNul(native_leaderboard_owner[:]))
+}
+
+NativeLeaderboardSave :: () -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"scores\":[")
+    for index: cast(s32)0..native_score_count - 1 {
+        score := *native_scores[index]
+        BuilderPrint(*out, "%{\"app\":", ifx index > 0 then "," else "")
+        EntityQuote(*out, TextUntilNul(score.board.app[:]))
+        BuilderPrint(*out, ",\"app_title\":")
+        EntityQuote(*out, TextUntilNul(score.board.app_title[:]))
+        BuilderPrint(*out, ",\"id\":")
+        EntityQuote(*out, TextUntilNul(score.board.id[:]))
+        BuilderPrint(*out, ",\"title\":")
+        EntityQuote(*out, TextUntilNul(score.board.title[:]))
+        BuilderPrint(*out, ",\"value\":%}", score.value)
+    }
+    BuilderPrint(*out, "]}")
+    document := BuilderFinish(out)
+    defer { EntityFree(document) }
+    path: [4096]u8
+    name := NativeLeaderboardFile(path[:])
+    return name != "" && NativeWrite(name, document)
+}
+
+NativeLeaderboardOwner :: () {
+    owner := TextUntilNul(account_recovery.keys.public_id[:])
+    if owner == "" { owner = "local" }
+    if owner == TextUntilNul(native_leaderboard_owner[:]) { return }
+    CancelRequest(*native_leaderboard_pending)
+    HttpTransferCancel(*native_leaderboard_transfer)
+    native_leaderboard_session = .{}
+    unused CopyCString(owner, native_leaderboard_owner[:])
+    native_score_count = 0
+    native_scores = .{}
+    native_leaderboard_page = .{}
+    native_leaderboard_selected = .{}
+    native_leaderboard_stage = 0
+    native_leaderboard_loaded = false
+    native_leaderboard_requested = false
+    native_leaderboard_error = false
+    native_leaderboard_stats = .{}
+    native_leaderboard_friends = .{}
+    native_leaderboard_rows = .{}
+    native_leaderboard_row_count = 0
+    native_leaderboard_rows_dirty = true
+    path: [4096]u8
+    name := NativeLeaderboardFile(path[:])
+    if name == "" { return }
+    buffer: [32768]u8
+    if NativeRead(name, buffer[:]) < 1 { return }
+    document := TextUntilNul(buffer[:])
+    at := FieldAt(document, 0, "scores")
+    count := ArrayCount(document, at)
+    if count < 0 || count > LEADERBOARD_BOARDS { return }
+    for index: cast(s32)0..count - 1 {
+        score: NativeGameScore
+        item := ElementAt(document, at, index)
+        value := ReadNumber(document, FieldAt(document, item, "value"))
+        if ReadStringText(document, FieldAt(document, item, "app"), score.board.app[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "app_title"), score.board.app_title[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "id"), score.board.id[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "title"), score.board.title[:]) < 1 ||
+        !LeaderboardNameValid(TextUntilNul(score.board.id[:]), 31) ||
+        !value.valid || value.value < 0 || value.value > 100000 || value.value != cast(float64)cast(s64)value.value { continue }
+        score.value = cast(s64)value.value
+        unused CopyCString("Levels solved", score.board.primary[:])
+        native_scores[native_score_count] = score
+        native_score_count += 1
+    }
+}
+
+EntityLeaderboardReport :: (app: string, app_title: string, game: string, title: string, request: string) -> bool {
+    if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) ||
+    request.count < 8 || request[:7] != "levels " { return false }
+    value: s64 = 0
+    for byte: request[7:] {
+        if byte < #char "0" || byte > #char "9" || value > 100000 { return false }
+        value = value * 10 + cast(s64)(byte - #char "0")
+    }
+    if value > 100000 { return false }
+    NativeLeaderboardOwner()
+    index: s32 = -1
+    for item: cast(s32)0..native_score_count - 1 {
+        if TextUntilNul(native_scores[item].board.id[:]) == game { index = item }
+    }
+    if index < 0 {
+        if native_score_count >= LEADERBOARD_BOARDS { return false }
+        index = native_score_count
+        native_score_count += 1
+    }
+    score := *native_scores[index]
+    if TextUntilNul(score.board.id[:]) == game && score.value == value &&
+    TextUntilNul(score.board.title[:]) == title { return true }
+    score.value = value
+    unused CopyCString(app, score.board.app[:])
+    unused CopyCString(app_title, score.board.app_title[:])
+    unused CopyCString(game, score.board.id[:])
+    unused CopyCString(ifx title == "" then game else title, score.board.title[:])
+    unused CopyCString("Levels solved", score.board.primary[:])
+    native_leaderboard_loaded = false
+    native_leaderboard_rows_dirty = true
+    return NativeLeaderboardSave()
+}
+
+NativeLeaderboardStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*native_leaderboard_transfer, request, output, 15000)
+}
+NativeLeaderboardPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*native_leaderboard_transfer, status) }
+NativeLeaderboardCancel :: (context: *void) { HttpTransferCancel(*native_leaderboard_transfer) }
+
+NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool) {
+    page := *native_leaderboard_page
+    if page.row_count >= LEADERBOARD_ROWS { return }
+    alias: [49]u8
+    id: [97]u8
+    unused ReadStringText(document, FieldAt(document, at, "alias"), alias[:])
+    unused ReadStringText(document, FieldAt(document, at, "user_id_hash"), id[:])
+    if id[0] == cast(u8)0 { unused ReadStringText(document, FieldAt(document, at, "id"), id[:]) }
+    row := *page.rows[page.row_count]
+    display: Vec(u8)
+    if alias[0] != cast(u8)0 { BuilderPrint(*display, "@%", TextUntilNul(alias[:])) }
+    else {
+        public_id := TextUntilNul(id[:])
+        BuilderPrint(*display, "%", ifx public_id.count > 12 then public_id[:12] else public_id)
+    }
+    text := BuilderFinish(display)
+    unused CopyCString(text, row.name[:])
+    EntityFree(text)
+    digits: [24]u8
+    unused CopyCString(FormatInteger(value, digits[:]), row.value[:])
+    row.own = own
+    page.row_count += 1
+}
+
+NativeLeaderboardRows :: () {
+    page := *native_leaderboard_page
+    if page.selected < 0 || TextUntilNul(page.owner[:]) == "local" { return }
+    if !native_leaderboard_rows_dirty {
+        page.rows = native_leaderboard_rows
+        page.row_count = native_leaderboard_row_count
+        return
+    }
+    selected := TextUntilNul(page.boards[page.selected].id[:])
+    own: s64 = 0
+    for index: cast(s32)0..native_score_count - 1 {
+        if TextUntilNul(native_scores[index].board.id[:]) == selected { own = native_scores[index].value }
+    }
+    stats := TextUntilNul(native_leaderboard_stats[:])
+    ids: [LEADERBOARD_ROWS][97]u8
+    at := FieldAt(stats, 0, "rows")
+    count := ArrayCount(stats, at)
+    for index: cast(s32)0..count - 1 {
+        if page.row_count >= LEADERBOARD_ROWS - 1 { break }
+        item := ElementAt(stats, at, index)
+        id: [97]u8
+        unused ReadStringText(stats, FieldAt(stats, item, "user_id_hash"), id[:])
+        if id[0] == cast(u8)0 || TextUntilNul(id[:]) == TextUntilNul(page.owner[:]) { continue }
+        duplicate := false
+        for prior: cast(s32)0..page.row_count - 1 {
+            if TextUntilNul(ids[prior][:]) == TextUntilNul(id[:]) { duplicate = true }
+        }
+        value := ReadNumber(stats, FieldAt(stats, item, "value"))
+        if duplicate || !value.valid || value.value < 0 || value.value > 100000 { continue }
+        ids[page.row_count] = id
+        NativeLeaderboardRow(stats, item, cast(s64)value.value, false)
+    }
+    friends := TextUntilNul(native_leaderboard_friends[:])
+    at = FieldAt(friends, 0, "friends")
+    count = ArrayCount(friends, at)
+    for index: cast(s32)0..count - 1 {
+        if page.row_count >= LEADERBOARD_ROWS - 1 { break }
+        item := ElementAt(friends, at, index)
+        id: [97]u8
+        unused ReadStringText(friends, FieldAt(friends, item, "user_id_hash"), id[:])
+        if id[0] == cast(u8)0 { unused ReadStringText(friends, FieldAt(friends, item, "id"), id[:]) }
+        if id[0] == cast(u8)0 || TextUntilNul(id[:]) == TextUntilNul(page.owner[:]) { continue }
+        duplicate := false
+        for prior: cast(s32)0..page.row_count - 1 {
+            if TextUntilNul(ids[prior][:]) == TextUntilNul(id[:]) { duplicate = true }
+        }
+        if duplicate { continue }
+        ids[page.row_count] = id
+        NativeLeaderboardRow(friends, item, 0, false)
+    }
+    row := *page.rows[page.row_count]
+    alias := TextUntilNul(account_alias[:])
+    display: Vec(u8)
+    if alias != "" { BuilderPrint(*display, "@%", alias) }
+    else {
+        id := TextUntilNul(page.owner[:])
+        BuilderPrint(*display, "%", ifx id.count > 12 then id[:12] else id)
+    }
+    text := BuilderFinish(display)
+    unused CopyCString(text, row.name[:])
+    EntityFree(text)
+    digits: [24]u8
+    unused CopyCString(FormatInteger(own, digits[:]), row.value[:])
+    row.own = true
+    page.row_count += 1
+    for index: cast(s32)1..page.row_count - 1 {
+        current := page.rows[index]
+        value := ReadNumber(TextUntilNul(current.value[:]), 0)
+        position := index
+        while position > 0 {
+            prior := *page.rows[position - 1]
+            other := ReadNumber(TextUntilNul(prior.value[:]), 0)
+            if other.value >= value.value { break }
+            page.rows[position] = prior.*
+            position -= 1
+        }
+        page.rows[position] = current
+    }
+    native_leaderboard_rows = page.rows
+    native_leaderboard_row_count = page.row_count
+    native_leaderboard_rows_dirty = false
+}
+
+EntityLeaderboardAnswer :: (request: string) -> string {
+    NativeLeaderboardOwner()
+    page := *native_leaderboard_page
+    page.* = .{}
+    page.owner = native_leaderboard_owner
+    for index: cast(s32)0..native_score_count - 1 {
+        score := *native_scores[index]
+        if leaderboard_installed == null || !leaderboard_installed(TextUntilNul(score.board.id[:])) { continue }
+        page.boards[page.board_count] = score.board
+        page.board_count += 1
+    }
+    page.selected = ProfileBoardFind(page, TextUntilNul(native_leaderboard_selected[:]))
+    if page.selected < 0 && page.board_count > 0 { page.selected = 0 }
+    owner: [97]u8
+    board: [65]u8
+    if request == "refresh" { native_leaderboard_loaded = false }
+    if ReadStringText(request, FieldAt(request, 0, "owner"), owner[:]) > 0 &&
+    TextUntilNul(owner[:]) == TextUntilNul(page.owner[:]) &&
+    ReadStringText(request, FieldAt(request, 0, "board"), board[:]) > 0 {
+        chosen := ProfileBoardFind(page, TextUntilNul(board[:]))
+        if chosen >= 0 { page.selected = chosen }
+    }
+    if page.selected >= 0 {
+        chosen := page.boards[page.selected].id
+        if TextUntilNul(chosen[:]) != TextUntilNul(native_leaderboard_selected[:]) {
+            CancelRequest(*native_leaderboard_pending)
+            native_leaderboard_stage = 0
+            native_leaderboard_selected = chosen
+            native_leaderboard_stats = .{}
+            native_leaderboard_loaded = false
+            native_leaderboard_rows_dirty = true
+        }
+        if !native_leaderboard_loaded && native_leaderboard_stage == 0 && TextUntilNul(page.owner[:]) != "local" {
+            native_leaderboard_requested = true
+        }
+        NativeLeaderboardRows()
+    } else {
+        CancelRequest(*native_leaderboard_pending)
+        native_leaderboard_stage = 0
+        native_leaderboard_requested = false
+        native_leaderboard_selected = .{}
+        native_leaderboard_stats = .{}
+    }
+    page.loading = native_leaderboard_requested || native_leaderboard_stage != 0
+    page.error = native_leaderboard_error
+    EntityFree(native_leaderboard_answer)
+    native_leaderboard_answer = ProfileLeaderboardEncode(page)
+    return native_leaderboard_answer
+}
+
+EntityLeaderboardPump :: () {
+    NativeLeaderboardOwner()
+    if native_leaderboard_stage != 0 {
+        if !PollRequest(*native_leaderboard_pending) { return }
+        valid := native_leaderboard_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && native_leaderboard_pending.status == 200
+        native_leaderboard_error = native_leaderboard_error || !valid
+        if native_leaderboard_stage == 2 && valid { native_leaderboard_friends = native_leaderboard_response }
+        if native_leaderboard_stage == 3 {
+            if valid { native_leaderboard_stats = native_leaderboard_response }
+            native_leaderboard_rows_dirty = true
+            native_leaderboard_stage = 0
+            native_leaderboard_loaded = true
+            return
+        }
+        native_leaderboard_stage += 1
+    } else {
+        if !native_leaderboard_requested { return }
+        native_leaderboard_requested = false
+        native_leaderboard_error = false
+        native_leaderboard_stage = 1
+    }
+    client: Client
+    if !AccountStoreClient(null, *client) {
+        native_leaderboard_stage = 0
+        native_leaderboard_loaded = true
+        native_leaderboard_error = true
+        return
+    }
+    EntityFree(native_leaderboard_body)
+    native_leaderboard_body = ""
+    path: string
+    if native_leaderboard_stage == 1 {
+        now := LocalNow()
+        date := now.year * 10000 + now.month * 100 + now.day
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"app\":\"inbe\",\"metrics\":[")
+        count: s32 = 0
+        for index: cast(s32)0..native_score_count - 1 {
+            score := *native_scores[index]
+            if leaderboard_installed == null || !leaderboard_installed(TextUntilNul(score.board.id[:])) { continue }
+            BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"levels\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+                ifx count > 0 then "," else "", TextUntilNul(score.board.id[:]), score.value, score.value, date)
+            count += 1
+        }
+        BuilderPrint(*out, "]}")
+        native_leaderboard_body = BuilderFinish(out)
+        path = "/api/v1/profile/stats"
+    } else if native_leaderboard_stage == 2 {
+        path = "/api/v1/friends"
+    } else {
+        if !BuildFriendStatsPath("inbe", TextUntilNul(native_leaderboard_selected[:]), "levels", native_leaderboard_path[:]) {
+            native_leaderboard_stage = 0
+            native_leaderboard_loaded = true
+            native_leaderboard_error = true
+            return
+        }
+        path = TextUntilNul(native_leaderboard_path[:])
+    }
+    headers: [0]HttpHeader
+    transport := leaderboard_transport
+    if transport.start == null {
+        transport = AsyncTransport.{.start = NativeLeaderboardStart, .poll = NativeLeaderboardPoll, .cancel = NativeLeaderboardCancel}
+    }
+    native_leaderboard_response = .{}
+    if !BeginRequest(*native_leaderboard_pending, client, *native_leaderboard_session, UnixNow(), transport,
+        ifx native_leaderboard_stage == 1 then "PUT" else "GET", path, native_leaderboard_body, native_leaderboard_response[:], headers[:]) {
+        native_leaderboard_stage = 0
+        native_leaderboard_loaded = true
+        native_leaderboard_error = true
+    }
+}

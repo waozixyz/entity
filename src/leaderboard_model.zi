@@ -1,0 +1,138 @@
+// A bounded, account-scoped view of boards from the host's installed apps.
+// The profile receives display data and selections, never account keys.
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "model"
+
+LEADERBOARD_SERVICE :: "entity.leaderboard"
+LEADERBOARD_BOARDS :: 32
+LEADERBOARD_ROWS :: 64
+
+ProfileBoard :: struct {
+    app: [97]u8
+    app_title: [129]u8
+    id: [65]u8
+    title: [129]u8
+    primary: [65]u8
+    average: [65]u8
+}
+
+ProfileRank :: struct {
+    name: [129]u8
+    value: [49]u8
+    average: [49]u8
+    own: bool
+}
+
+ProfileLeaderboard :: struct {
+    owner: [97]u8
+    boards: [LEADERBOARD_BOARDS]ProfileBoard
+    board_count: s32
+    selected: s32
+    metric: s32
+    rows: [LEADERBOARD_ROWS]ProfileRank
+    row_count: s32
+    loading: bool
+    error: bool
+}
+
+ProfileBoardFind :: (page: *ProfileLeaderboard, id: string) -> s32 {
+    for index: cast(s32)0..page.board_count - 1 {
+        if TextUntilNul(page.boards[index].id[:]) == id { return index }
+    }
+    return -1
+}
+
+ProfileLeaderboardEncode :: (page: *ProfileLeaderboard) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"owner\":")
+    EntityQuote(*out, TextUntilNul(page.owner[:]))
+    BuilderPrint(*out, ",\"selected\":%,\"metric\":%,\"loading\":%,\"error\":%,\"boards\":[",
+        page.selected, page.metric, ifx page.loading then 1 else 0, ifx page.error then 1 else 0)
+    for index: cast(s32)0..page.board_count - 1 {
+        board := *page.boards[index]
+        BuilderPrint(*out, "%{", ifx index > 0 then "," else "")
+        keys: [6]string = .["app", "app_title", "id", "title", "primary", "average"]
+        values: [6]string = .[TextUntilNul(board.app[:]), TextUntilNul(board.app_title[:]),
+        TextUntilNul(board.id[:]), TextUntilNul(board.title[:]), TextUntilNul(board.primary[:]), TextUntilNul(board.average[:])]
+        for field: cast(s32)0..5 {
+            BuilderPrint(*out, "%\"%\":", ifx field > 0 then "," else "", keys[field])
+            EntityQuote(*out, values[field])
+        }
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "],\"rows\":[")
+    for index: cast(s32)0..page.row_count - 1 {
+        row := *page.rows[index]
+        BuilderPrint(*out, "%{\"name\":", ifx index > 0 then "," else "")
+        EntityQuote(*out, TextUntilNul(row.name[:]))
+        BuilderPrint(*out, ",\"value\":")
+        EntityQuote(*out, TextUntilNul(row.value[:]))
+        BuilderPrint(*out, ",\"average\":")
+        EntityQuote(*out, TextUntilNul(row.average[:]))
+        BuilderPrint(*out, ",\"own\":%}", ifx row.own then 1 else 0)
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
+
+ProfileLeaderboardDecode :: (document: string, output: *ProfileLeaderboard) -> bool {
+    if document.count < 2 || document.count >= 65536 { return false }
+    start := Space(document, 0)
+    if start >= document.count || document[start] != #char "{" { return false }
+    end := ValueEnd(document, start, 0)
+    if end < 0 || Space(document, end) != document.count { return false }
+    next: ProfileLeaderboard
+    version := ReadNumber(document, FieldAt(document, start, "version"))
+    if !version.valid || version.value != 1 ||
+    ReadStringText(document, FieldAt(document, start, "owner"), next.owner[:]) < 1 { return false }
+    keys: [4]string = .["selected", "metric", "loading", "error"]
+    values: [4]s32
+    for index: cast(s32)0..3 {
+        number := ReadNumber(document, FieldAt(document, start, keys[index]))
+        if !number.valid || number.value < -1 || number.value > LEADERBOARD_BOARDS ||
+        number.value != cast(float64)cast(s32)number.value { return false }
+        values[index] = cast(s32)number.value
+    }
+    if values[1] < 0 || values[1] > 1 || values[2] < 0 || values[2] > 1 || values[3] < 0 || values[3] > 1 { return false }
+    next.selected = values[0]
+    next.metric = values[1]
+    next.loading = values[2] == 1
+    next.error = values[3] == 1
+    at := FieldAt(document, start, "boards")
+    next.board_count = ArrayCount(document, at)
+    if next.board_count < 0 || next.board_count > LEADERBOARD_BOARDS { return false }
+    if (next.board_count == 0 && next.selected != -1) ||
+    (next.board_count > 0 && (next.selected < 0 || next.selected >= next.board_count)) { return false }
+    for index: cast(s32)0..next.board_count - 1 {
+        board := *next.boards[index]
+        item := ElementAt(document, at, index)
+        if ReadStringText(document, FieldAt(document, item, "app"), board.app[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "app_title"), board.app_title[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "id"), board.id[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "title"), board.title[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "primary"), board.primary[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "average"), board.average[:]) < 0 { return false }
+        for prior: cast(s32)0..index - 1 {
+            if TextUntilNul(next.boards[prior].id[:]) == TextUntilNul(board.id[:]) { return false }
+        }
+    }
+    at = FieldAt(document, start, "rows")
+    next.row_count = ArrayCount(document, at)
+    if next.row_count < 0 || next.row_count > LEADERBOARD_ROWS ||
+    (next.board_count == 0 && next.row_count != 0) { return false }
+    for index: cast(s32)0..next.row_count - 1 {
+        row := *next.rows[index]
+        item := ElementAt(document, at, index)
+        if ReadStringText(document, FieldAt(document, item, "name"), row.name[:]) < 1 ||
+        ReadStringText(document, FieldAt(document, item, "value"), row.value[:]) < 0 ||
+        ReadStringText(document, FieldAt(document, item, "average"), row.average[:]) < 0 { return false }
+        own := ReadNumber(document, FieldAt(document, item, "own"))
+        if !own.valid || (own.value != 0 && own.value != 1) { return false }
+        row.own = own.value == 1
+    }
+    output.* = next
+    return true
+}
