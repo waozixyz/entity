@@ -15,7 +15,7 @@
 Auth :: #import "daochi_client/auth";
 
 installed: bool = true;
-IsInstalled :: (game: string) -> bool { return installed && game == "arcade.shovey" }
+IsInstalled :: (game: string) -> bool { return installed && (game == "arcade.shovey" || game == "wurm") }
 requests: s32;
 cancelled: s32;
 request_error: bool;
@@ -29,6 +29,13 @@ MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     if request.url == "http://127.0.0.1:9/api/v1/friends" {
         request_error = request_error || request.method != "GET" || request.url != "http://127.0.0.1:9/api/v1/friends"
         return CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", output)
+    }
+    // A run board asks for the score board, then the level board.
+    if request.url == "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=wurm&metric=score" {
+        return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":900}]}", output)
+    }
+    if request.url == "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=wurm&metric=level" {
+        return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":60}]}", output)
     }
     request_error = request_error || request.url != "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=arcade.shovey&metric=levels"
     return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12}]}", output)
@@ -109,6 +116,27 @@ Check :: () -> s32 {
     if cancelled <= before_cancel || native_leaderboard_stage != 0 { return 20 }
     account_recovery.keys.public_id = .{}
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 || page.row_count != 0 { return 14 }
+    // A run board: the best run's score ranks, its level shows beside it.
+    if EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57") ||
+    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run x 4210") ||
+    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57 100001") { return 21 }
+    unused CopyCString("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", account_recovery.keys.public_id[:])
+    if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57 4210") { return 22 }
+    // The account change dropped the old session; this one is fixture text too.
+    unused CopyCString("fixture-token", native_leaderboard_session.token[:])
+    native_leaderboard_session.expires_at_local = UnixNow() + 3600
+    unused EntityLeaderboardAnswer("{\"owner\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"board\":\"wurm\",\"metric\":0}")
+    unused EntityLeaderboardAnswer("refresh")
+    request_error = false
+    for step: 0..4 { EntityLeaderboardPump() }
+    if request_error || native_leaderboard_error || !native_leaderboard_loaded { return 23 }
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.selected < 0 ||
+    TextUntilNul(page.boards[page.selected].primary[:]) != "Score" || TextUntilNul(page.boards[page.selected].average[:]) != "Level" { return 24 }
+    if page.row_count != 3 || !page.rows[0].own || TextUntilNul(page.rows[0].value[:]) != "4210" || TextUntilNul(page.rows[0].average[:]) != "57" ||
+    TextUntilNul(page.rows[1].name[:]) != "@river" || TextUntilNul(page.rows[1].value[:]) != "900" || TextUntilNul(page.rows[1].average[:]) != "60" { return 25 }
+    // Choosing the Level column ranks by level.
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer("{\"owner\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"board\":\"wurm\",\"metric\":1}"), *page) ||
+    page.metric != 1 || TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 26 }
     return 0
 }
 

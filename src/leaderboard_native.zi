@@ -26,6 +26,10 @@ leaderboard_transport: AsyncTransport;
 NativeGameScore :: struct {
     board: ProfileBoard
     value: s64
+    // A run board, such as Apfelwurm's, ranks the best run's score and shows
+    // the level that run reached beside it; other boards count levels solved.
+    run: bool
+    level: s64
 }
 
 native_scores: [LEADERBOARD_BOARDS]NativeGameScore;
@@ -44,12 +48,36 @@ native_leaderboard_transfer: HttpTransfer;
 native_leaderboard_response: [16384]u8;
 native_leaderboard_stats: [16384]u8;
 native_leaderboard_friends: [16384]u8;
+// A run board's second column: every friend's best level.
+native_leaderboard_levels: [16384]u8;
+// 0 ranks the first column, 1 the second (a run board's level).
+native_leaderboard_metric: s32;
 native_leaderboard_body: string;
 native_leaderboard_path: [768]u8;
 native_leaderboard_answer: string;
 native_leaderboard_rows: [LEADERBOARD_ROWS]ProfileRank;
 native_leaderboard_row_count: s32;
 native_leaderboard_rows_dirty: bool = true;
+
+NativeBoardLabels :: (score: *NativeGameScore) {
+    score.board.primary = .{}
+    score.board.average = .{}
+    unused CopyCString(ifx score.run then "Score" else "Levels solved", score.board.primary[:])
+    if score.run { unused CopyCString("Level", score.board.average[:]) }
+}
+
+// A whole number from 0 to 100000, as games report them.
+LeaderboardNumber :: (text: string, value: *s64) -> bool {
+    if text.count == 0 { return false }
+    number: s64 = 0
+    for byte: text {
+        if byte < #char "0" || byte > #char "9" || number > 100000 { return false }
+        number = number * 10 + cast(s64)(byte - #char "0")
+    }
+    if number > 100000 { return false }
+    value.* = number
+    return true
+}
 
 LeaderboardNameValid :: (name: string, maximum: s64) -> bool {
     if name.count == 0 || name.count > maximum { return false }
@@ -80,7 +108,9 @@ NativeLeaderboardSave :: () -> bool {
         EntityQuote(*out, TextUntilNul(score.board.id[:]))
         BuilderPrint(*out, ",\"title\":")
         EntityQuote(*out, TextUntilNul(score.board.title[:]))
-        BuilderPrint(*out, ",\"value\":%}", score.value)
+        BuilderPrint(*out, ",\"value\":%", score.value)
+        if score.run { BuilderPrint(*out, ",\"level\":%", score.level) }
+        BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]}")
     document := BuilderFinish(out)
@@ -110,6 +140,8 @@ NativeLeaderboardOwner :: () {
     native_leaderboard_error = false
     native_leaderboard_stats = .{}
     native_leaderboard_friends = .{}
+    native_leaderboard_levels = .{}
+    native_leaderboard_metric = 0
     native_leaderboard_rows = .{}
     native_leaderboard_row_count = 0
     native_leaderboard_rows_dirty = true
@@ -133,21 +165,33 @@ NativeLeaderboardOwner :: () {
         !LeaderboardNameValid(TextUntilNul(score.board.id[:]), 31) ||
         !value.valid || value.value < 0 || value.value > 100000 || value.value != cast(float64)cast(s64)value.value { continue }
         score.value = cast(s64)value.value
-        unused CopyCString("Levels solved", score.board.primary[:])
+        level := ReadNumber(document, FieldAt(document, item, "level"))
+        if level.valid && level.value >= 0 && level.value <= 100000 && level.value == cast(float64)cast(s64)level.value {
+            score.run = true
+            score.level = cast(s64)level.value
+        }
+        NativeBoardLabels(*score)
         native_scores[native_score_count] = score
         native_score_count += 1
     }
 }
 
+// A game reports "levels N" (levels solved) or "run LEVEL SCORE" (its best
+// run: the level it reached and its score).
 EntityLeaderboardReport :: (app: string, app_title: string, game: string, title: string, request: string) -> bool {
-    if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) ||
-    request.count < 8 || request[:7] != "levels " { return false }
+    if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) { return false }
     value: s64 = 0
-    for byte: request[7:] {
-        if byte < #char "0" || byte > #char "9" || value > 100000 { return false }
-        value = value * 10 + cast(s64)(byte - #char "0")
-    }
-    if value > 100000 { return false }
+    level: s64 = 0
+    run := false
+    if request.count > 7 && request[:7] == "levels " {
+        if !LeaderboardNumber(request[7:], *value) { return false }
+    } else if request.count > 4 && request[:4] == "run " {
+        rest := request[4:]
+        space: s64 = -1
+        for byte, index: rest { if byte == #char " " && space < 0 { space = index } }
+        if space <= 0 || !LeaderboardNumber(rest[:space], *level) || !LeaderboardNumber(rest[space + 1:], *value) { return false }
+        run = true
+    } else { return false }
     NativeLeaderboardOwner()
     index: s32 = -1
     for item: cast(s32)0..native_score_count - 1 {
@@ -160,14 +204,16 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
     }
     score := *native_scores[index]
     previous := score.*
-    if TextUntilNul(score.board.id[:]) == game && score.value == value &&
+    if TextUntilNul(score.board.id[:]) == game && score.value == value && score.run == run && score.level == level &&
     TextUntilNul(score.board.title[:]) == title { return true }
     score.value = value
+    score.run = run
+    score.level = level
     unused CopyCString(app, score.board.app[:])
     unused CopyCString(app_title, score.board.app_title[:])
     unused CopyCString(game, score.board.id[:])
     unused CopyCString(ifx title == "" then game else title, score.board.title[:])
-    unused CopyCString("Levels solved", score.board.primary[:])
+    NativeBoardLabels(score)
     native_leaderboard_loaded = false
     native_leaderboard_rows_dirty = true
     if NativeLeaderboardSave() { return true }
@@ -182,7 +228,29 @@ NativeLeaderboardStart :: (context: *void, request: HttpRequest, output: []u8) -
 NativeLeaderboardPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*native_leaderboard_transfer, status) }
 NativeLeaderboardCancel :: (context: *void) { HttpTransferCancel(*native_leaderboard_transfer) }
 
-NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool) {
+NativeSelectedRun :: () -> bool {
+    for index: cast(s32)0..native_score_count - 1 {
+        if TextUntilNul(native_scores[index].board.id[:]) == TextUntilNul(native_leaderboard_selected[:]) { return native_scores[index].run }
+    }
+    return false
+}
+
+// A friend's best level on the selected run board, or 0.
+NativeLevelOf :: (id: string) -> s64 {
+    levels := TextUntilNul(native_leaderboard_levels[:])
+    at := FieldAt(levels, 0, "rows")
+    for index: cast(s32)0..ArrayCount(levels, at) - 1 {
+        item := ElementAt(levels, at, index)
+        found: [97]u8
+        unused ReadStringText(levels, FieldAt(levels, item, "user_id_hash"), found[:])
+        if TextUntilNul(found[:]) != id { continue }
+        value := ReadNumber(levels, FieldAt(levels, item, "value"))
+        if value.valid && value.value >= 0 && value.value <= 100000 { return cast(s64)value.value }
+    }
+    return 0
+}
+
+NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: bool = false, level: s64 = 0) {
     page := *native_leaderboard_page
     if page.row_count >= LEADERBOARD_ROWS { return }
     alias: [49]u8
@@ -202,6 +270,7 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool) {
     EntityFree(text)
     digits: [24]u8
     unused CopyCString(FormatInteger(value, digits[:]), row.value[:])
+    if run { unused CopyCString(FormatInteger(level, digits[:]), row.average[:]) }
     row.own = own
     page.row_count += 1
 }
@@ -216,8 +285,14 @@ NativeLeaderboardRows :: () {
     }
     selected := TextUntilNul(page.boards[page.selected].id[:])
     own: s64 = 0
+    own_level: s64 = 0
+    run := false
     for index: cast(s32)0..native_score_count - 1 {
-        if TextUntilNul(native_scores[index].board.id[:]) == selected { own = native_scores[index].value }
+        if TextUntilNul(native_scores[index].board.id[:]) == selected {
+            own = native_scores[index].value
+            own_level = native_scores[index].level
+            run = native_scores[index].run
+        }
     }
     stats := TextUntilNul(native_leaderboard_stats[:])
     ids: [LEADERBOARD_ROWS][97]u8
@@ -236,7 +311,7 @@ NativeLeaderboardRows :: () {
         value := ReadNumber(stats, FieldAt(stats, item, "value"))
         if duplicate || !value.valid || value.value < 0 || value.value > 100000 { continue }
         ids[page.row_count] = id
-        NativeLeaderboardRow(stats, item, cast(s64)value.value, false)
+        NativeLeaderboardRow(stats, item, cast(s64)value.value, false, run, ifx run then NativeLevelOf(TextUntilNul(id[:])) else 0)
     }
     friends := TextUntilNul(native_leaderboard_friends[:])
     at = FieldAt(friends, 0, "friends")
@@ -254,7 +329,7 @@ NativeLeaderboardRows :: () {
         }
         if duplicate { continue }
         ids[page.row_count] = id
-        NativeLeaderboardRow(friends, item, 0, false)
+        NativeLeaderboardRow(friends, item, 0, false, run, ifx run then NativeLevelOf(TextUntilNul(id[:])) else 0)
     }
     row := *page.rows[page.row_count]
     alias := TextUntilNul(account_alias[:])
@@ -269,15 +344,18 @@ NativeLeaderboardRows :: () {
     EntityFree(text)
     digits: [24]u8
     unused CopyCString(FormatInteger(own, digits[:]), row.value[:])
+    if run { unused CopyCString(FormatInteger(own_level, digits[:]), row.average[:]) }
     row.own = true
     page.row_count += 1
+    // A run board ranks by the column the player chose.
+    by_level := run && native_leaderboard_metric == 1
     for index: cast(s32)1..page.row_count - 1 {
         current := page.rows[index]
-        value := ReadNumber(TextUntilNul(current.value[:]), 0)
+        value := ReadNumber(TextUntilNul(ifx by_level then current.average[:] else current.value[:]), 0)
         position := index
         while position > 0 {
             prior := *page.rows[position - 1]
-            other := ReadNumber(TextUntilNul(prior.value[:]), 0)
+            other := ReadNumber(TextUntilNul(ifx by_level then prior.average[:] else prior.value[:]), 0)
             if other.value >= value.value { break }
             page.rows[position] = prior.*
             position -= 1
@@ -310,6 +388,11 @@ EntityLeaderboardAnswer :: (request: string) -> string {
     ReadStringText(request, FieldAt(request, 0, "board"), board[:]) > 0 {
         chosen := ProfileBoardFind(page, TextUntilNul(board[:]))
         if chosen >= 0 { page.selected = chosen }
+        metric := ReadNumber(request, FieldAt(request, 0, "metric"))
+        if metric.valid && (metric.value == 0 || metric.value == 1) && cast(s32)metric.value != native_leaderboard_metric {
+            native_leaderboard_metric = cast(s32)metric.value
+            native_leaderboard_rows_dirty = true
+        }
     }
     if page.selected >= 0 {
         chosen := page.boards[page.selected].id
@@ -318,6 +401,8 @@ EntityLeaderboardAnswer :: (request: string) -> string {
             native_leaderboard_stage = 0
             native_leaderboard_selected = chosen
             native_leaderboard_stats = .{}
+            native_leaderboard_levels = .{}
+            native_leaderboard_metric = 0
             native_leaderboard_loaded = false
             native_leaderboard_rows_dirty = true
         }
@@ -334,6 +419,7 @@ EntityLeaderboardAnswer :: (request: string) -> string {
     }
     page.loading = native_leaderboard_requested || native_leaderboard_stage != 0
     page.error = native_leaderboard_error
+    if page.selected >= 0 && page.boards[page.selected].average[0] != cast(u8)0 { page.metric = native_leaderboard_metric }
     EntityFree(native_leaderboard_answer)
     native_leaderboard_answer = ProfileLeaderboardEncode(page)
     return native_leaderboard_answer
@@ -353,8 +439,9 @@ EntityLeaderboardPump :: () {
         }
         native_leaderboard_error = native_leaderboard_error || !valid
         if native_leaderboard_stage == 2 && valid { native_leaderboard_friends = native_leaderboard_response }
-        if native_leaderboard_stage == 3 {
-            if valid { native_leaderboard_stats = native_leaderboard_response }
+        if native_leaderboard_stage == 3 && valid { native_leaderboard_stats = native_leaderboard_response }
+        if native_leaderboard_stage == 4 && valid { native_leaderboard_levels = native_leaderboard_response }
+        if native_leaderboard_stage == 4 || (native_leaderboard_stage == 3 && !NativeSelectedRun()) {
             native_leaderboard_rows_dirty = true
             native_leaderboard_stage = 0
             native_leaderboard_loaded = true
@@ -386,8 +473,15 @@ EntityLeaderboardPump :: () {
         for index: cast(s32)0..native_score_count - 1 {
             score := *native_scores[index]
             if leaderboard_installed == null || !leaderboard_installed(TextUntilNul(score.board.id[:])) { continue }
-            BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"levels\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
-                ifx count > 0 then "," else "", TextUntilNul(score.board.id[:]), score.value, score.value, date)
+            if score.run {
+                BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"score\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+                    ifx count > 0 then "," else "", TextUntilNul(score.board.id[:]), score.value, score.value, date)
+                BuilderPrint(*out, ",{\"practice\":\"%\",\"metric\":\"level\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+                    TextUntilNul(score.board.id[:]), score.level, score.level, date)
+            } else {
+                BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"levels\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+                    ifx count > 0 then "," else "", TextUntilNul(score.board.id[:]), score.value, score.value, date)
+            }
             count += 1
         }
         BuilderPrint(*out, "]}")
@@ -396,7 +490,8 @@ EntityLeaderboardPump :: () {
     } else if native_leaderboard_stage == 2 {
         path = "/api/v1/friends"
     } else {
-        if !BuildFriendStatsPath("inbe", TextUntilNul(native_leaderboard_selected[:]), "levels", native_leaderboard_path[:]) {
+        metric := ifx native_leaderboard_stage == 4 then "level" else ifx NativeSelectedRun() then "score" else "levels"
+        if !BuildFriendStatsPath("inbe", TextUntilNul(native_leaderboard_selected[:]), metric, native_leaderboard_path[:]) {
             native_leaderboard_stage = 0
             native_leaderboard_loaded = true
             native_leaderboard_error = true
