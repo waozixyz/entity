@@ -27,6 +27,8 @@ shop_session: Auth.Session;
 shop_transfer: HttpTransfer;
 shop_response: [131072]u8;
 shop_answer: [512]u8;
+// Native hosts may supply their platform transport; bundles never see it.
+shop_transport: AsyncTransport;
 
 ShopOwner :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
@@ -91,6 +93,11 @@ EntityGameShopPump :: () {
             if !dew_active && dew_queued[0] == cast(u8)0 { unused CopyCString("refresh", dew_queued[:]) }
         } else {
             at := FieldAt(response, 0, "events")
+            if at >= 0 && at + 4 <= response.count && response[at:at + 4] == "null" {
+                shop_loaded = true
+                shop_status = "done"
+                return
+            }
             if at < 0 || response[at] != #char "[" { return }
             index: s32 = 0
             while true {
@@ -117,7 +124,8 @@ EntityGameShopPump :: () {
             GameShopPrice(shop_product), GameShopProduct(shop_product), GameShopKey(shop_product))
     }
     headers: [0]HttpHeader
-    transport := AsyncTransport.{.start = ShopStart, .poll = ShopPoll, .cancel = ShopCancel}
+    transport := shop_transport
+    if transport.start == null { transport = AsyncTransport.{.start = ShopStart, .poll = ShopPoll, .cancel = ShopCancel} }
     shop_response = .{}
     shop_active = AccountStoreClient(null, *client) && BeginRequest(*shop_request, client, *shop_session,
         UnixNow(), transport, ifx purchase then "POST" else "GET",
