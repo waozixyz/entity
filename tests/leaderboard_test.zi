@@ -19,20 +19,21 @@ IsInstalled :: (game: string) -> bool { return installed && game == "arcade.shov
 requests: s32;
 cancelled: s32;
 request_error: bool;
+mock_status: s32 = 200;
 MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     requests += 1
-    if requests == 1 {
+    if request.method == "PUT" {
         request_error = request.method != "PUT" || request.url != "http://127.0.0.1:9/api/v1/profile/stats"
         return CopyCString("{}", output)
     }
-    if requests == 2 {
+    if request.url == "http://127.0.0.1:9/api/v1/friends" {
         request_error = request_error || request.method != "GET" || request.url != "http://127.0.0.1:9/api/v1/friends"
         return CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", output)
     }
     request_error = request_error || request.url != "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=arcade.shovey&metric=levels"
     return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12}]}", output)
 }
-MockPoll :: (context: *void, status: *s32) -> s32 { status.* = 200; return 1 }
+MockPoll :: (context: *void, status: *s32) -> s32 { status.* = mock_status; return 1 }
 MockCancel :: (context: *void) { cancelled += 1 }
 
 Check :: () -> s32 {
@@ -73,6 +74,14 @@ Check :: () -> s32 {
     if requests != 3 || request_error || native_leaderboard_error || !native_leaderboard_loaded { return 16 }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
     TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 17 }
+    mock_status = 500
+    unused EntityLeaderboardAnswer("refresh")
+    for step: 0..3 { EntityLeaderboardPump() }
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || !page.error || page.loading { return 18 }
+    mock_status = 200
+    unused EntityLeaderboardAnswer("refresh")
+    for step: 0..3 { EntityLeaderboardPump() }
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.error || page.loading { return 19 }
     unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
     unused CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", native_leaderboard_friends[:])
     native_leaderboard_rows_dirty = true
@@ -92,8 +101,12 @@ Check :: () -> s32 {
     duplicate := ProfileLeaderboardEncode(*page)
     defer { EntityFree(duplicate) }
     if ProfileLeaderboardDecode(duplicate, *decoded) { return 12 }
+    unused EntityLeaderboardAnswer("refresh")
+    EntityLeaderboardPump()
+    before_cancel := cancelled
     unused CopyCString("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", account_recovery.keys.public_id[:])
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 0 || page.board_count != 0 { return 13 }
+    if cancelled <= before_cancel || native_leaderboard_stage != 0 { return 20 }
     account_recovery.keys.public_id = .{}
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 || page.row_count != 0 { return 14 }
     return 0
