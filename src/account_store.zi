@@ -42,6 +42,8 @@ account_pairing_delivered: bool;
 account_standalone_ready: bool;
 account_root: [4096]u8;
 account_client_id: [64]u8;
+// Why the stored account could not be used, shown in the Profile.
+account_store_problem: [192]u8;
 account_application_id: [64]u8;
 // What the account's node last reported, for the node list.
 account_node_connected: bool;
@@ -185,7 +187,9 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
             output.nodes[index].limit = account_node_limit
         }
     }
-    unused CopyCString(ifx account_standalone_ready then "Account connected on this device" else "Connect an account to share your profile", output.status[:])
+    status := ifx account_standalone_ready then "Account connected on this device" else "Connect an account to share your profile"
+    if account_store_problem[0] != cast(u8)0 && !account_standalone_ready { status = TextUntilNul(account_store_problem[:]) }
+    unused CopyCString(status, output.status[:])
     output.link_stage = cast(s32)device_link.stage
     unused CopyCString(DeviceLinkCodeShown(), output.link_code[:])
     if output.link_stage == 2 || output.link_stage == 3 {
@@ -297,14 +301,26 @@ AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     path: [4096]u8
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
+    account_store_problem = .{}
     if NativeRead(AccountStorePath("account.key", path[:]), text[:]) > 0 {
-        if !RecoveryDecode(TextUntilNul(text[:]), "", *account_recovery) { return false }
-        account_standalone_ready = true
+        if RecoveryDecode(TextUntilNul(text[:]), "", *account_recovery) {
+            account_standalone_ready = true
+        } else {
+            // An unreadable key never keeps the Profile closed: it is set
+            // aside, never deleted, and the Profile says so.
+            aside: [4096]u8
+            if NativeWrite(AccountStorePath("account.key.unreadable", aside[:]), TextUntilNul(text[:])) {
+                unused RemoveFile(AccountStorePath("account.key", path[:]))
+            }
+            account_recovery = Recovery.{}
+            unused CopyCString("The account key saved here could not be read. It was kept as account.key.unreadable; sign in again to continue.", account_store_problem[:])
+        }
     }
     if NativeRead(AccountStorePath("entity.json", path[:]), text[:]) > 0 {
+        // Unreadable display preferences fall back to the defaults.
         loaded: EntityState
-        if !EntityDecode(TextUntilNul(text[:]), *loaded) { return false }
-        if TextUntilNul(loaded.owner_id[:]) == TextUntilNul(account_recovery.keys.public_id[:]) { account_profile = loaded }
+        if EntityDecode(TextUntilNul(text[:]), *loaded) &&
+        TextUntilNul(loaded.owner_id[:]) == TextUntilNul(account_recovery.keys.public_id[:]) { account_profile = loaded }
     }
     unused CopyCString(TextUntilNul(account_recovery.keys.public_id[:]), account_profile.owner_id[:])
     unused SharedProfileLoad(TextUntilNul(account_recovery.keys.public_id[:]), *account_profile)
