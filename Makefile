@@ -28,7 +28,7 @@ build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.loc
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
-test: build/entity.zx native-test records-test model-test achievement-view-test
+test: build/entity.zx native-test records-test alias-test model-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
@@ -71,6 +71,12 @@ build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) b
 records-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/records_test.py
+# Account aliases set the way the Alias page does, through a private local
+# Daochi node (DAOCHI_BIN, by default the checkout's build).
+.PHONY: alias-test
+alias-test: $(LIBOQS_LIBRARY)
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/alias_test.py
 native-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py

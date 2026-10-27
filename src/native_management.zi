@@ -201,6 +201,46 @@ ProviderTransport :: (provider: *ManagementProvider) -> AsyncTransport {
         .poll = ProviderPollTransfer, .cancel = ProviderCancelTransfer}
 }
 
+// The alias as the node stores it: as on the node, the spaces around it, a
+// leading @ and capital letters do not matter, so "@Waozi " is "waozi".
+// Returns "" when it does not fit `output`.
+ProviderNormalizeAlias :: (value: string, output: []u8) -> string {
+    start: s64 = 0
+    end := value.count
+    while start < end && value[start] <= cast(u8)32 { start += 1 }
+    while end > start && value[end - 1] <= cast(u8)32 { end -= 1 }
+    if start < end && value[start] == #char "@" { start += 1 }
+    if end - start >= output.count { return "" }
+    count: s64 = 0
+    for index: start..end - 1 {
+        byte := value[index]
+        if byte >= #char "A" && byte <= #char "Z" { byte = byte - #char "A" + #char "a" }
+        output[count] = byte
+        count += 1
+    }
+    output[count] = cast(u8)0
+    return TextUntilNul(output)
+}
+
+// Why the node did not save an alias or clear the remote data, in words the
+// person can act on.
+ProviderNetworkFailure :: (provider: *ManagementProvider) -> string {
+    result := ifx provider.network_operation == 2 then provider.pending_deletion.result else provider.pending_request.result
+    if result == Auth.AuthResult.AUTH_FAILED {
+        return "The node did not accept this account's key"
+    }
+    if provider.network_operation == 1 && result == Auth.AuthResult.AUTH_REQUEST_FAILED {
+        status := provider.pending_request.status
+        if status == 409 { return "That alias is already taken; choose another" }
+        if status == 400 { return "Use 4–32 lowercase letters, numbers or underscores" }
+        if status == 0 { return "Could not reach the node; check the connection and try again" }
+    }
+    if result == Auth.AuthResult.AUTH_CHALLENGE_FAILED && provider.pending_request.status == 0 {
+        return "Could not reach the node; check the connection and try again"
+    }
+    return "The node could not complete the account request"
+}
+
 ProviderAliasValid :: (alias: string) -> bool {
     if alias.count < 4 || alias.count > 32 { return false }
     for byte: alias {
@@ -223,11 +263,14 @@ ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
     } else {
         alias_buffer: [1024]u8
         for index: 0..alias_buffer.count - 1 { alias_buffer[index] = provider.queue.request.value[index] }
-        alias := TextUntilNul(alias_buffer[:])
+        normalized: [1024]u8
+        alias := ProviderNormalizeAlias(TextUntilNul(alias_buffer[:]), normalized[:])
         if !ProviderAliasValid(alias) || !BuildAliasBody(client.identity.account_id, alias, provider.request_body[:]) {
             ProviderFinish(provider, "error", "Use 4–32 lowercase letters, numbers or underscores")
             return
         }
+        // The saved account keeps the alias as the node stores it.
+        unused CopyCString(alias, provider.queue.request.value[:])
         provider.network_operation = 1
         extra_headers: [0]HttpHeader
         started = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
@@ -251,7 +294,7 @@ ProviderPump :: (provider: *ManagementProvider) {
         if !finished { return }
         succeeded := ifx provider.network_operation == 2 then provider.pending_deletion.result == Auth.AuthResult.AUTH_OK else provider.pending_request.result == Auth.AuthResult.AUTH_OK
         provider.asynchronous = false
-        if !succeeded { ProviderFinish(provider, "error", "The node could not complete the account request"); return }
+        if !succeeded { ProviderFinish(provider, "error", ProviderNetworkFailure(provider)); return }
         current: Client
         if provider.client == null || !provider.client(provider.context, *current) || current.server_url != TextUntilNul(provider.request_node[:]) {
             ProviderFinish(provider, "error", "The original node completed the request; the current node changed")

@@ -1,0 +1,103 @@
+// Setting an account alias through the standalone account's provider, the
+// way the Alias page does, against a private node: run with ENTITY_DATA set
+// to a device's folder, ALIAS_STEP naming the step and ALIAS_NODE the node
+// (scripts/alias_test.py starts the node and the steps).
+#import "account_store"
+#import "native_management"
+#import "management"
+#import "recovery"
+#import "model"
+#import "native_files"
+#import "std/c_string"
+#import "std/timer_linux"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "daochi_client/keys"
+
+alias_result: [32]u8;
+alias_message: [256]u8;
+
+// Asks for an alias as the Alias page's Save does and waits for the answer.
+SaveAlias :: (alias: string) -> bool {
+    request: ManagementRequest
+    request.sequence = account_provider.queue.sequence + 1
+    request.owner_id = account_recovery.keys.public_id
+    if !CopyCString("alias", request.operation[:]) || !CopyCString(alias, request.value[:]) { return false }
+    encoded := ManagementRequestEncode(request)
+    defer { EntityFree(encoded) }
+    if !ProviderEnqueue(*account_provider, encoded) { return false }
+    for round: 0..2400 {
+        ProviderPump(*account_provider)
+        if !account_provider.queue.pending {
+            alias_result = account_provider.queue.result
+            alias_message = account_provider.queue.message
+            return true
+        }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
+
+Answered :: (result: string, message: string) -> bool {
+    return TextUntilNul(alias_result[:]) == result && TextUntilNul(alias_message[:]) == message
+}
+
+saved_alias: [64]u8;
+
+// The alias the device keeps for the account, as its alias file holds it.
+SavedAlias :: () -> string {
+    path: [4096]u8
+    saved_alias = .{}
+    if NativeRead(AccountStoreAliasPath(path[:]), saved_alias[:]) <= 0 { return "" }
+    return TextUntilNul(saved_alias[:])
+}
+
+#program_export
+Check :: () -> s32 {
+    root := NativeEnvironment("ENTITY_DATA")
+    step := NativeEnvironment("ALIAS_STEP")
+    node := NativeEnvironment("ALIAS_NODE")
+    if step == "create" {
+        recovery: Recovery
+        if CreateAccountKeys(*recovery.keys) != 1 || !NativeDirectory(root) { return 1 }
+        text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+        path: [4096]u8
+        if !RecoveryEncode(*recovery, "", text[:]) || !NativeWrite(NativeJoin(path[:], root, "account.key"), TextUntilNul(text[:])) { return 2 }
+        state := EntityDefault()
+        unused CopyCString(TextUntilNul(recovery.keys.public_id[:]), state.owner_id[:])
+        unused CopyCString(node, state.nodes[0][:])
+        document := EntityEncode(state)
+        if !NativeWrite(NativeJoin(path[:], root, "entity.json"), document) { return 3 }
+        return 0
+    }
+    if root == "" || !AccountStoreStartAt(root, "entity-test") || !account_standalone_ready { return 4 }
+    if step == "first" {
+        // A phone keyboard's capital, an @ and spaces still save, as the
+        // node stores the alias.
+        if !SaveAlias(" @Live_Tester ") { return 5 }
+        if !Answered("ok", "Account alias saved") { return 6 }
+        if TextUntilNul(account_alias[:]) != "live_tester" || SavedAlias() != "live_tester" { return 7 }
+        // Too short is refused on the device, before any request.
+        if !SaveAlias("Ab") || !Answered("error", "Use 4–32 lowercase letters, numbers or underscores") { return 8 }
+        // Changing it keeps the new one.
+        if !SaveAlias("live_tester_one") || !Answered("ok", "Account alias saved") { return 9 }
+        if SavedAlias() != "live_tester_one" { return 10 }
+        return 0
+    }
+    if step == "second" {
+        // Another account cannot take it, and is told so.
+        if !SaveAlias("LIVE_TESTER_ONE") { return 11 }
+        if !Answered("error", "That alias is already taken; choose another") { return 12 }
+        if SavedAlias() != "" { return 13 }
+        // The first account's earlier alias is free again.
+        if !SaveAlias("live_tester") || !Answered("ok", "Account alias saved") || SavedAlias() != "live_tester" { return 14 }
+        return 0
+    }
+    if step == "offline" {
+        // A node that cannot be reached says so.
+        if !SaveAlias("live_offline") { return 15 }
+        if !Answered("error", "Could not reach the node; check the connection and try again") { return 16 }
+        return 0
+    }
+    return 17
+}

@@ -11,6 +11,7 @@
 #import "daochi_client/crypto"
 #import "std/json_scan"
 #import "native_management"
+Auth :: #import "daochi_client/auth";
 #import "native_files"
 #import "recovery"
 #import "pairing"
@@ -227,13 +228,13 @@ Check :: () -> s32 {
     migration_response := document_text[response_at:ValueEnd(document_text, response_at, 0)]
     expected_proof := document_text[proof_at:ValueEnd(document_text, proof_at, 0)]
     if RewardMigrationStatus("{\"status\":\"available\"}\n") != "available" ||
-        RewardMigrationStatus("{\"status\":\"available\"}garbage") != "" { return 61 }
+    RewardMigrationStatus("{\"status\":\"available\"}garbage") != "" { return 61 }
     fake_private: [2560]u8
     for index: cast(s32)0..2559 { fake_private[index] = cast(u8)(index % 251) }
     proof_body: [256]u8
     if !RewardMigrationProof(fake_private[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         migration_response, *dew_reward_migration_scratch, proof_body[:]) ||
-        TextUntilNul(proof_body[:]) != expected_proof { return 55 }
+    TextUntilNul(proof_body[:]) != expected_proof { return 55 }
     if RewardMigrationProof(fake_private[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         migration_response, *dew_reward_migration_scratch, proof_body[:]) || proof_body[0] != 0 { return 56 }
     fake_private[0] = 99
@@ -247,5 +248,35 @@ Check :: () -> s32 {
     dew_reward_owner[0] = #char "z"
     EntityDewPump()
     if dew_reward_active || dew_reward_migration_body[0] != 0 || dew_reward_answer[0] != 0 { return 60 }
+    // An alias is checked as the node stores it, so a phone keyboard's
+    // capital, a leading @ and surrounding spaces still save.
+    normalized: [64]u8
+    accepted: [5]string = .["waozi", "Waozi", " @Waozi_1 ", "\tWAOZI\n", "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_"]
+    expected: [5]string = .["waozi", "waozi", "waozi_1", "waozi", "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_"]
+    for index: 0..accepted.count - 1 {
+        alias := ProviderNormalizeAlias(accepted[index], normalized[:])
+        if alias != expected[index] || !ProviderAliasValid(alias) { return 62 }
+    }
+    refused: [7]string = .["Ana", "@@waozi", "wao zi", "wa-ozi", "José1", "", "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_q"]
+    for text: refused {
+        if ProviderAliasValid(ProviderNormalizeAlias(text, normalized[:])) { return 63 }
+    }
+    short: [4]u8
+    if ProviderNormalizeAlias("waozi", short[:]) != "" { return 64 }
+    // A refusal says what to change.
+    failing := ManagementProvider.{}
+    failing.network_operation = 1
+    failing.pending_request.result = Auth.AuthResult.AUTH_REQUEST_FAILED
+    failing.pending_request.status = 409
+    if ProviderNetworkFailure(*failing) != "That alias is already taken; choose another" { return 65 }
+    failing.pending_request.status = 400
+    if ProviderNetworkFailure(*failing) != "Use 4–32 lowercase letters, numbers or underscores" { return 66 }
+    failing.pending_request.status = 0
+    if ProviderNetworkFailure(*failing) != "Could not reach the node; check the connection and try again" { return 67 }
+    failing.pending_request.result = Auth.AuthResult.AUTH_FAILED
+    if ProviderNetworkFailure(*failing) != "The node did not accept this account's key" { return 68 }
+    failing.pending_request.result = Auth.AuthResult.AUTH_REQUEST_FAILED
+    failing.pending_request.status = 500
+    if ProviderNetworkFailure(*failing) != "The node could not complete the account request" { return 69 }
     return 0
 }
