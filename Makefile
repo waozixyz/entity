@@ -28,13 +28,21 @@ build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.loc
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
-test: build/entity.zx native-test records-test alias-test model-test achievement-view-test
+test: build/entity.zx native-test records-test alias-test model-test dew-play-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry model_test:main -o build/model-test tests/model_test.zi
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/model-test $$(rg --files build/model-test -g '*.c') -o build/model-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/model-test/test
+
+# Google Play Dew purchases are forgotten only after the node credits them.
+.PHONY: dew-play-test
+dew-play-test:
+	rm -rf build/dew-play-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry dew_play_test:main -o build/dew-play-test tests/dew_play_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/dew-play-test $$(rg --files build/dew-play-test -g '*.c') -o build/dew-play-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/dew-play-test/test
 
 .PHONY: achievement-view-test
 achievement-view-test:

@@ -1,0 +1,126 @@
+// Dew through Google Play Billing (kryon/play_billing) for the Google Play
+// edition of an app. Play keeps each purchase until the node has credited it,
+// so a purchase survives restarts and is never credited twice. The host sends
+// the prepared purchase to the node with its own signed-in request and hands
+// the answer back to DewPlayVerified.
+#import "std/c_string"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+#import "model"
+#import "kryon/play_billing"
+
+DEW_PLAY_PRODUCTS :: "dew_100,dew_500,dew_1000,dew_5000"
+DEW_PLAY_VERIFY_PATH :: "/api/v1/tokens/purchases/google/verify"
+
+// Whether this build is the Google Play edition (the GOOGLE_PLAY define).
+#if #defined(GOOGLE_PLAY) {
+    DEW_PLAY_EDITION :: true
+} else {
+    DEW_PLAY_EDITION :: false
+}
+
+DewPlay :: struct {
+    enabled: bool
+    // Play Billing answered and is connected or already lists products.
+    available: bool
+    tick: s32
+    wait: s32
+    // Play's last answer (PlayBillingRead) and the purchase being verified.
+    state: [16384]u8
+    token: [1024]u8
+    body: [2048]u8
+    // "", "verifying", "credited" or "failed", for the page that sells Dew.
+    status: [16]u8
+}
+
+DewPlayProduct :: (id: string) -> bool {
+    return id == "dew_100" || id == "dew_500" || id == "dew_1000" || id == "dew_5000"
+}
+
+DewPlayToken :: (token: string) -> bool {
+    if token.count < 16 || token.count >= 1024 { return false }
+    for byte: token {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "." || byte == #char "-" || byte == #char "_") { return false }
+    }
+    return true
+}
+
+DewPlayContains :: (text: string, part: string) -> bool {
+    if part.count == 0 || part.count > text.count { return false }
+    for start: 0..text.count - part.count {
+        if text[start:start + part.count] == part { return true }
+    }
+    return false
+}
+
+// Opens Play's purchase sheet for one Dew pack.
+DewPlayBuy :: (play: *DewPlay, id: string) -> bool {
+    if !play.enabled || !DewPlayProduct(id) { return false }
+    play.status = .{}
+    unused PlayBillingBuy(id, play.state[:])
+    play.wait = 0
+    return true
+}
+
+// Call once a frame. Refreshes Play's products and purchases, and returns
+// true when a purchase is ready to send: post play.body to
+// DEW_PLAY_VERIFY_PATH, then call DewPlayVerified. `can_send` is false while
+// the host cannot send it, for example before the account is signed in.
+DewPlayTick :: (play: *DewPlay, can_send: bool) -> bool {
+    if !play.enabled { return false }
+    play.tick += 1
+    if play.wait > 0 { play.wait -= 1 }
+    if play.tick % 30 == 1 {
+        answer: [16384]u8
+        if PlayBillingProducts(DEW_PLAY_PRODUCTS, answer[:]) != "" {
+            play.state = answer
+            billing: PlayBillingState
+            play.available = PlayBillingRead(TextUntilNul(play.state[:]), *billing) &&
+            (billing.ready || billing.product_count > 0)
+        }
+    }
+    if !can_send || play.wait != 0 || !DewPlayNext(play) { return false }
+    unused CopyCString("verifying", play.status[:])
+    return true
+}
+
+// The first purchase Play still lists, as the node's verify request.
+DewPlayNext :: (play: *DewPlay) -> bool {
+    billing: PlayBillingState
+    if !PlayBillingRead(TextUntilNul(play.state[:]), *billing) || !billing.has_purchase ||
+    TextUntilNul(billing.package_name[:]) == "" || !DewPlayProduct(TextUntilNul(billing.purchase.product[:])) ||
+    !DewPlayToken(TextUntilNul(billing.purchase.token[:])) { return false }
+    play.token = billing.purchase.token
+    body: Vec(u8)
+    BuilderPrint(*body, "{\"app_id\":\"entity\",\"package_name\":\"%\",\"product_id\":\"%\",\"purchase_token\":\"%\"}",
+        TextUntilNul(billing.package_name[:]), TextUntilNul(billing.purchase.product[:]), TextUntilNul(play.token[:]))
+    text := BuilderFinish(body)
+    defer { EntityFree(text) }
+    return CopyCString(text, play.body[:])
+}
+
+// The node's answer to the verify request. Play forgets the purchase only
+// once the node has credited it; an already consumed purchase was credited
+// before, because the node consumes a purchase only after crediting it.
+// Returns true when the balance changed. Otherwise it retries later.
+DewPlayVerified :: (play: *DewPlay, accepted: bool, status: s32, response: string) -> bool {
+    credited := accepted || (status == 400 && DewPlayContains(response, "already consumed"))
+    if credited {
+        unused PlayBillingDone(TextUntilNul(play.token[:]), play.state[:])
+        unused CopyCString("credited", play.status[:])
+    } else {
+        unused CopyCString("failed", play.status[:])
+        play.wait = 600
+    }
+    play.token = .{}
+    return credited
+}
+
+// ,"play":{…},"play_status":"…" for the Profile's Dew page.
+DewPlaySnapshot :: (play: *DewPlay, out: *Vec(u8)) {
+    BuilderPrint(out, ",\"play\":%,\"play_status\":\"%\"",
+        ifx play.enabled && play.state[0] == #char "{" then TextUntilNul(play.state[:]) else "null",
+        TextUntilNul(play.status[:]))
+}

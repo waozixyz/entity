@@ -1,0 +1,46 @@
+// Google Play Dew purchases (src/dew_play.zi) without Play: the state stands
+// in for Play's answer, so only the node's answer decides when Play forgets it.
+#import, file "../src/dew_play.zi";
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+
+PURCHASE :: "{\"sequence\":3,\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"error\":\"\",\"products\":[{\"id\":\"dew_500\",\"price\":\"5,49 €\",\"micros\":5490000,\"currency\":\"EUR\"}],\"purchases\":[{\"product\":\"dew_500\",\"token\":\"abcdefghijklmnop.Token-1_2\",\"order\":\"GPA.1\"}]}"
+
+#program_export
+main :: () -> s32 {
+    play: DewPlay
+    if DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_500") { return 1 }
+    play.enabled = true
+    if DewPlayBuy(*play, "dew_42") { return 2 }
+    unused CopyCString(PURCHASE, play.state[:])
+    // A purchase waits while the host cannot send it.
+    if DewPlayTick(*play, false) || TextUntilNul(play.status[:]) != "" { return 3 }
+    if !DewPlayTick(*play, true) || TextUntilNul(play.status[:]) != "verifying" { return 4 }
+    if TextUntilNul(play.body[:]) != "{\"app_id\":\"entity\",\"package_name\":\"xyz.waozi.inbe\",\"product_id\":\"dew_500\",\"purchase_token\":\"abcdefghijklmnop.Token-1_2\"}" { return 5 }
+    // A failed answer keeps the purchase and tries again later.
+    if DewPlayVerified(*play, false, 503, "busy") || TextUntilNul(play.status[:]) != "failed" ||
+    play.wait != 600 || play.token[0] != cast(u8)0 { return 6 }
+    if DewPlayTick(*play, true) { return 7 }
+    play.wait = 1
+    if !DewPlayTick(*play, true) { return 8 }
+    // A purchase the node already consumed was credited before.
+    if !DewPlayVerified(*play, false, 400, "{\"error\":\"purchase already consumed\"}") ||
+    TextUntilNul(play.status[:]) != "credited" { return 9 }
+    if !DewPlayTick(*play, true) || !DewPlayVerified(*play, true, 200, "{}") { return 10 }
+    // An unknown product or a malformed token is never sent.
+    unused CopyCString("{\"package\":\"xyz.waozi.inbe\",\"purchases\":[{\"product\":\"gold\",\"token\":\"abcdefghijklmnopq\"}]}", play.state[:])
+    if DewPlayTick(*play, true) { return 11 }
+    unused CopyCString("{\"package\":\"xyz.waozi.inbe\",\"purchases\":[{\"product\":\"dew_100\",\"token\":\"short\"}]}", play.state[:])
+    if DewPlayTick(*play, true) { return 12 }
+    snapshot: Vec(u8)
+    unused CopyCString("verifying", play.status[:])
+    DewPlaySnapshot(*play, *snapshot)
+    text := BuilderFinish(snapshot)
+    if text.count < 20 || text[:8] != ",\"play\":" || text[text.count - 26:] != ",\"play_status\":\"verifying\"" { return 13 }
+    play.enabled = false
+    off: Vec(u8)
+    DewPlaySnapshot(*play, *off)
+    if BuilderFinish(off) != ",\"play\":null,\"play_status\":\"verifying\"" { return 14 }
+    return 0
+}

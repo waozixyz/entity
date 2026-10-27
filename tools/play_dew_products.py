@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create or update an app's Google Play Dew packs (dew_100 … dew_5000).
 
-Entity's Google Play edition sells these packs (src/dew_native.zi). Play
+Entity's Google Play edition sells these packs (src/dew_play.zi). Play
 prices are the node's Dew price (from its XMR rate) plus 10%, converted to
 every Play region with Google's rates and taxes, and rounded up to a clean
 amount in each local currency. The app needs an uploaded Google Play edition
