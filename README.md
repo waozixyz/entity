@@ -122,6 +122,9 @@ per account and product. Retrying from another device cannot debit twice.
 Ownership is restored from exact ledger receipts; enqueueing or a failed
 request never grants a skin. Hosts call `EntityGameShopPump` after frames
 (included in `EntityHostPump`).
+Hosts that already expose `entity.dew` can use the same service through
+`shop:REQUEST`; `EntityDewPump` advances it. The fixed `shop:visit` request
+queues opening `https://waozi.xyz/` after the guest frame.
 `python3 scripts/game_shop_test.py` verifies authenticated purchases, duplicate
 retries, fresh-device restoration and account isolation on a private local node
 with throwaway keys and Dew.

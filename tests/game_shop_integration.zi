@@ -2,6 +2,7 @@
 #import "account_store"
 #import "game_shop_native"
 #import "game_shop"
+#import "entity_dew"
 #import "recovery"
 #import "model"
 #import "native_files"
@@ -35,7 +36,7 @@ Poll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*transfe
 Cancel :: (context: *void) { HttpTransferCancel(*transfer) }
 Wait :: () -> bool {
     for round: 0..1200 {
-        EntityGameShopPump()
+        EntityDewPump()
         if !shop_active && !shop_requested { return shop_status == "done" }
         unused SleepMilliseconds(10)
     }
@@ -59,7 +60,11 @@ Check :: () -> s32 {
     }
     if !AccountStoreStartAt(root, "game-shop-test") { return 5 }
     shop_transport = AsyncTransport.{.start = Start, .poll = Poll, .cancel = Cancel}
-    unused EntityGameShopAnswer("refresh")
+    unused EntityDewAnswer("shop:refresh")
+    if step == "local" {
+        EntityDewPump()
+        return ifx shop_status == "signin" && !shop_active && !shop_requested then 0 else 13
+    }
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
     if step == "restored" { return ifx shop_owned == 14 then 0 else 8 }

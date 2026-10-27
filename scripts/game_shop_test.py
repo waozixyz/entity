@@ -87,6 +87,7 @@ def main():
                     time.sleep(.1)
             step('first', 'create')
             step('first', 'empty')
+            step('other', 'local')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
             payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 60000000,

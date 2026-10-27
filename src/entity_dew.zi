@@ -28,6 +28,7 @@
 #import "daochi_client/crypto"
 #import "daochi_client/keys"
 #import "reward_migration"
+#import "game_shop_native"
 Auth :: #import "daochi_client/auth";
 #import "kryon/http_transfer"
 
@@ -57,6 +58,9 @@ DewRewardCancel :: (context: *void) { HttpTransferCancel(*dew_reward_transfer) }
 
 #scope_export
 EntityDewAnswer :: (request: string) -> string {
+    // Existing hosts already forward entity.dew. Keep the shop available to
+    // those hosts without exposing another credential or transport surface.
+    if request.count > 5 && request[:5] == "shop:" { return EntityGameShopAnswer(request[5:]) }
     out: Vec(u8)
     if request == "balance" {
         if !DewReady() {
@@ -122,6 +126,7 @@ EntityDewBalanceText :: (output: []u8) -> string {
 
 // Advances a claim each frame; a credited reward refreshes the balance.
 EntityDewPump :: () {
+    EntityGameShopPump()
     if !dew_reward_active { return }
     if !DewReady() || TextUntilNul(dew_reward_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) {
         CancelRequest(*dew_reward.request)

@@ -4,7 +4,6 @@
 #import "dew_native"
 #import "entity_records"
 #import "entity_dew"
-#import "game_shop_native"
 #import "model"
 #import "native_files"
 #import "native_management"
@@ -178,7 +177,6 @@ EntityHostPump :: () {
     AccountStorePump()
     DewPump()
     EntityDewPump()
-    EntityGameShopPump()
     EntityRecordsPump()
 }
 
