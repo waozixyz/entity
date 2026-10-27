@@ -109,7 +109,11 @@ DewPlayNext :: (play: *DewPlay) -> bool {
 DewPlayVerified :: (play: *DewPlay, accepted: bool, status: s32, response: string) -> bool {
     credited := accepted || (status == 400 && DewPlayContains(response, "already consumed"))
     if credited {
-        unused PlayBillingDone(TextUntilNul(play.token[:]), play.state[:])
+        // Without Play's new answer the old one still lists this purchase;
+        // the next refresh lists it again only if Play still holds it.
+        if PlayBillingDone(TextUntilNul(play.token[:]), play.state[:]) == "" {
+            play.state = .{}
+        }
         unused CopyCString("credited", play.status[:])
     } else {
         unused CopyCString("failed", play.status[:])

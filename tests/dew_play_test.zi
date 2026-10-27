@@ -27,6 +27,9 @@ main :: () -> s32 {
     // A purchase the node already consumed was credited before.
     if !DewPlayVerified(*play, false, 400, "{\"error\":\"purchase already consumed\"}") ||
     TextUntilNul(play.status[:]) != "credited" { return 9 }
+    // Play did not answer "done" here, so the credited purchase is not sent again.
+    if play.state[0] != cast(u8)0 || DewPlayTick(*play, true) { return 15 }
+    unused CopyCString(PURCHASE, play.state[:])
     if !DewPlayTick(*play, true) || !DewPlayVerified(*play, true, 200, "{}") { return 10 }
     // An unknown product or a malformed token is never sent.
     unused CopyCString("{\"package\":\"xyz.waozi.inbe\",\"purchases\":[{\"product\":\"gold\",\"token\":\"abcdefghijklmnopq\"}]}", play.state[:])
