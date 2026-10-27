@@ -33,7 +33,7 @@ def command(*args):
 
 def start():
     global APP, WINDOW
-    APP = subprocess.Popen([str(ROOT / 'build/entity'), str(ROOT / 'build/entity.zx')], env=ENV)
+    APP = subprocess.Popen([os.environ.get('ENTITY_TEST_BINARY', str(ROOT / 'build/entity')), str(ROOT / 'build/entity.zx')], env=ENV)
     for _ in range(100):
         assert APP.poll() is None, 'Entity exited before opening'
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--pid', str(APP.pid)], env=ENV, capture_output=True, text=True)
@@ -115,6 +115,17 @@ def profile():
 
 try:
     start()
+    click_word('Leaderboard', True)
+    find('@river' if '--leaderboard-populated' in sys.argv else 'data')
+    capture('profile-leaderboard')
+    click_word('Back')
+    find('Leaderboard')
+    capture('profile-after-leaderboard')
+    if '--leaderboard-only' in sys.argv:
+        print('PASS: Profile opens the shared leaderboard and Back returns without changing the account.')
+        sys.exit(0)
+    command('xdotool', 'mousemove', '--window', WINDOW, '440', '300')
+    command('xdotool', 'click', '--window', WINDOW, '--repeat', '12', '--delay', '40', '4')
     x, y, _, _ = find('Name')
     click(x + 100, y + 40)
     command('xdotool', 'type', '--window', WINDOW, '--delay', '10', 'Fixture Native')

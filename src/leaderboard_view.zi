@@ -112,6 +112,16 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     AchievementText(session, 55001, LeaderboardLabel("leaderboard_title", "Leaderboard"),
         Rectangle.{x, y, width, 36.0 * scale}, cast(s32)(24.0 * scale))
     y += 44.0 * scale
+    if page.error {
+        AchievementText(session, 55004, LeaderboardLabel("leaderboard_refresh_failed", "Could not refresh the leaderboard."),
+            Rectangle.{x, y, width, 64.0 * scale}, font)
+        y += 48.0 * scale
+        if Button(session, ButtonProps.{.id = 55005, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+                .label = LeaderboardLabel("profile_dew_retry", "Try again")}) != 0 {
+            unused CopyCString("refresh", profile_leaderboard_request[:])
+        }
+        y += 56.0 * scale
+    }
     if !profile_leaderboard_ready || page.board_count == 0 {
         AchievementText(session, 55002, LeaderboardLabel("profile_no_leaderboard_data", "No leaderboard data yet."),
             Rectangle.{x, y, width, 80.0 * scale}, font)
@@ -155,6 +165,14 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     rows := (count + columns - 1) / columns
     columns = (count + rows - 1) / rows
     choice_width := (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
+    row_height := cast(s32)(40.0 * scale)
+    content_height := cast(s32)(cast(float32)rows * 48.0 * scale + 116.0 * scale) + page.row_count * row_height
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)55300,
+            .bounds = Rectangle.{x, y, width, area.y + area.height - y - 8.0 * scale},
+            .content_height = content_height, .scroll_offset = profile_leaderboard_scroll})
+    profile_leaderboard_scroll = scroll.scroll_offset
+    if !scroll.opened { return true }
+    y = scroll.content.y
     for index: cast(s32)0..count - 1 {
         chosen := choices[index]
         if Button(session, ButtonProps.{.id = 55100 + index,
@@ -184,17 +202,12 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         AchievementText(session, 55204, LeaderboardLabel(ifx page.loading then "profile_updating_status" else "profile_no_leaderboard_data",
             ifx page.loading then "Updating…" else "No leaderboard data yet."),
             Rectangle.{x, y, width, 64.0 * scale}, font)
+        unused End(session)
         return true
     }
-    row_height := cast(s32)(40.0 * scale)
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)55300,
-            .bounds = Rectangle.{x, y, width, area.y + area.height - y - 8.0 * scale},
-            .content_height = page.row_count * row_height, .scroll_offset = profile_leaderboard_scroll})
-    profile_leaderboard_scroll = scroll.scroll_offset
-    if !scroll.opened { return true }
     for index: cast(s32)0..page.row_count - 1 {
         row := *page.rows[index]
-        row_y := scroll.content.y + cast(float32)(index * row_height)
+        row_y := y + cast(float32)(index * row_height)
         key := cast(u64)(55400 + index * 4)
         if row.own || index % 2 == 1 {
             Box(session, BoxProps.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},

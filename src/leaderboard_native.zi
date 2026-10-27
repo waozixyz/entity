@@ -31,6 +31,7 @@ NativeGameScore :: struct {
 native_scores: [LEADERBOARD_BOARDS]NativeGameScore;
 native_score_count: s32;
 native_leaderboard_owner: [97]u8;
+native_leaderboard_node: [256]u8;
 native_leaderboard_page: ProfileLeaderboard;
 native_leaderboard_selected: [65]u8;
 native_leaderboard_requested: bool;
@@ -92,11 +93,13 @@ NativeLeaderboardSave :: () -> bool {
 NativeLeaderboardOwner :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
     if owner == "" { owner = "local" }
-    if owner == TextUntilNul(native_leaderboard_owner[:]) { return }
+    node := TextUntilNul(account_profile.nodes[account_profile.preferred][:])
+    if owner == TextUntilNul(native_leaderboard_owner[:]) && node == TextUntilNul(native_leaderboard_node[:]) { return }
     CancelRequest(*native_leaderboard_pending)
     HttpTransferCancel(*native_leaderboard_transfer)
     native_leaderboard_session = .{}
     unused CopyCString(owner, native_leaderboard_owner[:])
+    unused CopyCString(node, native_leaderboard_node[:])
     native_score_count = 0
     native_scores = .{}
     native_leaderboard_page = .{}
@@ -156,6 +159,7 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
         native_score_count += 1
     }
     score := *native_scores[index]
+    previous := score.*
     if TextUntilNul(score.board.id[:]) == game && score.value == value &&
     TextUntilNul(score.board.title[:]) == title { return true }
     score.value = value
@@ -166,7 +170,10 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
     unused CopyCString("Levels solved", score.board.primary[:])
     native_leaderboard_loaded = false
     native_leaderboard_rows_dirty = true
-    return NativeLeaderboardSave()
+    if NativeLeaderboardSave() { return true }
+    score.* = previous
+    if previous.board.id[0] == cast(u8)0 { native_score_count -= 1 }
+    return false
 }
 
 NativeLeaderboardStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -337,6 +344,13 @@ EntityLeaderboardPump :: () {
     if native_leaderboard_stage != 0 {
         if !PollRequest(*native_leaderboard_pending) { return }
         valid := native_leaderboard_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && native_leaderboard_pending.status == 200
+        if valid && native_leaderboard_stage >= 2 {
+            document := TextUntilNul(native_leaderboard_response[:])
+            end := ValueEnd(document, Space(document, 0), 0)
+            key := ifx native_leaderboard_stage == 2 then "friends" else "rows"
+            count := ArrayCount(document, FieldAt(document, 0, key))
+            valid = end >= 0 && Space(document, end) == document.count && count >= 0 && count <= LEADERBOARD_ROWS
+        }
         native_leaderboard_error = native_leaderboard_error || !valid
         if native_leaderboard_stage == 2 && valid { native_leaderboard_friends = native_leaderboard_response }
         if native_leaderboard_stage == 3 {

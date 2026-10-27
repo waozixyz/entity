@@ -183,4 +183,7 @@ games' reported totals through the existing friend-statistics API, and fetches
 rankings asynchronously in `EntityLeaderboardPump` (part of `EntityHostPump`).
 Uninstalling hides a retained score immediately. Account changes cancel old
 requests and clear old friend rows. No game gets another game's records or keys.
-`python3 scripts/leaderboard-test.py` tests these boundaries locally.
+`python3 scripts/leaderboard-test.py` tests these boundaries locally, including
+asynchronous publication and friend ranking with a private in-memory transport.
+Add `--ui` to render empty and populated boards on private Xvfb displays and
+verify Profile/Back navigation.
