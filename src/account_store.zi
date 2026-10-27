@@ -119,6 +119,35 @@ AccountStoreDeliverFile :: (context: *void, path: string) -> bool {
     }
 }
 
+// Every waozi.xyz site shares one sign-in. account.waozi.xyz keeps the key;
+// the page's share.js reads it into Module.sharedAccountKey before the app
+// starts and passes changes on through Module.shareAccount(key, owner, only_if_empty).
+// Other hosts have no shared sign-in.
+AccountStoreSharedKey :: (output: []u8) -> string {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        if module == 0 || WebFailed() { return "" }
+        handle := WebAsObject(WebGet(module, WebName("sharedAccountKey")))
+        if handle == 0 || WebFailed() || WebTypeOf(handle) != WebTypeString { return "" }
+        length := WebCopyString(handle, output)
+        if length <= 0 || length >= cast(s32)output.count { return "" }
+        output[length] = cast(u8)0
+        return TextUntilNul(output)
+    }
+    return ""
+}
+AccountStoreShare :: (key: string, owner: string, only_if_empty: bool) {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        if module == 0 || WebFailed() || WebTypeOf(WebGetObject(module, WebName("shareAccount"))) != WebTypeFunction { return }
+        unused WebCall3(module, WebName("shareAccount"), WebText(key), WebText(owner), WebBool(only_if_empty))
+    }
+}
+
 AccountStorePersist :: () -> bool {
     #if #defined(PLATFORM_WEB) {
         return BundleStorageFlush()
@@ -130,7 +159,11 @@ AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     path: [4096]u8
-    return RecoveryEncode(recovery, "", text[:]) && NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:])) && AccountStorePersist()
+    if !RecoveryEncode(recovery, "", text[:]) || !NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:])) ||
+    !AccountStorePersist() { return false }
+    // A sign-in here signs in the other waozi.xyz sites too.
+    AccountStoreShare(TextUntilNul(text[:]), TextUntilNul(recovery.keys.public_id[:]), false)
+    return true
 }
 AccountStoreSaveProfile :: (state: EntityState) -> bool {
     if TextUntilNul(state.owner_id[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { return false }
@@ -257,6 +290,8 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
         path: [4096]u8
         address := AccountStorePath("account.key", path[:])
         if PathExists(address) && !RemoveFile(address) { return 0 }
+        // Logging out here logs this account out of the shared sign-in too.
+        AccountStoreShare("", TextUntilNul(account_recovery.keys.public_id[:]), false)
         DeviceLinkCancel()
         RecoveryClear(*account_recovery)
         account_standalone_ready = false
@@ -302,9 +337,23 @@ AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     account_store_problem = .{}
-    if NativeRead(AccountStorePath("account.key", path[:]), text[:]) > 0 {
+    if NativeRead(AccountStorePath("account.key", path[:]), text[:]) <= 0 {
+        // No account on this site yet: use the one signed in on another
+        // waozi.xyz site, if there is one.
+        shared := AccountStoreSharedKey(text[:])
+        if shared != "" && RecoveryDecode(shared, "", *account_recovery) &&
+        NativeWrite(AccountStorePath("account.key", path[:]), shared) {
+            unused AccountStorePersist()
+            account_standalone_ready = true
+        } else {
+            account_recovery = Recovery.{}
+        }
+    } else {
         if RecoveryDecode(TextUntilNul(text[:]), "", *account_recovery) {
             account_standalone_ready = true
+            // An account signed in before sign-ins were shared reaches the
+            // other sites, unless one of them already shares another.
+            AccountStoreShare(TextUntilNul(text[:]), TextUntilNul(account_recovery.keys.public_id[:]), true)
         } else {
             // An unreadable key never keeps the Profile closed: it is set
             // aside, never deleted, and the Profile says so.

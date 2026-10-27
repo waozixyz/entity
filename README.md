@@ -61,6 +61,13 @@ QR/device connection, explicit merge/replace choices, sync status/controls where
 the host supports them, logout, and confirmed remote deletion. Hosts expose only
 capabilities they implement. Extension cards can include a summary and badge.
 
+In the browser every waozi.xyz site shares one sign-in. A page that loads
+https://account.waozi.xyz/share.js and calls `WaoziAccount.attach(Module)`
+before starting gives Entity the shared key as `Module.sharedAccountKey`; a
+site without its own account signs in with it, and signing in, creating an
+account, linking a device or logging out is passed back through
+`Module.shareAccount`. A site keeps its own account if it already has one.
+
 Recovery retains the existing plain and passphrase-protected Daochi key formats.
 An optional protected native context preserves Werkzeug's record vault across
 backup/import and new shared QR transfers. Plain-key QR transfers retain Inbe's
