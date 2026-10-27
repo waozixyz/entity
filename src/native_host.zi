@@ -2,6 +2,8 @@
 // account keys remain in this provider and never enter a game bundle.
 #import "account_store"
 #import "dew_native"
+#import "dew_model"
+#import "recovery"
 #import "entity_records"
 #import "entity_dew"
 #import "leaderboard_native"
@@ -150,6 +152,48 @@ EntityHostDew :: () -> bool {
     if !DewReady() { return false }
     portable.command = "dew"
     return AppContextRun(*portable, APP_COMMAND)
+}
+
+// The account's Dew for a host that draws its own top-up page. The balance
+// and the Monero funding address come from the node; keys stay here.
+EntityDewStatus :: struct {
+    ready: bool
+    busy: bool
+    error: bool
+    known: bool
+    funded: bool
+    funding_allowed: bool
+    account: DewAccount
+    funding: DewFunding
+    alias: [40]u8
+    name: [64]u8
+}
+
+EntityHostDewStatus :: () -> EntityDewStatus {
+    status: EntityDewStatus
+    status.ready = DewReady()
+    status.funding_allowed = dew_funding_allowed
+    if !status.ready { return status }
+    status.alias = account_alias
+    status.name = account_profile.name
+    owner := TextUntilNul(account_recovery.keys.public_id[:])
+    if TextUntilNul(dew_owner[:]) != owner { return status }
+    status.busy = dew_active || dew_queued[0] != cast(u8)0
+    status.error = dew_error
+    status.known = DewParseAccount(TextUntilNul(dew_plan[:]), owner, *status.account)
+    status.funded = DewParseFunding(TextUntilNul(dew_address[:]), owner, *status.funding)
+    return status
+}
+
+// Asks the node for the balance ("refresh") or the funding address
+// ("address"); false while another Dew request is still running.
+EntityHostDewRequest :: (operation: string) -> bool {
+    if !DewReady() || (operation != "refresh" && operation != "address") { return false }
+    if operation == "address" && !dew_funding_allowed { return false }
+    if TextUntilNul(dew_owner[:]) != TextUntilNul(account_recovery.keys.public_id[:]) { DewReset() }
+    if dew_active || dew_queued[0] != cast(u8)0 { return false }
+    dew_queued = .{}
+    return CopyCString(operation, dew_queued[:])
 }
 
 EntityHostSave :: () -> bool {

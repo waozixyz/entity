@@ -106,6 +106,11 @@ fails. Hosts that draw navigation pass `host_navigation = true` to
 Native hosts expose the shared intention field and can use
 `EntityHostDewAvailable` and `EntityHostDew` for a direct Dew entry. Dew uses
 the host's existing Back control when the host supplies navigation.
+Hosts that draw their own top-up page, such as dew.waozi.xyz, read the
+balance and the account's Monero funding address with `EntityHostDewStatus`
+and ask the node for either with `EntityHostDewRequest("refresh")` or
+`EntityHostDewRequest("address")`. `scripts/build-web.py` links such a host
+without `--bundle`.
 
 On the Waozi node, connected native profiles can read their Dew balance, obtain
 their Monero funding address, and confirm a node-priced storage plan. Purchases
