@@ -9,8 +9,8 @@ PURCHASE :: "{\"sequence\":3,\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"err
 
 #program_export
 main :: () -> s32 {
-    play: DewPlay
-    if DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_500") { return 1 }
+    play: DewPlay = .{.enabled = DewPlayEdition()}
+    if play.enabled || DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_500") { return 1 }
     play.enabled = true
     if DewPlayBuy(*play, "dew_42") { return 2 }
     unused CopyCString(PURCHASE, play.state[:])

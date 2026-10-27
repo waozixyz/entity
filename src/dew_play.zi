@@ -14,10 +14,11 @@ DEW_PLAY_PRODUCTS :: "dew_100,dew_500,dew_1000,dew_5000"
 DEW_PLAY_VERIFY_PATH :: "/api/v1/tokens/purchases/google/verify"
 
 // Whether this build is the Google Play edition (the GOOGLE_PLAY define).
-#if #defined(GOOGLE_PLAY) {
-    DEW_PLAY_EDITION :: true
-} else {
-    DEW_PLAY_EDITION :: false
+DewPlayEdition :: () -> bool {
+    #if #defined(GOOGLE_PLAY) {
+        return true
+    }
+    return false
 }
 
 DewPlay :: struct {
