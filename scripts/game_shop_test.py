@@ -89,7 +89,7 @@ def main():
             step('first', 'empty')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 6000000,
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 60000000,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -105,7 +105,7 @@ def main():
             step('other', 'insufficient')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
-                assert [row[0] for row in events] == [-1000000, -2000000, -3000000], events
+                assert [row[0] for row in events] == [-10000000, -20000000, -30000000], events
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
             (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 3,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',

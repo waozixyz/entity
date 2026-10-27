@@ -114,7 +114,7 @@ explicit retry; it never becomes a new debit. Switching or logging out cancels
 the old account's in-flight requests. The `entity/dew_model` export shares strict
 integer balance, allowance and funding-address validation with Inner Breeze.
 Game hosts can also expose `entity.game-shop` from `game_shop_native`. Its fixed
-Apfelwurm cosmetics cost 1, 2 and 3 Dew. `status` and `refresh` return the
+Apfelwurm cosmetics cost 10, 20 and 30 Dew. `status` and `refresh` return the
 current public owner, device ID, ownership mask and request status; naming a
 product (`wurm.mint`, `wurm.berry`, `wurm.rose`) buys it after the game confirms
 the price. The provider uses authenticated Dew spending with one stable key

@@ -2,9 +2,9 @@
 #import "std/vec"
 #import "std/text_buffer"
 
-Receipt :: (product: s32, owner: string, amount: s64) -> string {
+Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"spend\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, GameShopReference(product), amount)
+    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"spend\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, ifx reference == "" then GameShopReference(product) else reference, amount)
     return BuilderFinish(out)
 }
 #program_export
@@ -19,6 +19,7 @@ main :: () -> s32 {
         if GameShopReceipt(Receipt(p, owner, -1), owner) != 0 { return 3 }
         if GameShopReceipt(Receipt(p, owner, GameShopPrice(p)), owner) != 0 { return 4 }
         if GameShopKey(p) == "" || GameShopKey(p) != GameShopKey(p) { return 5 }
+        if GameShopReceipt(Receipt(p, owner, -GameShopPrice(p) / 10, GameShopLegacyReference(p)), owner) != p { return 8 }
     }
     if GameShopPrice(0) != 0 || GameShopPrice(4) != 0 || GameShopReceipt("{}", owner) != 0 { return 6 }
     if GameShopKey(1) == GameShopKey(2) || GameShopKey(1) == GameShopKey(3) || GameShopKey(2) == GameShopKey(3) { return 7 }
