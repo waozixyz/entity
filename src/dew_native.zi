@@ -122,8 +122,10 @@ DewEnqueue :: (text: string) -> bool {
     return true
 }
 
+// The node waits up to 15 seconds for its Monero wallet, so a new funding
+// address can take longer than that to arrive.
 DewStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
-    return HttpTransferStart(*dew_transfer, request, output, 15000)
+    return HttpTransferStart(*dew_transfer, request, output, 30000)
 }
 DewPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*dew_transfer, status) }
 DewCancel :: (context: *void) { HttpTransferCancel(*dew_transfer) }
