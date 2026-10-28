@@ -124,6 +124,8 @@ SharedProfileLoad :: (id: string, state: *EntityState) -> bool {
     state.name = shared.name
     state.intention = shared.intention
     if (state.pictures & (1 << shared.picture)) != 0 { state.picture = shared.picture }
+    state.picture_kind = shared.picture_kind
+    state.abstract_picture = shared.abstract_picture
     state.nodes = shared.nodes
     state.node_count = shared.node_count
     state.preferred = shared.preferred
@@ -142,6 +144,8 @@ SharedProfileSave :: (id: string, state: EntityState) -> bool {
     shared.name = state.name
     shared.intention = state.intention
     shared.picture = state.picture
+    shared.picture_kind = state.picture_kind
+    shared.abstract_picture = state.abstract_picture
     shared.nodes = state.nodes
     shared.node_count = state.node_count
     shared.preferred = state.preferred

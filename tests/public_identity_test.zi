@@ -122,7 +122,15 @@ main :: () -> s32 {
     app.widgets = WidgetHostCall
     if !AppContextOpen(*app, bytes) { return 1 }
     Frame()
-    Expect(Find(identity) >= 0, "desktop shows the full ID when it fits")
+    ClickKey(9)
+    Expect(FindKey(76000) >= 0, "clicking the profile picture opens the picker modal")
+    Expect(Find("Abstract") >= 0 && Find("Classic") >= 0 && Find("Avatar") >= 0, "picker has all three picture families")
+    ClickKey(76102)
+    Expect(FindKey(76200) >= 0, "Avatar tab offers the shared 3D avatar")
+    Expect(FindKey(70000) >= 0, "Avatar tab renders the illustrated portrait")
+    Command("back")
+    Expect(FindKey(76000) < 0, "Back dismisses the picture modal")
+    Expect(Find("0123…cdef") >= 0 && Find(identity) < 0, "Profile keeps the public ID compact even on a wide screen")
     ClickKey(705)
     Expect(Find(identity) >= 0 && FindKey(19500) >= 0, "ID opens its full modal")
     Expect(FindKey(19000) >= 0, "modal shows the QR code above the ID")
@@ -133,6 +141,7 @@ main :: () -> s32 {
     Expect(FindKey(19500) < 0, "Back dismisses the ID modal")
     app.bounds.width = 390.0
     Frame()
+    Expect(FindKey(702) < 0 && FindKey(819) >= 0, "account controls are merged into Profile")
     Expect(Find("0123…cdef") >= 0, "narrow view uses the short ID")
     ClickKey(706)
     Expect(TextUntilNul(clipboard[:]) == identity, "narrow copy copies the complete ID")
@@ -148,7 +157,7 @@ main :: () -> s32 {
     ClickKey(103)
     Expect(app.keyboard, "alias field requests the host keyboard")
     Command("back")
-    ClickKey(813)
+    ClickKey(705)
     account.public_id[0] = #char "a"
     EntityFree(snapshot)
     snapshot = ManagementEncode(account)

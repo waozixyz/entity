@@ -8,7 +8,9 @@
 #import "entity_dew"
 #import "leaderboard_native"
 #import "leaderboard_model"
+#import "friends_native"
 #import "model"
+#import "profile_appearance"
 #import "native_files"
 #import "native_management"
 #import "std/c_string"
@@ -31,6 +33,12 @@ profile_document: string;
 asset_folder: [4096]u8;
 entity_host_navigation: bool;
 entity_host_game: bool;
+entity_profile_sections: s32 = 31;
+EntityHostProfileSections :: (sections: s32) { entity_profile_sections = sections & 31 }
+EntityAppearance :: struct { theme: s32; accent: s32; material: bool }
+EntityHostAppearance :: () -> EntityAppearance {
+    return EntityAppearance.{account_profile.theme, account_profile.accent, account_profile.material}
+}
 entity_paste: [16384]u8;
 // The Profile's Top up opens this page for the signed-in account; a host
 // that is that page sets it empty and takes the request itself.
@@ -59,12 +67,13 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == LEADERBOARD_SERVICE
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
+        if service == "entity.friends" { result.* = EntityHostText(EntityFriendsAnswer(AppArgumentText(arguments[1]))); return 1 }
         if service == LEADERBOARD_SERVICE {
             result.* = EntityHostText(EntityLeaderboardAnswer(AppArgumentText(arguments[1])))
             return 1
@@ -97,7 +106,12 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         unused SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
         EntityFree(profile_document)
         state := account_profile
+        unused ProfileAppearanceApplyReply(EntityRecordsAnswer(PROFILE_APPEARANCE_GET), *state)
+        account_profile.picture_kind = state.picture_kind
+        account_profile.picture = state.picture
+        account_profile.abstract_picture = state.abstract_picture
         state.host_navigation = entity_host_navigation
+        state.profile_sections = entity_profile_sections
         if entity_host_game { state.controls = ENTITY_NODES }
         state.extensions = .{}
         state.extension_count = 0
@@ -114,7 +128,14 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
     }
     if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
         state: EntityState
-        saved := EntityDecode(AppArgumentText(arguments[1]), *state) && AccountStoreSaveProfile(state)
+        decoded := EntityDecode(AppArgumentText(arguments[1]), *state)
+        changed := decoded && (state.picture_kind != account_profile.picture_kind || state.picture != account_profile.picture || state.abstract_picture != account_profile.abstract_picture)
+        saved := decoded && AccountStoreSaveProfile(state)
+        if saved && changed {
+            appearance := ProfileAppearancePut(state)
+            unused EntityRecordsAnswer(appearance)
+            EntityFree(appearance)
+        }
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
     }
@@ -123,6 +144,9 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
 EntityHostAssetAllowed :: (path: string) -> bool {
     first: [4096]u8
     second: [4096]u8
+    abstract: [4096]u8
+    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
+    for name: names { if path == NativeJoin(abstract[:], TextUntilNul(asset_folder[:]), name) { return true } }
     return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/entity/pfp.png") ||
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
 }
@@ -162,14 +186,18 @@ EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigati
         entity_host_problem = "The profile could not start. Reload to try again."
         return false
     }
-    for index: cast(u64)0..BundleAssets(portable.app.bundle) - 1 {
-        name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
-        if name != "assets/entity/pfp.png" && name != "assets/entity/flowers.png" { continue }
-        folder: [4096]u8
-        path: [4096]u8
-        if !NativeDirectory(NativeJoin(folder[:], root, "assets/entity")) { return false }
-        asset_bytes := BytesFromPointer(BundleAssetBytes(portable.app.bundle, index), BundleAssetLength(portable.app.bundle, index))
-        if !NativeWrite(NativeJoin(path[:], root, name), TextFromBytes(asset_bytes)) { return false }
+    asset_count := BundleAssets(portable.app.bundle)
+    if asset_count > 0 {
+        for index: cast(u64)0..asset_count - 1 {
+            name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
+            if name != "assets/entity/pfp.png" && name != "assets/entity/flowers.png" &&
+            name != "assets/entity/abstract-jade.png" && name != "assets/entity/abstract-amber.png" && name != "assets/entity/abstract-violet.png" { continue }
+            folder: [4096]u8
+            path: [4096]u8
+            if !NativeDirectory(NativeJoin(folder[:], root, "assets/entity")) { return false }
+            asset_bytes := BytesFromPointer(BundleAssetBytes(portable.app.bundle, index), BundleAssetLength(portable.app.bundle, index))
+            if !NativeWrite(NativeJoin(path[:], root, name), TextFromBytes(asset_bytes)) { return false }
+        }
     }
     return true
 }
@@ -181,6 +209,19 @@ EntityHostReload :: () {
 
 EntityHostAccount :: () -> bool {
     portable.command = "account"
+    return AppContextRun(*portable, APP_COMMAND)
+}
+
+EntityHostLeaderboard :: () -> bool {
+    portable.command = "root:leaderboard"
+    return AppContextRun(*portable, APP_COMMAND)
+}
+EntityHostPage :: (page: string) -> bool {
+    if page == "profile" { portable.command = "root:profile" }
+    else if page == "dew" { portable.command = "root:dew" }
+    else if page == "appearance" { portable.command = "root:appearance" }
+    else if page == "leaderboard" { portable.command = "root:leaderboard" }
+    else { return false }
     return AppContextRun(*portable, APP_COMMAND)
 }
 
@@ -302,6 +343,7 @@ EntityHostPump :: () {
     EntityDewPump()
     EntityRecordsPump()
     EntityLeaderboardPump()
+    EntityFriendsPump()
 }
 
 EntityHostClose :: () -> bool {

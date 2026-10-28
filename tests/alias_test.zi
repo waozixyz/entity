@@ -7,6 +7,8 @@
 #import "management"
 #import "recovery"
 #import "model"
+#import "friends_native"
+#import "std/json_scan"
 #import "native_files"
 #import "std/c_string"
 #import "std/timer_linux"
@@ -83,6 +85,33 @@ Check :: () -> s32 {
         if !SaveAlias("live_tester_one") || !Answered("ok", "Account alias saved") { return 9 }
         if SavedAlias() != "live_tester_one" { return 10 }
         return 0
+    }
+    if step == "picture" {
+        state := account_profile
+        state.picture = 7
+        if !AccountStoreSaveProfile(state) { return 20 }
+        for round: 0..1200 {
+            AccountStorePump()
+            if round > 0 && !picture_dirty && !picture_active { return 0 }
+            unused SleepMilliseconds(25)
+        }
+        return 21
+    }
+    if step == "picture_restore" {
+        for round: 0..1200 {
+            AccountStorePump()
+            if account_profile.picture == 7 { return 0 }
+            unused SleepMilliseconds(25)
+        }
+        return 22
+    }
+    if step == "restore" {
+        for round: 0..600 {
+            AccountStoreAliasPump()
+            if TextUntilNul(account_alias[:]) == "live_tester_one" { return ifx SavedAlias() == "live_tester_one" then 0 else 19 }
+            unused SleepMilliseconds(25)
+        }
+        return 18
     }
     if step == "second" {
         // Another account cannot take it, and is told so.

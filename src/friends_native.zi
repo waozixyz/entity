@@ -1,0 +1,139 @@
+// Account-bound friend requests shared by native Profile hosts.
+#import "account_store"
+#import "model"
+#import "recovery"
+#import "daochi_client/client"
+#import "daochi_client/async_client"
+#import "daochi_client/social"
+#import "kryon/http_transfer"
+#import "std/net_http"
+#import "std/date_time_linux"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+Auth :: #import "daochi_client/auth";
+friend_owner: [65]u8;
+friend_node: [512]u8;
+friend_pending: PendingRequest;
+friend_session: Auth.Session;
+friend_transfer: HttpTransfer;
+friend_response: [32768]u8;
+friend_list: [32768]u8;
+friend_requests: [32768]u8;
+friend_path: [512]u8;
+friend_body: [256]u8;
+friend_method: string;
+friend_stage: s32;
+friend_refresh: bool;
+friend_queued: bool;
+friend_error: bool;
+friend_answer: string;
+
+FriendsScope :: () {
+    owner := TextUntilNul(account_recovery.keys.public_id[:])
+    node := TextUntilNul(account_profile.nodes[account_profile.preferred][:])
+    if owner == TextUntilNul(friend_owner[:]) && node == TextUntilNul(friend_node[:]) { return }
+    CancelRequest(*friend_pending)
+    HttpTransferCancel(*friend_transfer)
+    friend_owner = account_recovery.keys.public_id
+    unused CopyCString(node, friend_node[:])
+    friend_session = .{}
+    friend_stage = 0
+    friend_refresh = false
+    friend_queued = false
+    friend_error = false
+    friend_list = .{}
+    friend_requests = .{}
+}
+FriendsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*friend_transfer, request, output, 15000)
+}
+FriendsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*friend_transfer, status) }
+FriendsCancel :: (context: *void) { HttpTransferCancel(*friend_transfer) }
+
+EntityFriendsAnswer :: (request: string) -> string {
+    FriendsScope()
+    busy := friend_stage != 0 || friend_refresh || friend_queued
+    if request == "refresh" { friend_refresh = true }
+    else if request != "" {
+        owner: [65]u8
+        operation: [16]u8
+        target: [129]u8
+        if !account_standalone_ready || busy ||
+        Space(request, ValueEnd(request, 0, 0)) != request.count ||
+        ReadStringText(request, FieldAt(request, 0, "owner"), owner[:]) != 64 || TextUntilNul(owner[:]) != TextUntilNul(friend_owner[:]) ||
+        ReadStringText(request, FieldAt(request, 0, "operation"), operation[:]) <= 0 ||
+        ReadStringText(request, FieldAt(request, 0, "target"), target[:]) <= 0 { return "rejected" }
+        op := TextUntilNul(operation[:])
+        value := TextUntilNul(target[:])
+        friend_body = .{}
+        if op == "add" {
+            if !BuildFriendRequestBody(value, friend_body[:]) { return "rejected" }
+            unused CopyCString("/api/v1/friends/requests", friend_path[:])
+            friend_method = "POST"
+        } else if op == "remove" {
+            if !BuildFriendPath(value, friend_path[:]) { return "rejected" }
+            friend_method = "DELETE"
+        } else {
+            if !BuildFriendActionPath(value, op, friend_path[:]) { return "rejected" }
+            friend_method = "POST"
+        }
+        friend_queued = true
+        friend_error = false
+        return "queued"
+    }
+    EntityFree(friend_answer)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":")
+    EntityQuote(*out, TextUntilNul(friend_owner[:]))
+    BuilderPrint(*out, ",\"ready\":%,\"busy\":%,\"error\":%,\"list\":%,\"requests\":%}",
+        account_standalone_ready, friend_stage != 0 || friend_refresh || friend_queued, friend_error,
+        ifx friend_list[0] == 0 then "{\"friends\":[]}" else TextUntilNul(friend_list[:]),
+        ifx friend_requests[0] == 0 then "{\"requests\":[]}" else TextUntilNul(friend_requests[:]))
+    friend_answer = BuilderFinish(out)
+    return friend_answer
+}
+
+EntityFriendsPump :: () {
+    FriendsScope()
+    if !account_standalone_ready { return }
+    if friend_stage != 0 {
+        if !PollRequest(*friend_pending) { return }
+        valid := friend_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && friend_pending.status >= 200 && friend_pending.status < 300
+        document := TextUntilNul(friend_response[:])
+        if friend_stage <= 2 {
+            key := ifx friend_stage == 1 then "friends" else "requests"
+            at := FieldAt(document, 0, key)
+            valid = valid && Space(document, ValueEnd(document, 0, 0)) == document.count && at >= 0 && document[at] == #char "["
+        }
+        friend_error = friend_error || !valid
+        if valid && friend_stage == 1 { friend_list = friend_response }
+        if valid && friend_stage == 2 { friend_requests = friend_response }
+        if friend_stage == 1 && valid { friend_stage = 2 }
+        else {
+            if friend_stage == 3 && valid { friend_refresh = true }
+            friend_stage = 0
+            return
+        }
+    } else if friend_queued {
+        friend_queued = false
+        friend_stage = 3
+    } else if friend_refresh {
+        friend_refresh = false
+        friend_error = false
+        friend_stage = 1
+    } else { return }
+    client: Client
+    if !AccountStoreClient(null, *client) { friend_stage = 0; return }
+    path := ifx friend_stage == 1 then "/api/v1/friends" else ifx friend_stage == 2 then "/api/v1/friends/requests" else TextUntilNul(friend_path[:])
+    method := ifx friend_stage == 3 then friend_method else "GET"
+    body := ifx friend_stage == 3 then TextUntilNul(friend_body[:]) else ""
+    headers: [1]HttpHeader
+    friend_response = .{}
+    transport := AsyncTransport.{.start = FriendsStart, .poll = FriendsPoll, .cancel = FriendsCancel}
+    if !BeginRequest(*friend_pending, client, *friend_session, UnixNow(), transport, method, path, body, friend_response[:], headers[:0]) {
+        friend_stage = 0
+        friend_error = true
+    }
+}

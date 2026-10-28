@@ -1,0 +1,53 @@
+#import "profile_appearance"
+#import "model"
+#import "telegram_connection"
+#import "std/c_string"
+#import "std/text_buffer"
+request_count: s32;
+cancel_count: s32;
+received: s32;
+last_method: [16]u8;
+last_path: [256]u8;
+Start :: (method: string, path: string, body: string) -> bool {
+    request_count += 1
+    unused CopyCString(method, last_method[:])
+    unused CopyCString(path, last_path[:])
+    return true
+}
+Poll :: (output: []u8) -> s32 {
+    unused CopyCString("{\"linked\":true,\"linked_at\":42}", output)
+    return 1
+}
+Cancel :: () { cancel_count += 1 }
+Receive :: (document: string) { received += 1 }
+#program_export
+main :: () -> s32 {
+    state := EntityDefault()
+    state.picture_kind = 2
+    state.abstract_picture = 2
+    state.picture = 27
+    document := ProfileAppearanceWrite(state)
+    next := EntityDefault()
+    if !ProfileAppearanceRead(document, *next) || next.picture_kind != 2 || next.picture != 27 || next.abstract_picture != 2 { return 1 }
+    EntityFree(document)
+    if ProfileAppearanceRead("{\"version\":1,\"picture_kind\":3,\"picture\":0,\"abstract_picture\":0}", *next) { return 2 }
+    if ProfileAppearanceRead("{}", *next) { return 3 }
+    token: [65]u8
+    if !TelegramLinkStart("inlumi_bot", "{\"url\":\"https://t.me/inlumi_bot?start=0123456789abcdef0123456789abcdef\"}", token[:]) { return 4 }
+    if TelegramLinkStart("other_bot", "{\"url\":\"https://t.me/inlumi_bot?start=0123456789abcdef0123456789abcdef\"}", token[:]) { return 5 }
+    if TelegramLinkStart("inlumi_bot", "{\"url\":\"https://t.me/inlumi_bot?start=0123456789abcdef0123456789abcde?ef\"}", token[:]) { return 6 }
+    connection: TelegramConnection
+    bot := TelegramBot.{.name = "other_bot", .relay = "/api/v1/other/telegram"}
+    transport := TelegramTransport.{.start = Start, .poll = Poll, .cancel = Cancel, .receive = Receive}
+    client := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    TelegramConnectionPump(*connection, bot, transport, "owner-a", true, true, false, client, 10)
+    if request_count != 1 || !connection.active || connection.stage != 2 || TextUntilNul(last_path[:]) != "/api/v1/other/telegram/updates?client=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" { return 7 }
+    TelegramConnectionPump(*connection, bot, transport, "owner-a", true, true, false, client, 11)
+    if !connection.linked || connection.linked_at != 42 || received != 1 { return 8 }
+    TelegramConnectionPump(*connection, bot, transport, "owner-b", true, false, false, client, 12)
+    if connection.linked || connection.active || connection.ack != 0 { return 9 }
+    connection.disconnect_requested = true
+    TelegramConnectionPump(*connection, bot, transport, "owner-b", true, false, false, client, 13)
+    if TextUntilNul(last_method[:]) != "DELETE" || TextUntilNul(last_path[:]) != "/api/v1/other/telegram/link" { return 10 }
+    return 0
+}

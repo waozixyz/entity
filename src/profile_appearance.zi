@@ -1,0 +1,42 @@
+// One versioned appearance record for the Daochi account, independent of app.
+#import "model"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/vec"
+PROFILE_APPEARANCE_KIND :: "profile"
+PROFILE_APPEARANCE_ID :: "00000000000000000000000000000001"
+PROFILE_APPEARANCE_SCHEMA :: "entity.profile-appearance.v1"
+PROFILE_APPEARANCE_GET :: "{\"operation\":\"get\",\"kind\":\"profile\",\"id\":\"00000000000000000000000000000001\"}"
+
+ProfileAppearanceRead :: (document: string, state: *EntityState) -> bool {
+    if document.count < 2 || document.count > 2048 || Space(document, ValueEnd(document, 0, 0)) != document.count { return false }
+    version := EntityNumber(document, FieldAt(document, 0, "version"), 1, 1)
+    kind := EntityNumber(document, FieldAt(document, 0, "picture_kind"), 0, 2)
+    picture := EntityNumber(document, FieldAt(document, 0, "picture"), 0, 27)
+    abstract := EntityNumber(document, FieldAt(document, 0, "abstract_picture"), 0, 2)
+    if version != 1 || kind < 0 || picture < 0 || abstract < 0 { return false }
+    state.picture_kind = kind
+    state.abstract_picture = abstract
+    if (state.pictures & (1 << picture)) != 0 { state.picture = picture }
+    return true
+}
+ProfileAppearanceWrite :: (state: EntityState) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"picture_kind\":%,\"picture\":%,\"abstract_picture\":%}", state.picture_kind, state.picture, state.abstract_picture)
+    return BuilderFinish(out)
+}
+ProfileAppearancePut :: (state: EntityState) -> string {
+    document := ProfileAppearanceWrite(state)
+    defer { EntityFree(document) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"operation\":\"put\",\"kind\":\"%\",\"id\":\"%\",\"schema\":\"%\",\"document\":%}",
+        PROFILE_APPEARANCE_KIND, PROFILE_APPEARANCE_ID, PROFILE_APPEARANCE_SCHEMA, document)
+    return BuilderFinish(out)
+}
+ProfileAppearanceApplyReply :: (reply: string, state: *EntityState) -> bool {
+    if !MatchLiteral(reply, FieldAt(reply, 0, "status"), "\"done\"" ) { return false }
+    at := FieldAt(reply, 0, "document")
+    end := ValueEnd(reply, at, 0)
+    return at >= 0 && end > at && ProfileAppearanceRead(reply[at:end], state)
+}

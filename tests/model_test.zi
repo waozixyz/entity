@@ -13,6 +13,8 @@ main :: () -> s32 {
     state.host_navigation = true
     unused CopyCString("Waozi \"quoted\" \\ UTF-8: 花", state.name[:])
     unused CopyCString("Breathe slowly", state.intention[:])
+    state.picture_kind = 2
+    state.abstract_picture = 1
     state.picture = 27
     state.theme = 2
     state.node_count = 2
@@ -22,6 +24,7 @@ main :: () -> s32 {
     encoded := EntityEncode(state)
     if !EntityDecode(encoded, *decoded) { return 1 }
     if !decoded.host_navigation { return 9 }
+    if decoded.picture_kind != 2 || decoded.abstract_picture != 1 { return 11 }
     if TextUntilNul(decoded.name[:]) != TextUntilNul(state.name[:]) ||
     TextUntilNul(decoded.intention[:]) != "Breathe slowly" || decoded.picture != 27 ||
     decoded.preferred != 1 || decoded.node_count != 2 ||

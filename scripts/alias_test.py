@@ -99,6 +99,16 @@ with (node_folder / 'node.log').open('w') as log:
         for device in ('first', 'second'):
             step(device, 'create', node_url)
         step('first', 'first', node_url)
+        for alias_file in devices['first'].glob('alias.*.txt'):
+            alias_file.unlink()
+        step('first', 'restore', node_url)
+        step('first', 'picture', node_url)
+        profile_path = devices['first'] / 'entity.json'
+        import json
+        profile = json.loads(profile_path.read_text())
+        profile['picture'] = 0
+        profile_path.write_text(json.dumps(profile))
+        step('first', 'picture_restore', node_url)
         step('second', 'second', node_url)
         # Nothing listens on this port: the node cannot be reached.
         step('offline', 'create', f'http://127.0.0.1:{free_port()}')

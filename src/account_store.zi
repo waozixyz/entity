@@ -16,6 +16,10 @@ Auth :: #import "daochi_client/auth";
 #import "std/vec"
 #import "std/byte_text_linux"
 #import "std/file"
+#import "std/date_time_linux"
+#import "std/net_http"
+#import "daochi_client/async_client"
+#import "kryon/http_transfer"
 #if #defined(PLATFORM_WEB) {
     #import "kryon/file_picker"
     #import "kryon/page_files"
@@ -38,6 +42,25 @@ account_profile: EntityState;
 account_recovery: Recovery;
 account_provider: ManagementProvider;
 account_alias: [40]u8;
+alias_owner: [65]u8;
+alias_node: [512]u8;
+alias_pending: PendingRequest;
+alias_session: Auth.Session;
+alias_transfer: HttpTransfer;
+alias_active: bool;
+alias_next: s64;
+alias_sequence: s32;
+picture_pending: PendingRequest;
+picture_session: Auth.Session;
+picture_transfer: HttpTransfer;
+picture_active: bool;
+picture_dirty: bool;
+picture_remote: bool;
+picture_sequence: s32;
+picture_sending: s32;
+picture_next: s64;
+picture_body: [256]u8;
+picture_response: [1024]u8;
 account_pairing_delivered: bool;
 account_standalone_ready: bool;
 account_root: [4096]u8;
@@ -173,6 +196,13 @@ AccountStoreSaveProfile :: (state: EntityState) -> bool {
     if !NativeWrite(AccountStorePath("entity.json", path[:]), document) { return false }
     if !SharedProfileSave(TextUntilNul(state.owner_id[:]), state) { return false }
     if !AccountStorePersist() { return false }
+    if !picture_remote && state.picture_kind == 0 && state.picture != account_profile.picture {
+        pending_path: [4096]u8
+        if !NativeWrite(AccountStorePicturePath(pending_path[:]), "pending") { return false }
+        picture_dirty = true
+        picture_sequence += 1
+        picture_next = 0
+    }
     account_profile = state
     return true
 }
@@ -185,11 +215,128 @@ AccountStoreAliasPath :: (output: []u8) -> string {
     defer { EntityFree(filename) }
     return AccountStorePath(filename, output)
 }
+AccountStorePicturePath :: (output: []u8) -> string {
+    owner := TextUntilNul(account_recovery.keys.public_id[:])
+    name: Vec(u8)
+    BuilderPrint(*name, "picture.%.pending", owner)
+    filename := BuilderFinish(name)
+    defer { EntityFree(filename) }
+    return AccountStorePath(filename, output)
+}
 AccountStoreReadAlias :: () {
     account_alias = .{}
     path: [4096]u8
     text: [40]u8
     if NativeRead(AccountStoreAliasPath(path[:]), text[:]) > 0 && ProviderAliasValid(TextUntilNul(text[:])) { account_alias = text }
+}
+
+AliasStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*alias_transfer, request, output, 15000)
+}
+AliasPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*alias_transfer, status) }
+AliasCancel :: (context: *void) { HttpTransferCancel(*alias_transfer) }
+
+// Login already returns the node's public alias. Keep that answer with the
+// same verified account, rather than relying on a file from this device.
+AccountStoreAliasPump :: () {
+    owner_bytes: [65]u8
+    node_bytes: [256]u8
+    for index: 0..64 { owner_bytes[index] = account_recovery.keys.public_id[index] }
+    for index: 0..255 { node_bytes[index] = account_profile.nodes[account_profile.preferred][index] }
+    owner := TextUntilNul(owner_bytes[:])
+    node := TextUntilNul(node_bytes[:])
+    if owner != TextUntilNul(alias_owner[:]) || node != TextUntilNul(alias_node[:]) {
+        CancelRequest(*alias_pending)
+        HttpTransferCancel(*alias_transfer)
+        alias_owner = account_recovery.keys.public_id
+        unused CopyCString(node, alias_node[:])
+        alias_active = false
+        alias_next = 0
+        CancelRequest(*picture_pending)
+        HttpTransferCancel(*picture_transfer)
+        picture_active = false
+        pending_path: [4096]u8
+        picture_dirty = PathExists(AccountStorePicturePath(pending_path[:]))
+        picture_next = 0
+    }
+    if !account_standalone_ready { return }
+    now := UnixNow()
+    if alias_active {
+        if !PollRequest(*alias_pending) { return }
+        alias_active = false
+        alias_next = now + 60
+        // A completed local rename takes precedence over an older login.
+        if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.account_alias_known &&
+        alias_sequence == account_provider.queue.sequence && !account_provider.queue.pending {
+            value := TextUntilNul(alias_session.account_alias[:])
+            if value == "" || ProviderAliasValid(value) {
+                path: [4096]u8
+                if NativeWrite(AccountStoreAliasPath(path[:]), value) {
+                    account_alias = alias_session.account_alias
+                    unused AccountStorePersist()
+                }
+            }
+        }
+        if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known &&
+        !picture_dirty && !picture_active {
+            icon := alias_session.profile_icon
+            choice: s32 = -1
+            if icon >= 41 && icon <= 65 { choice = cast(s32)icon - 41 }
+            if icon >= 124 && icon <= 126 { choice = cast(s32)icon - 124 + 25 }
+            if choice >= 0 && account_profile.picture_kind == 0 && choice != account_profile.picture {
+                state := account_profile
+                state.picture = choice
+                picture_remote = true
+                unused AccountStoreSaveProfile(state)
+                picture_remote = false
+            }
+        }
+        return
+    }
+    if now < alias_next || account_provider.queue.pending || account_provider.asynchronous { return }
+    client: Client
+    if !AccountStoreClient(null, *client) { return }
+    alias_session = .{}
+    alias_sequence = account_provider.queue.sequence
+    transport := AsyncTransport.{.start = AliasStart, .poll = AliasPoll, .cancel = AliasCancel}
+    alias_active = BeginSession(*alias_pending, client, *alias_session, now, transport)
+    if !alias_active { alias_next = now + 60 }
+}
+
+PictureStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*picture_transfer, request, output, 15000)
+}
+PicturePoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*picture_transfer, status) }
+PictureCancel :: (context: *void) { HttpTransferCancel(*picture_transfer) }
+AccountStorePicturePump :: () {
+    if !account_standalone_ready { return }
+    now := UnixNow()
+    if picture_active {
+        if !PollRequest(*picture_pending) { return }
+        picture_active = false
+        if picture_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && picture_pending.status == 200 && picture_sending == picture_sequence {
+            picture_dirty = false
+            pending_path: [4096]u8
+            unused RemoveFile(AccountStorePicturePath(pending_path[:]))
+            unused AccountStorePersist()
+        }
+        picture_next = now + 30
+        return
+    }
+    if !picture_dirty || alias_active || now < picture_next || account_provider.queue.pending { return }
+    client: Client
+    if !AccountStoreClient(null, *client) { return }
+    icon := ifx account_profile.picture < 25 then account_profile.picture + 41 else account_profile.picture - 25 + 124
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"user_id_hash\":\"%\",\"profile_icon\":%}", TextUntilNul(account_recovery.keys.public_id[:]), icon)
+    document := BuilderFinish(out)
+    unused CopyCString(document, picture_body[:])
+    EntityFree(document)
+    headers: [1]HttpHeader
+    transport := AsyncTransport.{.start = PictureStart, .poll = PicturePoll, .cancel = PictureCancel}
+    picture_sending = picture_sequence
+    picture_active = BeginRequest(*picture_pending, client, *picture_session, now, transport, "POST", "/api/v1/account/profile-icon", TextUntilNul(picture_body[:]), picture_response[:], headers[:0])
+    if !picture_active { picture_next = now + 30 }
 }
 AccountStoreLoad :: (context: *void, output: *Recovery) -> bool {
     if !account_standalone_ready { return false }
@@ -246,6 +393,10 @@ AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
     defer { RecoveryClear(*previous) }
     next := EntityDefault()
     if same || choice == 1 { next = account_profile }
+    if !same && TextUntilNul(account_provider.queue.request.operation[:]) == "create" {
+        next.picture = EntityInitialPicture(id,next.pictures)
+        next.picture_kind = 0
+    }
     unused CopyCString(id, next.owner_id[:])
     unused SharedProfileLoad(id, *next)
     candidate := recovery.*
@@ -382,6 +533,8 @@ AccountStoreStartAt :: (root: string, client_id: string) -> bool {
     return true
 }
 AccountStorePump :: () {
+    AccountStoreAliasPump()
+    AccountStorePicturePump()
     #if #defined(ANDROID_BUILD) {
         if account_picker_open {
             path: [512]u8

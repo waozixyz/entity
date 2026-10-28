@@ -1,0 +1,105 @@
+// Included by Entity so Friends uses the same fields and navigation as Profile.
+friends_target: [129]u8;
+friends_page: [65537]u8;
+friends_refresh: bool = true;
+friends_remove: [65]u8;
+
+FriendAction :: (operation: string, target: string) {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":")
+    EntityQuote(*out, TextUntilNul(management.public_id[:]))
+    BuilderPrint(*out, ",\"operation\":")
+    EntityQuote(*out, operation)
+    BuilderPrint(*out, ",\"target\":")
+    EntityQuote(*out, target)
+    BuilderPrint(*out, "}")
+    request := BuilderFinish(out)
+    reply := AppService("entity.friends", request)
+    AchievementRelease(request)
+    notice = ifx reply == "queued" then Label("entity.working", "Working…") else Label("entity.action_error", "Could not start this action")
+    if reply == "queued" { fields = .{} }
+}
+
+FriendName :: (document: string, item: s32, name_key: string, id_key: string, output: []u8) -> string {
+    alias: [40]u8
+    identity: [65]u8
+    if ReadStringText(document, FieldAt(document, item, name_key), alias[:]) > 0 {
+        out: Vec(u8)
+        BuilderPrint(*out, "@%", TextUntilNul(alias[:]))
+        name := BuilderFinish(out)
+        unused CopyCString(name, output)
+        AchievementRelease(name)
+    } else {
+        unused ReadStringText(document, FieldAt(document, item, id_key), identity[:])
+        unused CopyCString(ShortId(TextUntilNul(identity[:])), output)
+    }
+    return TextUntilNul(output)
+}
+
+FriendsPage :: (x: float32, y: *float32, width: float32) {
+    if !management.account { SignInChoices(x, y, width); return }
+    request := ifx friends_refresh then "refresh" else ""
+    friends_refresh = false
+    response := AppService("entity.friends", request)
+    if response.count >= friends_page.count || !CopyCString(response, friends_page[:]) { return }
+    document := TextUntilNul(friends_page[:])
+    owner: [65]u8
+    if ReadStringText(document, FieldAt(document, 0, "owner"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != TextUntilNul(management.public_id[:]) { return }
+    busy := MatchLiteral(document, FieldAt(document, 0, "busy"), "true")
+    if !busy && notice == Label("entity.working", "Working…") { notice = "" }
+    unused EditField(2, friends_target[:], Label("profile_friend_target", "Alias or public ID"), Rectangle.{x, y.*, width, 48.0 * scale}, 128)
+    y.* += 60.0 * scale
+    typed_target := friends_target
+    if !busy && WideButton(60000, Label("profile_add_friend", "Add friend"), x, y, width, true) { FriendAction("add", TextUntilNul(typed_target[:])) }
+    if WideButton(60001, Label("entity.refresh", "Refresh"), x, y, width) { friends_refresh = true }
+    if busy { Muted(60002, Label("entity.working", "Working…"), x, y.*, width); y.* += 32.0 * scale }
+    if MatchLiteral(document, FieldAt(document, 0, "error"), "true") {
+        Paragraph(60003, Label("profile_friends_error", "Could not update friends. Check the connection and try again."), x, y.*, width, 56.0)
+        y.* += 64.0 * scale
+    }
+    at := FieldAt(document, FieldAt(document, 0, "list"), "friends")
+    count := ArrayCount(document, at)
+    if count == 0 && !busy { Muted(60004, Label("profile_no_friends", "No friends yet."), x, y.*, width); y.* += 36.0 * scale }
+    for index: cast(s32)0..count - 1 {
+        if index >= 128 { break }
+        item := ElementAt(document, at, index)
+        name: [80]u8
+        id: [65]u8
+        unused ReadStringText(document, FieldAt(document, item, "user_id_hash"), id[:])
+        icon := ReadNumber(document, FieldAt(document, item, "profile_icon"))
+        picture: s32 = 0
+        if icon.valid && icon.value >= 41 && icon.value <= 65 { picture = cast(s32)icon.value - 41 }
+        if icon.valid && icon.value >= 124 && icon.value <= 126 { picture = cast(s32)icon.value - 124 + 25 }
+        Image(session, Picture(picture, Rectangle.{x, y.*, 44.0 * scale, 44.0 * scale}))
+        TextLine(cast(u64)(60100 + index * 4), FriendName(document, item, "alias", "user_id_hash", name[:]), x + 52.0 * scale, y.*, width - 152.0 * scale, 16)
+        confirming := TextUntilNul(friends_remove[:]) == TextUntilNul(id[:])
+        if !busy && Action(60101 + index * 4, Label(ifx confirming then "entity.confirm" else "profile_remove_friend", ifx confirming then "Confirm" else "Remove"),
+                Rectangle.{x + width - 96.0 * scale, y.*, 96.0 * scale, 44.0 * scale}) {
+            if confirming { FriendAction("remove", TextUntilNul(id[:])) } else { friends_remove = id }
+        }
+        y.* += 56.0 * scale
+    }
+    at = FieldAt(document, FieldAt(document, 0, "requests"), "requests")
+    count = ArrayCount(document, at)
+    for index: cast(s32)0..count - 1 {
+        if index >= 128 { break }
+        item := ElementAt(document, at, index)
+        if !MatchLiteral(document, FieldAt(document, item, "status"), "\"pending\"") { continue }
+        target: [65]u8
+        id: [129]u8
+        name: [80]u8
+        unused ReadStringText(document, FieldAt(document, item, "target_user_id_hash"), target[:])
+        unused ReadStringText(document, FieldAt(document, item, "id"), id[:])
+        incoming := TextUntilNul(target[:]) == TextUntilNul(management.public_id[:])
+        TextLine(cast(u64)(61000 + index * 4), FriendName(document, item,
+            ifx incoming then "requester_alias" else "target_alias", ifx incoming then "requester_user_id_hash" else "target_user_id_hash", name[:]), x, y.*, width, 16)
+        y.* += 36.0 * scale
+        if incoming && !busy {
+            half := (width - 8.0 * scale) * 0.5
+            if Action(61001 + index * 4, Label("profile_accept_friend", "Accept"), Rectangle.{x, y.*, half, 44.0 * scale}) { FriendAction("accept", TextUntilNul(id[:])) }
+            if Action(61002 + index * 4, Label("profile_decline_friend", "Decline"), Rectangle.{x + half + 8.0 * scale, y.*, half, 44.0 * scale}) { FriendAction("decline", TextUntilNul(id[:])) }
+            y.* += 56.0 * scale
+        } else if !incoming { Muted(cast(u64)(61003 + index * 4), Label("profile_request_sent", "Request sent"), x, y.*, width); y.* += 36.0 * scale }
+    }
+}

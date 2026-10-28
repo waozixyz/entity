@@ -17,6 +17,30 @@ ENTITY_NODES :: 32
 ENTITY_NODE_LIMIT :: 8
 ENTITY_EXTENSION_LIMIT :: 8
 ENTITY_DEFAULT_NODE :: "https://api.waozi.xyz"
+PROFILE_DEW :: 1
+PROFILE_FRIENDS :: 2
+PROFILE_LEADERBOARD :: 4
+PROFILE_ACHIEVEMENTS :: 8
+PROFILE_APPEARANCE :: 16
+
+// New account IDs carry fresh cryptographic randomness. Derive the initial
+// picture from that ID once, so reconnecting never rerolls a chosen picture.
+EntityInitialPicture :: (owner: string, allowed: s32) -> s32 {
+    count: s32
+    for index: 0..27 {
+        if (allowed & (1 << cast(s32)index)) != 0 { count += 1 }
+    }
+    if count == 0 || owner.count != 64 { return 0 }
+    hash: u64 = 2166136261
+    for byte: owner { hash = ((hash ^ cast(u64)byte) * 16777619) & 4294967295 }
+    choice := cast(s32)(hash % cast(u64)count)
+    for index: 0..27 {
+        if (allowed & (1 << cast(s32)index)) == 0 { continue }
+        if choice == 0 { return cast(s32)index }
+        choice -= 1
+    }
+    return 0
+}
 
 EntityExtension :: struct {
     id: [40]u8
@@ -31,12 +55,16 @@ EntityState :: struct {
     name: [64]u8
     intention: [128]u8
     picture: s32
+    // Classic icon, abstract artwork, or the account's 3D avatar.
+    picture_kind: s32
+    abstract_picture: s32
     pictures: s32
     theme: s32
     accent: s32
     material: bool
     host_navigation: bool
     controls: s32
+    profile_sections: s32
     nodes: [ENTITY_NODE_LIMIT][256]u8
     node_count: s32
     preferred: s32
@@ -48,6 +76,7 @@ EntityDefault :: () -> EntityState {
     state := EntityState.{.material = true,
         .pictures = 268435455,
         .controls = ENTITY_IDENTITY | ENTITY_NODES,
+        .profile_sections = 31,
         .node_count = 1}
     unused CopyCString(ENTITY_DEFAULT_NODE, state.nodes[0][:])
     return state
@@ -85,7 +114,9 @@ EntityEncode :: (state: EntityState) -> string {
     EntityQuote(*out, TextUntilNul(state.name[:]))
     BuilderPrint(*out, ",\"intention\":")
     EntityQuote(*out, TextUntilNul(state.intention[:]))
+    BuilderPrint(*out, ",\"picture_kind\":%,\"abstract_picture\":%", state.picture_kind, state.abstract_picture)
     BuilderPrint(*out, ",\"host_navigation\":%", ifx state.host_navigation then 1 else 0)
+    BuilderPrint(*out, ",\"profile_sections\":%", state.profile_sections)
     BuilderPrint(*out, ",\"picture\":%,\"pictures\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
         state.picture, state.pictures, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
     for index: 0..state.node_count - 1 {
@@ -146,7 +177,15 @@ EntityDecode :: (text: string, output: *EntityState) -> bool {
     if Json.ReadStringText(text, at[1], state.name[:]) < 0 ||
     Json.ReadStringText(text, at[2], state.intention[:]) < 0 { return false }
     state.picture = EntityNumber(text, at[3], 0, 27)
+    sections_at := Json.FieldAt(text, 0, "profile_sections")
+    state.profile_sections = ifx sections_at < 0 then 31 else EntityNumber(text, sections_at, 0, 31)
+    if state.profile_sections < 0 { return false }
     if state.picture < 0 { return false }
+    kind_at := Json.FieldAt(text, 0, "picture_kind")
+    abstract_at := Json.FieldAt(text, 0, "abstract_picture")
+    state.picture_kind = ifx kind_at < 0 then 0 else EntityNumber(text, kind_at, 0, 2)
+    state.abstract_picture = ifx abstract_at < 0 then 0 else EntityNumber(text, abstract_at, 0, 2)
+    if state.picture_kind < 0 || state.abstract_picture < 0 { return false }
     picture_keys: [1]string = .["pictures"]
     picture_at: [1]s32
     unused Json.ObjectPositions(text, 0, picture_keys[:], picture_at[:])

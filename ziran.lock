@@ -10,14 +10,6 @@
       "url": "https://github.com/ziranlang/qrcode.git"
     },
     {
-      "commit": "773910ac250c3c9945ef2dc85dcb255eec99be07",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p33c3a60f4b6ed194",
-      "name": "kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
-    },
-    {
       "commit": "e65d27722a43e9ed88da1987f3ad5675503c8cad",
       "dependencies": {},
       "id": "p4266498010aa1745",
@@ -25,15 +17,6 @@
       "ref": "master",
       "source": true,
       "url": "https://github.com/LoupVaillant/Monocypher.git"
-    },
-    {
-      "commit": "e1f480f382d9443c4412133b55948374c77a5c21",
-      "dependencies": {},
-      "id": "p4b0a50b49959e674",
-      "name": "liboqs",
-      "ref": "main",
-      "source": true,
-      "url": "https://github.com/open-quantum-safe/liboqs.git"
     },
     {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
@@ -45,20 +28,20 @@
       "url": "https://github.com/raysan5/raylib.git"
     },
     {
+      "commit": "78582b7324f3875883c85a824b1169179df3eb6b",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "p68427874f71c879f",
+      "name": "kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "22d2ddbdc236796953c905a05a2cebf5ab1b4ff3",
-      "dependencies": {"liboqs": "p4b0a50b49959e674"},
+      "dependencies": {"liboqs": "pecdb097af6ab16f7"},
       "id": "p7098ac9cd92f7e5f",
       "name": "Oqs",
       "ref": "master",
       "url": "https://github.com/ziranlang/oqs.git"
-    },
-    {
-      "commit": "19f50275329f2fb6bfdeca64765fd1e57328ede8",
-      "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
-      "id": "p750b89a9c1c4b56b",
-      "name": "DaochiClient",
-      "ref": "master",
-      "url": "https://github.com/ziranlang/daochi-client.git"
     },
     {
       "commit": "944826f70779a6b6cd53f6b06a75b36f4d8a2558",
@@ -67,10 +50,27 @@
       "name": "crypto",
       "ref": "master",
       "url": "https://github.com/ziranlang/crypto.git"
+    },
+    {
+      "commit": "f0f56d0ac48858cc14649cf3eff66a109fc0c388",
+      "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
+      "id": "pc7497174ec9a74a4",
+      "name": "DaochiClient",
+      "ref": "master",
+      "url": "https://github.com/ziranlang/daochi-client.git"
+    },
+    {
+      "commit": "4778aa5044bf119c30df54219fa89357080af27f",
+      "dependencies": {},
+      "id": "pecdb097af6ab16f7",
+      "name": "liboqs",
+      "ref": "main",
+      "source": true,
+      "url": "https://github.com/open-quantum-safe/liboqs.git"
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "p750b89a9c1c4b56b", "kryon": "p33c3a60f4b6ed194", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "pc7497174ec9a74a4", "kryon": "p68427874f71c879f", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Entity"
   },
   "toolchain": {

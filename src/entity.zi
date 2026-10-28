@@ -2,6 +2,7 @@
 // interface; extension replies name only routes supplied by that host.
 #import "model"
 #import "achievement_view"
+#import "avatar_view"
 #import "leaderboard_view"
 #import "leaderboard_model"
 #import "management"
@@ -51,6 +52,8 @@ fields: [6]Field;
 node_text: [256]u8;
 scroll_offset: s32;
 choosing_picture: bool;
+picture_tab: s32;
+picture_scroll: s32;
 notice: string;
 session: Session;
 scale: float32;
@@ -72,6 +75,7 @@ public_id_open: bool;
 public_id_owner: [65]u8;
 public_id_copied: bool;
 public_id_scroll: s32;
+public_id_display: [129]u8;
 
 Label :: (key: string, fallback: string) -> string {
     value := AppLocale(key)
@@ -152,6 +156,17 @@ PollManagement :: () {
     result_changed := TextUntilNul(next.result[:]) != TextUntilNul(management.result[:])
     owner_changed := TextUntilNul(next.public_id[:]) != TextUntilNul(management.public_id[:])
     management = next
+    if loaded && !choosing_picture && management.account {
+        profile: [16384]u8
+        count := ReadStore("entity.json", profile[:])
+        refreshed: EntityState
+        if count > 0 && EntityDecode(TextUntilNul(profile[:]), *refreshed) &&
+        TextUntilNul(refreshed.owner_id[:]) == TextUntilNul(management.public_id[:]) {
+            state.picture = refreshed.picture
+            state.picture_kind = refreshed.picture_kind
+            state.abstract_picture = refreshed.abstract_picture
+        }
+    }
     if owner_changed && loaded {
         loaded = false
         fields = .{}
@@ -222,6 +237,10 @@ PAGE_NODES :: 8
 PAGE_NODE :: 9
 PAGE_ADD_NODE :: 10
 PAGE_ALIAS :: 11
+PAGE_FRIENDS :: 12
+PAGE_APPEARANCE :: 13
+root_page: string;
+#load "friends_page.zi";
 
 management_stack: [8]s32;
 management_depth: s32;
@@ -232,6 +251,8 @@ account_height: float32;
 profile_height: float32;
 
 OpenManagement :: (page: s32) {
+    if page == PAGE_FRIENDS { friends_refresh = true; friends_remove = .{} }
+    if page == PAGE_ACCOUNT { ManagementHome(0); return }
     if !Save() { return }
     if management_depth < cast(s32)management_stack.count {
         management_stack[management_depth] = management_page
@@ -245,9 +266,9 @@ OpenManagement :: (page: s32) {
 
 // Shows page with only the profile behind it.
 ManagementHome :: (page: s32) {
-    management_page = page
+    management_page = ifx page == PAGE_ACCOUNT then 0 else page
     management_depth = 0
-    if page != 0 {
+    if management_page != 0 {
         management_stack[0] = 0
         management_depth = 1
     }
@@ -427,8 +448,6 @@ SignInChoicesHeight :: () -> float32 {
 // The profile's account entry: a card of sign-in choices, or one row.
 AccountSummary :: (x: float32, y: *float32, width: float32) {
     if management.account {
-        alias := ifx management.alias[0] != 0 then AccountName() else ""
-        if ListRow(702, Label("entity.account", "Account"), alias, x, y, width) { OpenManagement(PAGE_ACCOUNT) }
         PublicIdLine(705, Rectangle.{x, y.*, width, 44.0 * scale})
         y.* += 56.0 * scale
         return
@@ -447,15 +466,21 @@ AccountSummary :: (x: float32, y: *float32, width: float32) {
     y.* += height + 12.0 * scale
 }
 
-// Use the full public identifier whenever the actual host font can fit it.
+// Show the alias in Profile; the full public ID stays in its copy/QR dialog.
 PublicIdLine :: (id: s32, bounds: Rectangle) {
     identity := TextUntilNul(management.public_id[:])
     text_bounds := bounds
     text_bounds.width -= 48.0 * scale
-    props := TextProps.{.key = cast(u64)(id + 1000), .text = identity,
+    props := TextProps.{.key = cast(u64)(id + 1000), .text = AccountName(),
         .bounds = text_bounds, .font = cast(s32)(14.0 * scale),
-        .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis}
+        .align = TextAlign.TextAlignCenter, .vertical_align = TextAlign.TextAlignCenter,
+        .wrap = TextWrap.TextWrapEllipsis}
     if TextWidth(session, props) > cast(s32)text_bounds.width { props.text = ShortId(identity) }
+    group_width := cast(float32)TextWidth(session, props) + 52.0 * scale
+    if group_width > bounds.width { group_width = bounds.width }
+    text_bounds.x = bounds.x + (bounds.width - group_width) * 0.5
+    text_bounds.width = group_width - 52.0 * scale
+    props.bounds = text_bounds
     Text(session, props)
     if Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
             .bounds = text_bounds, .label = Label("entity.public_id", "Public ID"), .invisible = true}) != 0 {
@@ -466,7 +491,7 @@ PublicIdLine :: (id: s32, bounds: Rectangle) {
         fields = .{}
     }
     if Button(session, ButtonProps.{.key = cast(u64)(id + 1), .id = id + 1,
-            .bounds = Rectangle.{bounds.x + bounds.width - 44.0 * scale, bounds.y, 44.0 * scale, 44.0 * scale},
+            .bounds = Rectangle.{text_bounds.x + text_bounds.width + 8.0 * scale, bounds.y, 44.0 * scale, 44.0 * scale},
             .label = Label(ifx public_id_copied then "entity.copied" else "entity.copy_id", ifx public_id_copied then "Copied" else "Copy public ID"), .icon_only = true,
             .icon_shape = ifx public_id_copied then "S1.8rr:M5 12L10 17L20 7" else "S1.6rr:M8 8H20V20H8ZM16 8V4H4V16H8",
             .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost}) != 0 {
@@ -493,7 +518,19 @@ PublicIdModal :: () {
     if modal.dismissed || modal.right_clicked { public_id_open = false }
     if !modal.opened { return }
     content := modal.layout.content
-    props := TextProps.{.key = cast(u64)19502, .text = identity,
+    // A public ID has no word boundaries; break it explicitly at the host's
+    // measured line width, while copy and QR keep the original 64 digits.
+    start: s64 = 0
+    length: s64 = 0
+    for byte, index: identity {
+        probe := TextProps.{.text = identity[start:index + 1], .font = cast(s32)(15.0 * scale)}
+        if index > start && TextWidth(session, probe) > cast(s32)(content.width - 16.0 * scale) {
+            public_id_display[length] = #char "\n"; length += 1; start = index
+        }
+        public_id_display[length] = byte; length += 1
+    }
+    public_id_display[length] = 0
+    props := TextProps.{.key = cast(u64)19502, .text = TextUntilNul(public_id_display[:]),
         .bounds = Rectangle.{0.0, 0.0, content.width - 16.0 * scale, 0.0},
         .font = cast(s32)(15.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapAuto}
     id_height := cast(float32)TextHeight(session, props) + 16.0 * scale
@@ -597,30 +634,15 @@ PageTitle :: () -> string {
     if management_page == PAGE_NODES { return Label("entity.nodes", "Nodes") }
     if management_page == PAGE_NODE && node_open < state.node_count { return NodeHost(TextUntilNul(state.nodes[node_open][:])) }
     if management_page == PAGE_ADD_NODE { return Label("entity.add_node", "Add node") }
+    if management_page == PAGE_APPEARANCE { return Label("entity.appearance", "Appearance") }
+    if management_page == PAGE_FRIENDS { return Label("profile_friends_title", "Friends") }
     if management_page == PAGE_ALIAS { return Label("entity.alias", "Alias") }
     return Label("entity.account", "Account")
 }
 
-AccountPage :: (x: float32, y: *float32, width: float32) {
-    if !management.account {
-        Muted(810, Label("entity.signed_out", "Not signed in"), x, y.*, width)
-        y.* += 40.0 * scale
-        SignInChoices(x, y, width)
-    } else {
-        center := x + width * 0.5
-        Box(session, BoxProps.{.key = cast(u64)811, .radius = 40.0 * scale,
-                .bounds = Rectangle.{center - 40.0 * scale, y.*, 80.0 * scale, 80.0 * scale},
-                .fill = ThemeOr("surface", 0x2a4540ff, 0xeaf1eaff)})
-        Image(session, Picture(state.picture, Rectangle.{center - 36.0 * scale, y.* + 4.0 * scale, 72.0 * scale, 72.0 * scale}))
-        y.* += 92.0 * scale
-        if management.alias[0] != 0 {
-            Text(session, TextProps.{.key = cast(u64)812, .text = AccountName(),
-                    .bounds = Rectangle.{x, y.*, width, 36.0 * scale}, .font = cast(s32)(26.0 * scale),
-                    .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
-            y.* += 40.0 * scale
-        }
-        PublicIdLine(813, Rectangle.{x, y.*, width, 44.0 * scale})
-        y.* += 52.0 * scale
+// Account controls are part of Profile, with one navigation stack.
+AccountActions :: (x: float32, y: *float32, width: float32) {
+    if !management.account { return }
         if CanManage(ACCOUNT_SYNC) {
             TextLine(815, Label("entity.sync", "Sync"), x + 4.0 * scale, y.* + 10.0 * scale, width - 80.0 * scale, 16)
             result := Toggle(session, ToggleProps.{.key = cast(u64)816, .id = 816,
@@ -643,11 +665,8 @@ AccountPage :: (x: float32, y: *float32, width: float32) {
             }
         }
         if CanManage(ACCOUNT_BACKUP) && ListRow(823, Label("entity.backup_key", "Back up key"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
+        if CanManage(ACCOUNT_IMPORT) && ListRow(832, Label("entity.import_key", "Import key"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
         if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
-    }
-    if (state.controls & ENTITY_NODES) != 0 && ListRow(825, Label("entity.nodes", "Nodes"), NodesSummary(), x, y, width) {
-        OpenManagement(PAGE_NODES)
-    }
     if management.account {
         y.* += 8.0 * scale
         if CanManage(ACCOUNT_LOGOUT) && WideButton(830, Label("entity.logout", "Log out"), x, y, width, false, true, true) { OpenManagement(PAGE_LOGOUT) }
@@ -655,6 +674,11 @@ AccountPage :: (x: float32, y: *float32, width: float32) {
             OpenManagement(PAGE_CLEAR)
         }
     }
+}
+
+AccountPage :: (x: float32, y: *float32, width: float32) {
+    AccountSummary(x, y, width)
+    AccountActions(x, y, width)
 }
 
 KeyPage :: (x: float32, y: *float32, width: float32) {
@@ -857,8 +881,10 @@ DrawAccount :: () {
         if Action(800, Label("entity.back", "Back"), Rectangle.{x, y, 84.0 * scale, 40.0 * scale}) { unused ManagementBack() }
         y += 56.0 * scale
     }
-    TextLine(801, PageTitle(), x, y, width, 24)
-    y += 52.0 * scale
+    if management_page != PAGE_FRIENDS || !state.host_navigation {
+        TextLine(801, PageTitle(), x, y, width, 24)
+        y += 52.0 * scale
+    }
     page := management_page
     if page == PAGE_IMPORT || page == PAGE_BACKUP { KeyPage(x, *y, width) }
     else if page == PAGE_LOGOUT || page == PAGE_CLEAR || page == PAGE_SWITCH { ConfirmPage(x, *y, width) }
@@ -867,6 +893,8 @@ DrawAccount :: () {
     else if page == PAGE_NODE { NodePage(x, *y, width) }
     else if page == PAGE_ADD_NODE { AddNodePage(x, *y, width) }
     else if page == PAGE_ALIAS { AliasPage(x, *y, width) }
+    else if page == PAGE_FRIENDS { FriendsPage(x, *y, width) }
+    else if page == PAGE_APPEARANCE { AppearanceControls(x, *y, width, ENTITY_APPEARANCE | ENTITY_ACCENT | ENTITY_WIDGETS) }
     else { AccountPage(x, *y, width) }
     if management_waiting > management.completed {
         Muted(841, Label("entity.working", "Working…"), x, y, width)
@@ -879,6 +907,7 @@ DrawAccount :: () {
     unused End(session)
     AppKeyboard(fields[2].focused || fields[3].focused || fields[4].focused || fields[5].focused)
     PublicIdModal()
+    PictureModal()
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
@@ -898,11 +927,11 @@ Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
 }
 
 ExtensionShape :: (route: string) -> string {
+    if route == "leaderboard" { return "S1.7rr:M4 21V13H8V21M10 21V4H14V21M16 21V9H20V21" }
     if route == "dew" { return "S1.7rr:M12 3C10 6 5 11 5 15C5 24 19 24 19 15C19 11 14 6 12 3ZM8 15C8 18 10 19 12 19" }
     if route == "achievements" { return "S1.7rr:M8 3H16V10C16 16 8 16 8 10ZM8 5H4V8L8 11M16 5H20V8L16 11M12 15V21M8 21H16" }
     if route == "inbe" { return "S1.7rr:M3 13H7L10 5L14 20L17 11H21" }
     if route == "friends" { return "S1.7rr:M9 3C4 3 4 11 9 11C14 11 14 3 9 3M2 21V18C2 12 16 12 16 18V21M17 4C22 4 22 11 17 11M19 14C22 15 22 18 22 21" }
-    if route == "telegram" { return "S1.7rr:M3 11L21 4L17 21L11 15L7 18L8 13L18 7L11 15" }
     if route == "data" { return "S1.7rr:M4 5C4 1 20 1 20 5C20 9 4 9 4 5V18C4 22 20 22 20 18V5M4 11C4 15 20 15 20 11" }
     return "S1.7rr:M5 5H19V19H5ZM9 9L15 15M9 15L15 9"
 }
@@ -913,6 +942,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
         route := TextUntilNul(entry.id[:])
         if management.available && route == "account" { continue }
         if route == "dew" && AppSupports("entity.dew") { continue }
+        if route == "leaderboard" { continue }
         detailed := entry.summary[0] != cast(u8)0
         row_height := (ifx detailed then 76.0 else 60.0) * scale
         row := Rectangle.{left, top.*, width, row_height}
@@ -933,7 +963,8 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
             if route == "dew" && AppSupports("entity.dew") {
                 dew_page = true
                 dew_refresh = true
-            } else if !AchievementOpenRoute(route) { AppReply(route) }
+            } else if route == "leaderboard" { unused ProfileLeaderboardCommand(route) }
+            else if !AchievementOpenRoute(route) { AppReply(route) }
         }
         Box(session, BoxProps.{.key = cast(u64)(900 + index),
                 .bounds = Rectangle.{label_x, top.* + row_height, width - 44.0 * scale, 1.0},
@@ -969,14 +1000,8 @@ Draw :: () {
     width := area.width - 40.0 * scale
     if width > 680.0 * scale { width = 680.0 * scale }
     if width < 160.0 * scale { return }
-    inline_dew := AppSupports("entity.dew")
+    inline_dew := AppSupports("entity.dew") && (state.profile_sections & PROFILE_DEW) != 0
     if inline_dew { ProfileDewRead() }
-    columns := cast(s32)((width + 12.0 * scale) / (56.0 * scale))
-    if columns > 7 { columns = 7 }
-    if columns < 3 { columns = 3 }
-    picture_count: s32 = 0
-    for index: 0..27 { if (state.pictures & (1 << cast(s32)index)) != 0 { picture_count += 1 } }
-    picker_height := cast(float32)((picture_count + columns - 1) / columns) * 56.0 * scale + 16.0 * scale
     inline_activity := AppSupports("entity.activity")
     if inline_activity { ProfileActivityRead() }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
@@ -998,30 +1023,14 @@ Draw :: () {
     Box(session, BoxProps.{.key = cast(u64)6,
             .bounds = Rectangle.{center_x - 44.0 * scale, y, 88.0 * scale, 88.0 * scale},
             .radius = 44.0 * scale, .fill = ThemeOr("surface", 0x2a4540ff, 0xeaf1eaff)})
-    Image(session, Picture(state.picture, Rectangle.{center_x - 40.0 * scale, y + 4.0 * scale, 80.0 * scale, 80.0 * scale}))
+    ProfilePicture(9, Rectangle.{center_x - 40.0 * scale, y + 4.0 * scale, 80.0 * scale, 80.0 * scale})
     y += 96.0 * scale
     change := ButtonProps.{.key = cast(u64)10, .id = 10,
         .bounds = Rectangle.{center_x - 72.0 * scale, y, 144.0 * scale, 32.0 * scale},
-        .label = Label(ifx choosing_picture then "entity.done" else "entity.change_picture", ifx choosing_picture then "Done" else "Change picture"),
+        .label = Label("entity.change_picture", "Change picture"),
         .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost}
-    if Button(session, change) != 0 { choosing_picture = !choosing_picture }
+    if Button(session, change) != 0 { OpenPicturePicker() }
     y += 52.0 * scale
-    if choosing_picture {
-        size := 44.0 * scale
-        gap := (width - cast(float32)columns * size) / cast(float32)(columns - 1)
-        position: s32 = 0
-        for index: 0..27 {
-            if (state.pictures & (1 << cast(s32)index)) == 0 { continue }
-            choice := ButtonProps.{.key = cast(u64)(200 + index), .id = 200 + cast(s32)index,
-                .label = Label("entity.picture", "Profile picture"), .icon_only = true,
-                .bounds = Rectangle.{x + cast(float32)(position % columns) * (size + gap),
-                    y + cast(float32)(position / columns) * 56.0 * scale, size, size},
-                .image = Picture(cast(s32)index, Rectangle.{}), .selected = state.picture == index}
-            if Button(session, choice) != 0 { state.picture = cast(s32)index; Save() }
-            position += 1
-        }
-        y += picker_height
-    }
     if management.available { AccountSummary(x, *y, width) }
     // Dew needs an account; without one the card would only say so.
     if inline_dew && dew_profile_available { y += ProfileDewBalance(x, y, width, true).height }
@@ -1029,68 +1038,54 @@ Draw :: () {
     if (state.controls & ENTITY_NODES) != 0 && ListRow(704, Label("entity.nodes", "Nodes"), NodesSummary(), x, *y, width) {
         OpenManagement(PAGE_NODES)
     }
-    if AppSupports(LEADERBOARD_SERVICE) {
-        if Action(550, Label("leaderboard_title", "Leaderboard"), Rectangle.{x, y, width, 48.0 * scale}) && Save() {
-            unused ProfileLeaderboardCommand("leaderboard")
-        }
-        y += 60.0 * scale
-    }
+    if AppSupports("entity.friends") && (state.profile_sections & PROFILE_FRIENDS) != 0 &&
+    ListRow(551, Label("profile_friends_title", "Friends"), "", x, *y, width) { OpenManagement(PAGE_FRIENDS) }
+    if AppSupports(LEADERBOARD_SERVICE) && (state.profile_sections & PROFILE_LEADERBOARD) != 0 &&
+    ListRow(550, Label("leaderboard_title", "Leaderboard"), "", x, *y, width) { unused ProfileLeaderboardCommand("leaderboard") }
     ExtensionRows(x, *y, width)
+    if management.available { AccountActions(x, *y, width) }
     if notice != "" {
         Text(session, TextProps.{.key = cast(u64)22, .text = notice,
                 .bounds = Rectangle.{x, y, width, 40.0 * scale}, .font = cast(s32)(13.0 * scale), .wrap = TextWrap.TextWrapAuto})
         y += 48.0 * scale
     }
-    if (state.controls & ENTITY_APPEARANCE) != 0 {
-        TextLine(30, Label("entity.appearance", "Appearance"), x, y, width, 20)
-        y += 36.0 * scale
-        modes: [3]string = .[Label("entity.system", "System"), Label("entity.light", "Light"), Label("entity.dark", "Dark")]
-        third := (width - 16.0 * scale) / 3.0
-        for index: 0..2 {
-            if Action(50 + cast(s32)index, modes[index], Rectangle.{x + cast(float32)index * (third + 8.0 * scale), y, third, 40.0 * scale}, state.theme == index) {
-                state.theme = cast(s32)index
-                Save()
-            }
-        }
-        y += 64.0 * scale
-    }
-    if (state.controls & ENTITY_ACCENT) != 0 {
-        TextLine(31, Label("entity.accent", "Accent"), x, y, width, 20)
-        y += 36.0 * scale
-        colors: [16]u32 = .[0x7355d9ff, 0x2563ebff, 0x059669ff, 0xdb2777ff, 0xd97706ff, 0x0891b2ff, 0xdc2626ff, 0x7c3aedff,
-        0x4f46e5ff, 0x0d9488ff, 0x65a30dff, 0xc026d3ff, 0xea580cff, 0x0284c7ff, 0x9333eaff, 0x475569ff]
-        size := (width - 7.0 * 8.0 * scale) / 8.0
-        for index: 0..15 {
-            if Button(session, ButtonProps.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
-                    .bounds = Rectangle.{x + cast(float32)(index % 8) * (size + 8.0 * scale), y + cast(float32)(index / 8) * (size + 8.0 * scale), size, size},
-                    .label = Label("entity.accent", "Accent"), .icon_only = true, .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
-                state.accent = cast(s32)index
-                Save()
-            }
-        }
-        y += 2.0 * (size + 8.0 * scale) + 16.0 * scale
-    }
-    if (state.controls & ENTITY_WIDGETS) != 0 {
-        TextLine(32, Label("entity.widgets", "Widgets"), x, y, width, 20)
-        y += 36.0 * scale
-        half := (width - 8.0 * scale) * 0.5
-        if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
-        if Action(61, "Classic", Rectangle.{x + half + 8.0 * scale, y, half, 40.0 * scale}, !state.material) { state.material = false; Save() }
-        y += 64.0 * scale
-    }
+    AppearanceControls(x, *y, width, state.controls)
     profile_height = y - top + 24.0 * scale
     unused End(session)
     AppKeyboard(fields[0].focused || fields[1].focused)
     PublicIdModal()
+    PictureModal()
 }
 
 #program_export
 Main :: () -> s64 {
     mode := AppMode()
+    if mode == APP_COMMAND && AppCommand() == "back" && choosing_picture {
+        choosing_picture = false
+        AppReply("handled")
+        return 0
+    }
     if mode == APP_COMMAND && AppCommand() == "back" && public_id_open {
         public_id_open = false
         AppReply("handled")
         return 0
+    }
+    if mode == APP_COMMAND {
+        command := AppCommand()
+        if command == "root:profile" { root_page = ""; ManagementHome(0); return 0 }
+        if command == "root:leaderboard" { root_page = "leaderboard"; unused ProfileLeaderboardCommand("leaderboard"); return 0 }
+        if command == "root:dew" { root_page = "dew"; dew_page = true; dew_refresh = true; return 0 }
+        if command == "root:appearance" { root_page = "appearance"; ManagementHome(PAGE_APPEARANCE); return 0 }
+        if command == "back" && ((root_page == "leaderboard" && profile_leaderboard_open) ||
+            (root_page == "dew" && dew_page && dew_confirmation < 0) ||
+            (root_page == "appearance" && management_page == PAGE_APPEARANCE)) {
+            root_page = ""
+            dew_page = false
+            profile_leaderboard_open = false
+            ManagementHome(0)
+            AppReply("close")
+            return 0
+        }
     }
     if mode == APP_IDENTIFY {
         AppIdentity("entity")
@@ -1109,6 +1104,7 @@ Main :: () -> s64 {
     if mode == APP_COMMAND && AppCommand() == "reload" {
         loaded = false
         public_id_open = false
+        choosing_picture = false
         fields = .{}
     }
     if mode == APP_COMMAND && AppCommand() == "account" { ManagementHome(PAGE_ACCOUNT) }
@@ -1205,7 +1201,7 @@ ProfileDewBalance :: (x: float32, y: float32, width: float32, draw: bool) -> Dew
     else if !account.known { notice = Label("profile_dew_loading", "Checking Dew…") }
     result := DewBalance(session, DewBalanceProps.{.bounds = Rectangle.{x, y, width, 0.0}, .scale = scale,
             .title = Label("profile_dew_title", "Dew balance"), .balance = TextUntilNul(amount[:]),
-            .worth = TextUntilNul(dew_profile_worth[:]), .plan = plan, .usage = usage, .notice = notice,
+            .plan = plan, .usage = usage, .notice = notice,
             .top_up = ifx dew_profile_top_up then Label("profile_dew_topup", "Top up") else "", .plans = Label("profile_dew_plans", "Storage plans"),
             .data = ifx dew_profile_manage_data then Label("entity.manage_data", "Manage data") else "",
             .ready = dew_profile_available, .known = account.known, .busy = dew_profile_busy, .enabled = account.enabled,
@@ -1467,4 +1463,156 @@ DrawDew :: () {
         }
     }
     if MatchLiteral(json, FieldAt(json, 0, "error"), "true") { Paragraph(45040, Label("entity.dew_error", "Could not confirm the node's response. Refresh or retry."), x, y, width, 64.0) }
+}
+
+OpenPicturePicker :: () {
+    picture_tab = 1
+    choosing_picture = true
+    picture_scroll = 0
+    fields = .{}
+}
+
+AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
+    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
+    path := names[index]
+    if asset_root[0] != 0 {
+        out: Vec(u8)
+        BuilderPrint(*out, "%/%", TextUntilNul(asset_root[:]), path)
+        path = BuilderFinish(out)
+    }
+    return ImageProps.{.asset_path = path, .bounds = bounds, .fit = ImageFit.ImageFitContain,
+        .alt_text = Label("entity.abstract", "Abstract"), .radius = bounds.width * 0.5}
+}
+
+ProfilePicture :: (id: s32, bounds: Rectangle) {
+    if state.picture_kind == 2 { AvatarDraw(session, bounds, AvatarDefaultCamera()) }
+    else if state.picture_kind == 1 { Image(session, AbstractPicture(state.abstract_picture, bounds)) }
+    else { Image(session, Picture(state.picture, bounds)) }
+    if Button(session, ButtonProps.{.key = cast(u64)id, .id = id, .bounds = bounds,
+            .label = Label("entity.change_picture", "Change picture"), .invisible = true}) != 0 {
+        OpenPicturePicker()
+    }
+}
+
+SelectPicture :: (kind: s32, picture: s32) {
+    previous := state
+    state.picture_kind = kind
+    if kind == 0 { state.picture = picture }
+    if kind == 1 { state.abstract_picture = picture }
+    if Save() { choosing_picture = false }
+    else { state = previous }
+}
+
+PictureModal :: () {
+    if !choosing_picture { return }
+    area := AppBounds()
+    width := area.width - 24.0 * scale
+    if width > 620.0 * scale { width = 620.0 * scale }
+    height := area.height - 24.0 * scale
+    if height > 650.0 * scale { height = 650.0 * scale }
+    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)76000, .id = 76000,
+            .title = Label("entity.picture", "Profile picture"),
+            .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
+            .scale = scale, .has_right_action = true, .right_label = Label("entity.done", "Done")})
+    if modal.dismissed || modal.right_clicked { choosing_picture = false }
+    if !modal.opened { return }
+    content := modal.layout.content
+    labels: [3]string = .[Label("entity.abstract", "Abstract"), Label("entity.classic", "Classic"), Label("entity.avatar", "Avatar")]
+    if picture_tab == 2 {
+        view := content
+        view.height -= 112.0 * scale
+        if view.height > 0.0 {
+            AvatarInteract(view)
+            AvatarDraw(session, view, avatar_camera)
+            AvatarControls(session, Rectangle.{content.x, view.y + view.height, content.width, 44.0 * scale}, Label("entity.reset_view", "Reset view"))
+        }
+        if Action(76200, Label("entity.use_avatar", "Use avatar"), Rectangle.{content.x, content.y + content.height - 52.0 * scale, content.width, 44.0 * scale}) {
+            SelectPicture(2, 0)
+        }
+    } else {
+        columns := cast(s32)((content.width + 12.0 * scale) / (76.0 * scale))
+        if columns < 3 { columns = 3 }
+        if columns > 7 { columns = 7 }
+        count: s32 = ifx picture_tab == 0 then 3 else 28
+        scroll := Scroll(session, ScrollProps.{.key = cast(u64)76300, .bounds = content,
+                .content_height = ((count + columns - 1) / columns) * cast(s32)(84.0 * scale), .scroll_offset = picture_scroll, .scale = scale})
+        picture_scroll = scroll.scroll_offset
+        if scroll.opened {
+            size := 64.0 * scale
+            gap := (content.width - cast(float32)columns * size) / cast(float32)(columns - 1)
+            position: s32 = 0
+            for index: cast(s32)0..count - 1 {
+                if picture_tab == 1 && (state.pictures & (1 << index)) == 0 { continue }
+                image := ifx picture_tab == 0 then AbstractPicture(index, Rectangle.{}) else Picture(index, Rectangle.{})
+                if Button(session, ButtonProps.{.key = cast(u64)(76400 + index), .id = 76400 + index,
+                        .label = labels[picture_tab], .icon_only = true, .image = image,
+                        .selected = ifx picture_tab == 0 then state.picture_kind == 1 && state.abstract_picture == index else state.picture_kind == 0 && state.picture == index,
+                        .bounds = Rectangle.{content.x + cast(float32)(position % columns) * (size + gap),
+                            scroll.content.y + cast(float32)(position / columns) * 84.0 * scale, size, size}}) != 0 {
+                    SelectPicture(ifx picture_tab == 0 then 1 else 0, index)
+                }
+                position += 1
+            }
+            unused End(session)
+        }
+    }
+    unused End(session)
+    AppKeyboard(false)
+}
+
+ExtensionButton :: (id: s32, route: string, label: string, left: float32, top: *float32, width: float32) {
+    color := ThemeOr("text", 0xe5eef3ff, 0x203b4bff)
+    SvgIcon(session, SvgIconProps.{.shape = ExtensionShape(route), .color = color,
+            .bounds = Rectangle.{left + 4.0 * scale, top.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
+    TextLine(cast(u64)(id + 1000), label, left + 44.0 * scale, top.* + 16.0 * scale, width - 76.0 * scale, 16)
+    SvgIcon(session, SvgIconProps.{.shape = "S1.7rr:M9 5L16 12L9 19", .color = color,
+            .bounds = Rectangle.{left + width - 24.0 * scale, top.* + 18.0 * scale, 20.0 * scale, 20.0 * scale}})
+    if Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+            .bounds = Rectangle.{left, top.*, width, 60.0 * scale}, .label = label, .invisible = true}) != 0 && Save() {
+        if route == "friends" { OpenManagement(PAGE_FRIENDS) }
+        else { unused ProfileLeaderboardCommand(route) }
+    }
+    top.* += 60.0 * scale
+}
+
+AppearanceControls :: (x: float32, top: *float32, width: float32, controls: s32) {
+    y := top.*
+    if (controls & ENTITY_APPEARANCE) != 0 {
+        TextLine(30, Label("entity.appearance", "Appearance"), x, y, width, 20)
+        y += 36.0 * scale
+        modes: [3]string = .[Label("entity.system", "System"), Label("entity.light", "Light"), Label("entity.dark", "Dark")]
+        third := (width - 16.0 * scale) / 3.0
+        for index: 0..2 {
+            if Action(50 + cast(s32)index, modes[index], Rectangle.{x + cast(float32)index * (third + 8.0 * scale), y, third, 40.0 * scale}, state.theme == index) {
+                state.theme = cast(s32)index
+                Save()
+            }
+        }
+        y += 64.0 * scale
+    }
+    if (controls & ENTITY_ACCENT) != 0 {
+        TextLine(31, Label("entity.accent", "Accent"), x, y, width, 20)
+        y += 36.0 * scale
+        colors: [16]u32 = .[0x7355d9ff, 0x2563ebff, 0x059669ff, 0xdb2777ff, 0xd97706ff, 0x0891b2ff, 0xdc2626ff, 0x7c3aedff,
+        0x4f46e5ff, 0x0d9488ff, 0x65a30dff, 0xc026d3ff, 0xea580cff, 0x0284c7ff, 0x9333eaff, 0x475569ff]
+        size := (width - 7.0 * 8.0 * scale) / 8.0
+        for index: 0..15 {
+            if Button(session, ButtonProps.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
+                    .bounds = Rectangle.{x + cast(float32)(index % 8) * (size + 8.0 * scale), y + cast(float32)(index / 8) * (size + 8.0 * scale), size, size},
+                    .label = Label("entity.accent", "Accent"), .icon_only = true, .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
+                state.accent = cast(s32)index
+                Save()
+            }
+        }
+        y += 2.0 * (size + 8.0 * scale) + 16.0 * scale
+    }
+    if (controls & ENTITY_WIDGETS) != 0 {
+        TextLine(32, Label("entity.widgets", "Widgets"), x, y, width, 20)
+        y += 36.0 * scale
+        half := (width - 8.0 * scale) * 0.5
+        if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
+        if Action(61, "Classic", Rectangle.{x + half + 8.0 * scale, y, half, 40.0 * scale}, !state.material) { state.material = false; Save() }
+        y += 64.0 * scale
+    }
+    top.* = y
 }

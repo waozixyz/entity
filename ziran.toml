@@ -14,6 +14,8 @@ module_aliases = { FileDialogLinux = "file_dialog_linux" }
 
 [exports]
 model = "src/model.zi"
+profile_appearance = "src/profile_appearance.zi"
+avatar_view = "src/avatar_view.zi"
 dew_model = "src/dew_model.zi"
 dew_view = "src/dew_view.zi"
 node_url = "src/node_url.zi"

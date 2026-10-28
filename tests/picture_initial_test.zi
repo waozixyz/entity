@@ -1,0 +1,25 @@
+#import, file "../src/model.zi";
+#import "std/c_string"
+#import "std/text_buffer"
+
+#program_export
+main :: () -> s32 {
+    owner: [65]u8
+    for index: 0..63 { owner[index] = #char "a" }
+    allowed: s32 = 268435455 & ~((1 << 21) | (1 << 22) | (1 << 23))
+    seen: [28]bool
+    for digit: 0..15 {
+        owner[63] = cast(u8)(ifx digit < 10 then #char "0" + digit else #char "a" + digit - 10)
+        picture := EntityInitialPicture(TextUntilNul(owner[:]),allowed)
+        if picture < 0 || picture >= 28 || (allowed & (1 << picture)) == 0 { return 1 }
+        if EntityInitialPicture(TextUntilNul(owner[:]),allowed) != picture { return 2 }
+        seen[picture] = true
+    }
+    count: s32
+    for present: seen { if present { count += 1 } }
+    if count < 4 { return 3 }
+    if EntityInitialPicture(TextUntilNul(owner[:]),1 << 9) != 9 { return 4 }
+    if EntityInitialPicture("",allowed) != 0 { return 5 }
+    print("Initial profile picture local test: varied account choices, stable reconnects and allowed-picture policy passed.\n")
+    return 0
+}

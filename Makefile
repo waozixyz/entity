@@ -116,3 +116,17 @@ public-identity-test: build/entity.zx build/ziran/libziran.a
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/public-identity-test/public_identity_test
 
 test: public-identity-test
+
+.PHONY: profile-shared-test
+profile-shared-test:
+	LDLIBS="-l:libcurl.so.4 -lm -lpthread" $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_shared_test:main --exe -o build/profile-shared-test tests/profile_shared_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-shared-test/profile_shared_test
+
+test: profile-shared-test
+
+.PHONY: picture-initial-test
+picture-initial-test:
+	LDLIBS="-l:libcurl.so.4 -lm -lpthread" $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry picture_initial_test:main --exe -o build/picture-initial-test tests/picture_initial_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/picture-initial-test/picture_initial_test
+
+test: picture-initial-test
