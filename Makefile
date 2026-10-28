@@ -36,6 +36,13 @@ model-test:
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/model-test $$(rg --files build/model-test -g '*.c') -o build/model-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/model-test/test
 
+.PHONY: premium-alias-test
+premium-alias-test:
+	mkdir -p build/premium-alias-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry premium_alias_test:main -o build/premium-alias-test tests/premium_alias_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/premium-alias-test $$(rg --files build/premium-alias-test -g '*.c') -o build/premium-alias-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER build/premium-alias-test/test
+
 # Google Play Dew purchases are forgotten only after the node credits them.
 .PHONY: dew-play-test
 dew-play-test: dew-play-savings-test
@@ -94,6 +101,10 @@ records-test: $(LIBOQS_LIBRARY)
 alias-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/alias_test.py
+.PHONY: premium-alias-node-test
+premium-alias-node-test: $(LIBOQS_LIBRARY)
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/premium_alias_test.py
 native-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py

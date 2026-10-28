@@ -6,6 +6,7 @@
 #import "leaderboard_view"
 #import "leaderboard_model"
 #import "management"
+#import "alias_model"
 #import "dew_model"
 #import "dew_play_pricing"
 #import "dew_view"
@@ -76,6 +77,7 @@ public_id_owner: [65]u8;
 public_id_copied: bool;
 public_id_scroll: s32;
 public_id_display: [129]u8;
+#load "alias_view.zi";
 
 Label :: (key: string, fallback: string) -> string {
     value := AppLocale(key)
@@ -172,10 +174,12 @@ PollManagement :: () {
         fields = .{}
         public_id_open = false
         public_id_copied = false
+        AliasViewReset()
     }
-    if !fields[3].focused { account_alias = management.alias }
+    if !fields[3].focused && management_page != PAGE_ALIAS { account_alias = management.alias }
     if management.completed > management_seen || (result_changed && management.completed > 0) {
         management_seen = management.completed
+        AliasManagementFinished()
         message: Vec(u8)
         BuilderPrint(*message, "%", TextUntilNul(management.message[:]))
         notice = BuilderFinish(message)
@@ -251,6 +255,10 @@ account_height: float32;
 profile_height: float32;
 
 OpenManagement :: (page: s32) {
+    if page == PAGE_ALIAS {
+        account_alias = management.alias
+        AliasViewReset()
+    }
     if page == PAGE_FRIENDS { friends_refresh = true; friends_remove = .{} }
     if page == PAGE_ACCOUNT { ManagementHome(0); return }
     if !Save() { return }
@@ -278,6 +286,10 @@ ManagementHome :: (page: s32) {
 
 // Returns to the page that opened this one; false on the profile.
 ManagementBack :: () -> bool {
+    if alias_modal_open {
+        alias_modal_open = false
+        return true
+    }
     if management_page == 0 { return false }
     // Leaving the link page ends its code and the polling behind it.
     if management_page == PAGE_LINK && management.link_stage != 0 && management.link_stage != 6 { Manage("link_cancel") }
@@ -717,14 +729,6 @@ ConfirmPage :: (x: float32, y: *float32, width: float32) {
     if WideButton(809, Label("entity.cancel", "Cancel"), x, y, width, false, true) { unused ManagementBack() }
 }
 
-AliasPage :: (x: float32, y: *float32, width: float32) {
-    unused EditField(3, account_alias[:], Label("entity.alias", "Alias"), Rectangle.{x, y.*, width, 48.0 * scale}, 32)
-    y.* += 56.0 * scale
-    Muted(826, Label("entity.alias_rule", "4–32 lowercase letters, numbers or _"), x, y.*, width, 13)
-    y.* += 36.0 * scale
-    if WideButton(827, Label("entity.save", "Save"), x, y, width, true) { Manage("alias", TextUntilNul(account_alias[:])) }
-}
-
 LinkPage :: (x: float32, y: *float32, width: float32) {
     stage := management.link_stage
     if stage == 0 || stage == 7 {
@@ -908,6 +912,7 @@ DrawAccount :: () {
     AppKeyboard(fields[2].focused || fields[3].focused || fields[4].focused || fields[5].focused)
     PublicIdModal()
     PictureModal()
+    AliasPurchaseModal()
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {

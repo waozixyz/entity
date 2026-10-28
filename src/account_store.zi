@@ -457,6 +457,24 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
         unused CopyCString(alias, account_alias[:])
         return 1
     }
+    if operation == "alias_purchase_load" || operation == "alias_purchase_save" || operation == "alias_purchase_clear" {
+        owner := TextUntilNul(account_recovery.keys.public_id[:])
+        if !account_standalone_ready || owner != TextUntilNul(request.owner_id[:]) { return 0 }
+        name: Vec(u8)
+        BuilderPrint(*name, "username.%.purchase.json", owner)
+        file := BuilderFinish(name)
+        defer { EntityFree(file) }
+        path_buffer: [4096]u8
+        path := AccountStorePath(file, path_buffer[:])
+        if operation == "alias_purchase_load" {
+            count := NativeRead(path, request.value[:])
+            if count < 0 { return ifx PathExists(path) then 0 else 2 }
+            return ifx count > 2 then 1 else 2
+        }
+        document := ifx operation == "alias_purchase_clear" then "{}" else TextUntilNul(request.value[:])
+        if !NativeWrite(path, document) || !AccountStorePersist() { return 0 }
+        return 1
+    }
     if operation == "link_show" { account_pairing_delivered = false; return ifx DeviceLinkShow() then 1 else 0 }
     if operation == "link_join" { account_pairing_delivered = false; return ifx DeviceLinkScan(TextUntilNul(request.value[:])) then 1 else 0 }
     if operation == "link_confirm" { DeviceLinkAccept(); return 1 }

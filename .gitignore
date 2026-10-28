@@ -5,3 +5,4 @@ __pycache__/
 
 # Generated previews from the image tools stay local.
 /.yue/
+/work/

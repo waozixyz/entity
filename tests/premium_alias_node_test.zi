@@ -1,0 +1,99 @@
+#import "account_store"
+#import "native_management"
+#import "management"
+#import "alias_model"
+#import "model"
+#import "recovery"
+#import "native_files"
+#import "daochi_client/keys"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/timer_linux"
+
+Request :: (operation: string, alias: string, price: string = "") -> bool {
+    request: ManagementRequest
+    request.sequence = account_provider.queue.sequence + 1
+    request.owner_id = account_recovery.keys.public_id
+    unused CopyCString(operation, request.operation[:])
+    unused CopyCString(alias, request.value[:])
+    unused CopyCString(price, request.target[:])
+    text := ManagementRequestEncode(request)
+    defer { EntityFree(text) }
+    if !ProviderEnqueue(*account_provider, text) { return false }
+    for round: 0..2400 {
+        ProviderPump(*account_provider)
+        if !account_provider.queue.pending { return true }
+        unused SleepMilliseconds(10)
+    }
+    return false
+}
+
+Result :: (expected: string) -> bool {
+    return TextUntilNul(account_provider.queue.result[:]) == expected
+}
+
+FailLocalSave :: (context: *void, request: *ManagementRequest) -> s32 {
+    if TextUntilNul(request.operation[:]) == "alias_saved" { return 0 }
+    return AccountStoreAction(context, request)
+}
+
+#program_export
+PremiumAliasCheck :: () -> s32 {
+    root := NativeEnvironment("ENTITY_DATA")
+    step := NativeEnvironment("ALIAS_STEP")
+    node := NativeEnvironment("ALIAS_NODE")
+    if step == "create" {
+        recovery: Recovery
+        if CreateAccountKeys(*recovery.keys) != 1 || !NativeDirectory(root) { return 1 }
+        text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+        path: [4096]u8
+        if !RecoveryEncode(*recovery, "", text[:]) ||
+        !NativeWrite(NativeJoin(path[:], root, "account.key"), TextUntilNul(text[:])) { return 2 }
+        state := EntityDefault()
+        unused CopyCString(TextUntilNul(recovery.keys.public_id[:]), state.owner_id[:])
+        unused CopyCString(node, state.nodes[0][:])
+        document := EntityEncode(state)
+        if !NativeWrite(NativeJoin(path[:], root, "entity.json"), document) { return 3 }
+        return 0
+    }
+    if !AccountStoreStartAt(root, "premium-alias-test") || !account_standalone_ready { return 4 }
+    alias := ifx step == "uncertain" || step == "retry" then "qz7y" else "qz7x"
+    previous := account_alias
+    if !Request("alias_quote", alias) || !Result("quote") { return 5 }
+    state := ProviderState(*account_provider)
+    if !state.alias_offer.known || TextUntilNul(state.alias_offer.alias[:]) != alias ||
+    TextUntilNul(previous[:]) != TextUntilNul(account_alias[:]) { return 6 }
+    if step == "taken" {
+        if state.alias_offer.available || state.alias_offer.owned { return 7 }
+        return 0
+    }
+    if step == "owned" {
+        if !state.alias_offer.owned || state.alias_offer.available || state.alias_offer.units != 0 { return 8 }
+        return 0
+    }
+    if state.alias_offer.units != 100000000 { return 9 }
+    if step == "quote" {
+        if !state.alias_offer.available || state.alias_retry { return 10 }
+        // The legacy save action cannot silently debit a premium username.
+        if !Request("alias", alias) || Result("ok") ||
+        TextUntilNul(previous[:]) != TextUntilNul(account_alias[:]) { return 11 }
+        return 0
+    }
+    if step == "retry" {
+        if !state.alias_retry { return 12 }
+    } else if !state.alias_offer.available || state.alias_retry { return 13 }
+    if step == "uncertain" { account_provider.action = FailLocalSave }
+    if !Request("alias_purchase", alias, "100000000") { return 14 }
+    state = ProviderState(*account_provider)
+    if step == "insufficient" {
+        if !Result("alias_funds") || state.alias_retry ||
+        TextUntilNul(previous[:]) != TextUntilNul(account_alias[:]) { return 15 }
+        return 0
+    }
+    if step == "uncertain" {
+        if !Result("alias_retry") || !state.alias_retry { return 16 }
+        return 0
+    }
+    if !Result("ok") || state.alias_retry || TextUntilNul(account_alias[:]) != alias { return 17 }
+    return 0
+}

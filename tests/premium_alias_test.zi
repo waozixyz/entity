@@ -1,0 +1,70 @@
+#import "alias_model"
+#import "management"
+#import "model"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+
+Quote :: (alias: string, units: string, extra: string = "") -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"alias\":\"%\",\"available\":true,\"owned\":false,\"premium\":true,\"price_units\":%,\"units_per_dew\":1000000%}", alias, units, extra)
+    return BuilderFinish(out)
+}
+
+#program_export
+main :: () -> s32 {
+    normalized: [40]u8
+    if AliasNormalize("  @Ab_C  ", normalized[:]) != "ab_c" || !AliasValid("ab_c") ||
+    AliasValid("abc") || AliasValid("ab-c") || AliasValid("ABCD") { return 1 }
+    valid := Quote("river", "250000000")
+    defer { EntityFree(valid) }
+    offer: AliasOffer
+    if !AliasOfferParse(valid, "river", *offer) || offer.units != 250000000 ||
+    !offer.available || offer.owned || !offer.known { return 2 }
+    if AliasOfferParse(valid, "other", *offer) { return 3 }
+    amounts: [7]string = .["-1", "1.0", "1e6", "9223372036854775808", "null", "true", "\"100\""]
+    for amount: amounts {
+        invalid := Quote("river", amount)
+        accepted := AliasOfferParse(invalid, "river", *offer)
+        EntityFree(invalid)
+        if accepted { return 4 }
+    }
+    duplicate := Quote("river", "100", ",\"alias\":\"other\"")
+    if AliasOfferParse(duplicate, "river", *offer) { return 5 }
+    EntityFree(duplicate)
+    if AliasOfferParse("{\"alias\":\"river\",\"available\":1,\"owned\":false,\"premium\":true,\"price_units\":1,\"units_per_dew\":1000000}", "river", *offer) ||
+    AliasOfferParse("{\"alias\":\"river\",\"available\":true,\"owned\":false,\"premium\":true,\"price_units\":1,\"units_per_dew\":100}", "river", *offer) { return 6 }
+    // Grandfathered short names stay owned and free; a new short name is invalid.
+    if !AliasOfferParse("{\"alias\":\"old\",\"available\":false,\"owned\":true,\"premium\":false,\"price_units\":0,\"units_per_dew\":1000000}", "old", *offer) { return 7 }
+    short := Quote("old", "100")
+    if AliasOfferParse(short, "old", *offer) { return 8 }
+    EntityFree(short)
+    purchase: AliasPurchase
+    unused CopyCString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", purchase.owner[:])
+    unused CopyCString("https://api.waozi.xyz", purchase.node[:])
+    unused CopyCString("river", purchase.alias[:])
+    unused CopyCString("0123456789abcdef0123456789abcdef", purchase.request_id[:])
+    purchase.units = 250000000
+    encoded := AliasPurchaseEncode(purchase)
+    defer { EntityFree(encoded) }
+    restored: AliasPurchase
+    if !AliasPurchaseParse(encoded, *restored) || restored.units != purchase.units ||
+    TextUntilNul(restored.owner[:]) != TextUntilNul(purchase.owner[:]) ||
+    TextUntilNul(restored.node[:]) != TextUntilNul(purchase.node[:]) ||
+    TextUntilNul(restored.request_id[:]) != TextUntilNul(purchase.request_id[:]) { return 9 }
+    if AliasPurchaseParse("{}", *restored) { return 10 }
+    if AliasPaymentAction(false, 0, 250000000, false) != 0 ||
+    AliasPaymentAction(true, 249999999, 250000000, false) != 2 ||
+    AliasPaymentAction(true, 250000000, 250000000, false) != 1 ||
+    AliasPaymentAction(true, 0, 250000000, true) != 3 ||
+    AliasPaymentAction(false, 0, 250000000, true) != 3 { return 11 }
+    snapshot: Management
+    if !AliasOfferParse(valid, "river", *snapshot.alias_offer) { return 12 }
+    snapshot.alias_retry = true
+    text := ManagementEncode(snapshot)
+    defer { EntityFree(text) }
+    decoded: Management
+    if !ManagementDecode(text, *decoded) || !decoded.alias_retry || !decoded.alias_offer.known ||
+    decoded.alias_offer.units != 250000000 || TextUntilNul(decoded.alias_offer.alias[:]) != "river" { return 13 }
+    return 0
+}

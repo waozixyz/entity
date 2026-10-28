@@ -1,0 +1,151 @@
+// Public username offers and durable purchase intentions. Only the node
+// decides availability and the price in integer millionths of Dew.
+#import "model"
+#import "dew_model"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+Json :: #import "std/json_scan";
+
+AliasOffer :: struct {
+    known: bool
+    available: bool
+    owned: bool
+    premium: bool
+    alias: [40]u8
+    units: s64
+}
+
+AliasPurchase :: struct {
+    owner: [65]u8
+    node: [512]u8
+    alias: [40]u8
+    request_id: [33]u8
+    units: s64
+}
+
+AliasPaymentAction :: (balance_known: bool, balance: s64, price: s64, retry: bool) -> s32 {
+    // An uncertain debit may already be paid: retry its saved intent even
+    // when the remaining balance is below the original price.
+    if retry { return 3 }
+    if !balance_known || balance < 0 || price <= 0 { return 0 }
+    return ifx balance < price then 2 else 1
+}
+
+AliasNormalize :: (value: string, output: []u8) -> string {
+    start: s64 = 0
+    end := value.count
+    while start < end && value[start] <= cast(u8)32 { start += 1 }
+    while end > start && value[end - 1] <= cast(u8)32 { end -= 1 }
+    if start < end && value[start] == #char "@" { start += 1 }
+    if end - start >= output.count { return "" }
+    count: s64 = 0
+    for index: start..end - 1 {
+        byte := value[index]
+        if byte >= #char "A" && byte <= #char "Z" { byte = byte - #char "A" + #char "a" }
+        output[count] = byte
+        count += 1
+    }
+    output[count] = 0
+    return TextUntilNul(output)
+}
+
+AliasValid :: (alias: string) -> bool {
+    if alias.count < 4 || alias.count > 32 { return false }
+    for byte: alias {
+        if !((byte >= #char "a" && byte <= #char "z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_") { return false }
+    }
+    return true
+}
+
+AliasFields :: (text: string, names: []string, positions: []s32) -> bool {
+    if !Json.ObjectPositions(text, 0, names, positions) { return false }
+    cursor := Json.Space(text, Json.Space(text, 0) + 1)
+    while cursor < text.count && text[cursor] != #char "}" {
+        key := Json.ReadString(text, cursor)
+        if !key.valid { return false }
+        cursor = Json.Space(text, Json.Space(text, key.after) + 1)
+        for index: cast(s32)0..cast(s32)names.count - 1 {
+            if Json.SpanEqualsASCII(text, key, names[index]) && positions[index] != cursor { return false }
+        }
+        cursor = Json.Space(text, Json.ValueEnd(text, cursor, 0))
+        if cursor < 0 || cursor >= text.count { return false }
+        if text[cursor] == #char "}" { break }
+        cursor = Json.Space(text, cursor + 1)
+    }
+    return true
+}
+
+AliasOfferParse :: (text: string, expected: string, output: *AliasOffer) -> bool {
+    if text.count == 0 || text.count > 2048 { return false }
+    end := Json.ValueEnd(text, Json.Space(text, 0), 0)
+    if end < 0 || Json.Space(text, end) != text.count { return false }
+    names: [6]string = .["alias", "available", "owned", "premium", "price_units", "units_per_dew"]
+    positions: [6]s32
+    if !AliasFields(text, names[:], positions[:]) { return false }
+    offer: AliasOffer
+    if Json.ReadStringText(text, positions[0], offer.alias[:]) <= 0 { return false }
+    for index: 1..3 {
+        at := positions[index]
+        if !Json.MatchLiteral(text, at, "true") && !Json.MatchLiteral(text, at, "false") { return false }
+    }
+    offer.available = Json.MatchLiteral(text, positions[1], "true")
+    offer.owned = Json.MatchLiteral(text, positions[2], "true")
+    offer.premium = Json.MatchLiteral(text, positions[3], "true")
+    units: s64
+    if !DewInteger(text, positions[4], *offer.units) || offer.units < 0 ||
+    !DewInteger(text, positions[5], *units) || units != DewUnits { return false }
+    alias := TextUntilNul(offer.alias[:])
+    if (expected != "" && alias != expected) ||
+    (!AliasValid(alias) && !offer.owned) ||
+    (offer.owned && (offer.available || offer.units != 0)) { return false }
+    offer.known = true
+    output.* = offer
+    return true
+}
+
+AliasOfferAppend :: (out: *Vec(u8), offer: AliasOffer) {
+    BuilderPrint(out, "{\"known\":%,\"alias\":", offer.known)
+    EntityQuote(out, TextUntilNul(offer.alias[:]))
+    BuilderPrint(out, ",\"available\":%,\"owned\":%,\"premium\":%,\"price_units\":%,\"units_per_dew\":%}",
+        offer.available, offer.owned, offer.premium, offer.units, DewUnits)
+}
+
+AliasPurchaseEncode :: (purchase: AliasPurchase) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":")
+    EntityQuote(*out, TextUntilNul(purchase.owner[:]))
+    BuilderPrint(*out, ",\"node\":")
+    EntityQuote(*out, TextUntilNul(purchase.node[:]))
+    BuilderPrint(*out, ",\"alias\":")
+    EntityQuote(*out, TextUntilNul(purchase.alias[:]))
+    BuilderPrint(*out, ",\"price_units\":%,\"request_id\":", purchase.units)
+    EntityQuote(*out, TextUntilNul(purchase.request_id[:]))
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+AliasPurchaseParse :: (text: string, output: *AliasPurchase) -> bool {
+    if text.count == 0 || text.count > 1024 { return false }
+    end := Json.ValueEnd(text, Json.Space(text, 0), 0)
+    if end < 0 || Json.Space(text, end) != text.count { return false }
+    names: [5]string = .["owner", "node", "alias", "price_units", "request_id"]
+    positions: [5]s32
+    if !AliasFields(text, names[:], positions[:]) { return false }
+    purchase: AliasPurchase
+    if Json.ReadStringText(text, positions[0], purchase.owner[:]) != 64 ||
+    Json.ReadStringText(text, positions[1], purchase.node[:]) <= 0 ||
+    Json.ReadStringText(text, positions[2], purchase.alias[:]) <= 0 ||
+    Json.ReadStringText(text, positions[4], purchase.request_id[:]) != 32 ||
+    !DewInteger(text, positions[3], *purchase.units) || purchase.units <= 0 ||
+    !AliasValid(TextUntilNul(purchase.alias[:])) { return false }
+    for byte: TextUntilNul(purchase.owner[:]) {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    for byte: TextUntilNul(purchase.request_id[:]) {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    output.* = purchase
+    return true
+}

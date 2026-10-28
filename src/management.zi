@@ -1,6 +1,7 @@
 // Public management state and requests. Private keys and file paths never
 // appear in snapshots; native providers own operations and their results.
 #import "model"
+#import "alias_model"
 #import "node_url"
 #import "std/c_string"
 #import "std/text_buffer"
@@ -45,6 +46,8 @@ Management :: struct {
     message: [256]u8
     public_id: [65]u8
     alias: [40]u8
+    alias_offer: AliasOffer
+    alias_retry: bool
     status: [256]u8
     queued: s32
     link_stage: s32
@@ -77,7 +80,7 @@ ManagementOperation :: (operation: string) -> s32 {
     if operation == "create" { return ACCOUNT_CREATE }
     if operation == "import" { return ACCOUNT_IMPORT }
     if operation == "backup" { return ACCOUNT_BACKUP }
-    if operation == "alias" { return ACCOUNT_ALIAS }
+    if operation == "alias" || operation == "alias_quote" || operation == "alias_purchase" { return ACCOUNT_ALIAS }
     if operation == "sync" || operation == "set_sync" { return ACCOUNT_SYNC }
     if operation == "link_show" || operation == "link_join" ||
     operation == "link_confirm" || operation == "link_cancel" { return ACCOUNT_LINK }
@@ -176,6 +179,8 @@ ManagementEncode :: (state: Management) -> string {
         BuilderPrint(*out, ",\"%\":", names[index])
         EntityQuote(*out, strings[index])
     }
+    BuilderPrint(*out, ",\"alias_retry\":%,\"alias_offer\":", state.alias_retry)
+    AliasOfferAppend(*out, state.alias_offer)
     BuilderPrint(*out, ",\"nodes\":[")
     for index: 0..state.node_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
@@ -232,6 +237,12 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     !ManagementReadText(text, "public_id", state.public_id[:]) || !ManagementReadText(text, "alias", state.alias[:]) ||
     !ManagementReadText(text, "status", state.status[:]) || !ManagementReadText(text, "link_code", state.link_code[:]) ||
     !ManagementReadText(text, "link_message", state.link_message[:]) || !ManagementReadText(text, "candidate_id", state.candidate_id[:]) { return false }
+    offer_at := Json.FieldAt(text, 0, "alias_offer")
+    if offer_at >= 0 && Json.MatchLiteral(text, Json.FieldAt(text, offer_at, "known"), "true") {
+        offer_end := Json.ValueEnd(text, offer_at, 0)
+        if offer_end <= offer_at || !AliasOfferParse(text[offer_at:offer_end], "", *state.alias_offer) { return false }
+    }
+    state.alias_retry = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_retry"), "true")
     positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])
     if state.node_count < 0 || state.node_count > ENTITY_NODE_LIMIT { return false }

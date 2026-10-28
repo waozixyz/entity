@@ -1,0 +1,200 @@
+// Loaded into Entity's UI module. Account keys and payment intentions stay
+// in the native provider; this view sends only explicit public actions.
+alias_observed: [40]u8;
+alias_requested: [40]u8;
+alias_delay: s32;
+alias_modal_open: bool;
+alias_modal_name: [40]u8;
+alias_modal_owner: [65]u8;
+alias_modal_node: [256]u8;
+alias_modal_units: s64;
+alias_modal_funds: bool;
+alias_modal_scroll: s32;
+
+AliasViewReset :: () {
+    alias_observed = .{}
+    alias_requested = .{}
+    alias_delay = 18
+    alias_modal_open = false
+    alias_modal_funds = false
+    alias_modal_scroll = 0
+}
+
+AliasManagementFinished :: () {
+    result := TextUntilNul(management.result[:])
+    if result == "ok" {
+        alias_modal_open = false
+        dew_refresh = true
+    } else if result == "alias_funds" {
+        alias_modal_funds = true
+        dew_refresh = true
+    } else if result == "alias_changed" {
+        alias_modal_open = false
+        alias_requested = .{}
+        alias_delay = 18
+    }
+}
+
+AliasOpenPurchase :: (offer: AliasOffer) {
+    alias_modal_name = offer.alias
+    alias_modal_owner = management.public_id
+    alias_modal_node = state.nodes[state.preferred]
+    alias_modal_units = offer.units
+    alias_modal_open = true
+    alias_modal_funds = false
+    alias_modal_scroll = 0
+    dew_refresh = true
+    fields[3].focused = false
+}
+
+AliasPage :: (x: float32, y: *float32, width: float32) {
+    unused EditField(3, account_alias[:], Label("entity.alias", "Alias"),
+        Rectangle.{x, y.*, width, 48.0 * scale}, 32)
+    y.* += 56.0 * scale
+    Muted(826, Label("entity.alias_rule", "4–32 lowercase letters, numbers or _"), x, y.*, width, 13)
+    y.* += 36.0 * scale
+    normalized: [40]u8
+    alias := AliasNormalize(TextUntilNul(account_alias[:]), normalized[:])
+    if alias != TextUntilNul(alias_observed[:]) {
+        unused CopyCString(alias, alias_observed[:])
+        alias_delay = 18
+    }
+    if alias_delay > 0 { alias_delay -= 1 }
+    busy := management_waiting > management.completed || management.busy
+    valid := AliasValid(alias) || (alias != "" && alias == TextUntilNul(management.alias[:]))
+    if !alias_modal_open && valid && !busy && alias_delay == 0 && alias != TextUntilNul(alias_requested[:]) {
+        unused CopyCString(alias, alias_requested[:])
+        Manage("alias_quote", alias)
+        busy = management_waiting > management.completed
+    }
+    offer := management.alias_offer
+    if management.alias_retry && offer.known {
+        Muted(828, Label("entity.alias_pending", "A username purchase needs a retry."), x, y.*, width)
+        y.* += 32.0 * scale
+        TextLine(829, TextUntilNul(offer.alias[:]), x, y.*, width, 22)
+        y.* += 40.0 * scale
+        if !busy && WideButton(827, Label("entity.alias_retry", "Review pending purchase"), x, y, width, true) {
+            account_alias = offer.alias
+            AliasOpenPurchase(offer)
+        }
+        return
+    }
+    if offer.known && TextUntilNul(offer.alias[:]) == alias && valid && !busy {
+        if offer.owned {
+            Muted(828, Label("entity.alias_current", "This is your current username. Keeping it is free."), x, y.*, width)
+            y.* += 52.0 * scale
+            if WideButton(827, Label("entity.done", "Done"), x, y, width, true) { unused ManagementBack() }
+        } else if !offer.available {
+            Muted(828, Label("entity.alias_taken", "That username is already taken."), x, y.*, width)
+            y.* += 36.0 * scale
+        } else if offer.units > 0 {
+            Muted(828, Label("entity.alias_premium_available", "Premium username available"), x, y.*, width)
+            y.* += 32.0 * scale
+            amount: [64]u8
+            unused DewFormat(offer.units, DewUnits, amount[:], "Dew")
+            TextLine(829, TextUntilNul(amount[:]), x, y.*, width, 24)
+            y.* += 44.0 * scale
+            if WideButton(827, Label("entity.alias_buy", "Buy username"), x, y, width, true) { AliasOpenPurchase(offer) }
+        } else {
+            Muted(828, Label("entity.alias_free", "Available for free"), x, y.*, width)
+            y.* += 36.0 * scale
+            if WideButton(827, Label("entity.save", "Save"), x, y, width, true) { Manage("alias", alias) }
+        }
+    } else if !busy && valid {
+        unsupported := TextUntilNul(management.result[:]) == "quote_unsupported"
+        if WideButton(827, Label(ifx unsupported then "entity.save" else "entity.alias_check",
+            ifx unsupported then "Save" else "Check availability"), x, y, width, true) {
+            Manage(ifx unsupported then "alias" else "alias_quote", alias)
+        }
+    } else if busy || (valid && alias_delay > 0) {
+        Muted(828, Label("entity.alias_checking", "Checking availability…"), x, y.*, width)
+        y.* += 36.0 * scale
+    }
+}
+
+AliasTopUp :: () {
+    alias_modal_open = false
+    alias_requested = .{}
+    alias_delay = 18
+    dew_refresh = true
+    if dew_profile_host_actions {
+        AppReply("dew-topup")
+    } else if AppService("entity.dew", "open-topup") != "opened" {
+        dew_page = true
+        management_scroll = 0
+    }
+}
+
+AliasPurchaseModal :: () {
+    if !alias_modal_open { return }
+    normalized: [40]u8
+    alias := AliasNormalize(TextUntilNul(account_alias[:]), normalized[:])
+    if !management.account || TextUntilNul(alias_modal_owner[:]) != TextUntilNul(management.public_id[:]) ||
+    TextUntilNul(alias_modal_node[:]) != TextUntilNul(state.nodes[state.preferred][:]) ||
+    alias != TextUntilNul(alias_modal_name[:]) {
+        alias_modal_open = false
+        return
+    }
+    ProfileDewRead()
+    area := AppBounds()
+    width := area.width - 32.0 * scale
+    if width > 520.0 * scale { width = 520.0 * scale }
+    height := area.height - 24.0 * scale
+    if height > 420.0 * scale { height = 420.0 * scale }
+    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)19600, .id = 19600,
+            .title = Label("entity.alias_premium", "Premium username"),
+            .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
+            .scale = scale, .has_right_action = true, .right_label = Label("entity.cancel", "Cancel")})
+    if modal.dismissed || modal.right_clicked { alias_modal_open = false }
+    if !modal.opened { return }
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)19601, .bounds = modal.layout.content,
+            .content_height = cast(s32)(320.0 * scale), .scroll_offset = alias_modal_scroll, .scale = scale})
+    alias_modal_scroll = scroll.scroll_offset
+    if scroll.opened {
+        x := scroll.content.x + 8.0 * scale
+        y := scroll.content.y + 8.0 * scale
+        content_width := scroll.content.width - 16.0 * scale
+        TextLine(19602, TextUntilNul(alias_modal_name[:]), x, y, content_width, 24)
+        y += 44.0 * scale
+        price: [64]u8
+        unused DewFormat(alias_modal_units, DewUnits, price[:], "Dew")
+        TextLine(19603, TextUntilNul(price[:]), x, y, content_width, 22)
+        y += 40.0 * scale
+        Paragraph(19604, Label("entity.alias_once", "One-time purchase. Your current username changes only after the node confirms."),
+            x, y, content_width, 60.0)
+        y += 72.0 * scale
+        busy := management_waiting > management.completed || management.busy
+        known := dew_profile_available && dew_profile_account.known && !dew_profile_error
+        action := AliasPaymentAction(known, dew_profile_account.balance, alias_modal_units, management.alias_retry)
+        if alias_modal_funds { action = 2 }
+        if known {
+            balance: [64]u8
+            unused DewFormat(dew_profile_account.balance, DewUnits, balance[:], "Dew")
+            Muted(19605, Label("profile_dew_title", "Dew balance"), x, y, content_width)
+            y += 28.0 * scale
+            TextLine(19606, TextUntilNul(balance[:]), x, y, content_width)
+            y += 36.0 * scale
+        }
+        if !busy && action == 2 {
+            Paragraph(19607, Label("entity.alias_insufficient", "Not enough Dew. Top up, then return to confirm the purchase."), x, y, content_width, 52.0)
+            y += 60.0 * scale
+            if dew_profile_top_up && WideButton(19608, Label("profile_dew_topup", "Top up"), x, *y, content_width, true) { AliasTopUp() }
+        } else if !busy && (action == 1 || action == 3) {
+            if WideButton(19608, Label(ifx action == 3 then "entity.retry" else "entity.alias_buy",
+                ifx action == 3 then "Retry" else "Buy username"), x, *y, content_width, true) {
+                amount: [32]u8
+                price_text := FormatInteger(alias_modal_units, amount[:])
+                Manage("alias_purchase", TextUntilNul(alias_modal_name[:]), price_text)
+            }
+        } else if !busy {
+            Muted(19607, Label("profile_dew_loading", "Checking Dew…"), x, y, content_width)
+            y += 36.0 * scale
+            if WideButton(19608, Label("entity.refresh", "Refresh"), x, *y, content_width, false) { dew_refresh = true }
+        } else {
+            Muted(19607, Label("entity.working", "Working…"), x, y, content_width)
+        }
+        unused End(session)
+    }
+    unused End(session)
+    AppKeyboard(false)
+}

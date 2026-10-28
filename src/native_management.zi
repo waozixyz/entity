@@ -1,6 +1,8 @@
 // One account workflow for native Entity providers. The UI sends bounded
 // intentions; this module owns staged recovery, file access and completion.
 #import "management"
+#import "alias_model"
+#import "dew_model"
 #import "model"
 #import "recovery"
 #import "native_files"
@@ -9,12 +11,14 @@
 #import "std/date_time_linux"
 #import "std/net_http"
 #import "daochi_client/keys"
+#import "daochi_client/crypto"
 #import "daochi_client/client"
 Auth :: #import "daochi_client/auth";
 #import "daochi_client/async_client"
 #import "daochi_client/async_account"
 #import "daochi_client/social"
 #import "kryon/http_transfer"
+Json :: #import "std/json_scan";
 
 ProviderSnapshot :: #type (context: *void, output: *Management) -> void;
 ProviderLoad :: #type (context: *void, output: *Recovery) -> bool;
@@ -54,6 +58,11 @@ ManagementProvider :: struct {
     network_operation: s32
     asynchronous: bool
     delegated: bool
+    alias_offer: AliasOffer
+    alias_owner: [65]u8
+    alias_node: [512]u8
+    alias_retry: bool
+    alias_purchase: AliasPurchase
 }
 
 ProviderState :: (provider: *ManagementProvider) -> Management {
@@ -61,6 +70,13 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     if provider.snapshot != null { provider.snapshot(provider.context, *state) }
     state.busy = state.busy || provider.asynchronous
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
+    client: Client
+    if provider.client != null && provider.client(provider.context, *client) &&
+    TextUntilNul(state.public_id[:]) == TextUntilNul(provider.alias_owner[:]) &&
+    client.server_url == TextUntilNul(provider.alias_node[:]) {
+        state.alias_offer = provider.alias_offer
+        state.alias_retry = provider.alias_retry
+    }
     ManagementApplyQueue(*state, *provider.queue)
     return state
 }
@@ -249,6 +265,211 @@ ProviderAliasValid :: (alias: string) -> bool {
     return true
 }
 
+// Host storage callbacks run only in the verified owner's private store.
+// They are not UI operations, and no purchase is sent until save succeeds.
+ProviderAliasRecord :: (provider: *ManagementProvider, operation: string, purchase: *AliasPurchase) -> s32 {
+    if provider.action == null { return 0 }
+    request: ManagementRequest
+    request.owner_id = provider.queue.request.owner_id
+    unused CopyCString(operation, request.operation[:])
+    if operation == "alias_purchase_save" {
+        document := AliasPurchaseEncode(purchase.*)
+        defer { EntityFree(document) }
+        if !CopyCString(document, request.value[:]) { return 0 }
+    }
+    result := provider.action(provider.context, *request)
+    if result == 1 && operation == "alias_purchase_load" {
+        if !AliasPurchaseParse(TextUntilNul(request.value[:]), purchase) { return 0 }
+    }
+    return result
+}
+
+ProviderPendingAliasOffer :: (provider: *ManagementProvider) {
+    provider.alias_offer = .{}
+    provider.alias_offer.known = true
+    provider.alias_offer.available = true
+    provider.alias_offer.premium = true
+    provider.alias_offer.alias = provider.alias_purchase.alias
+    provider.alias_offer.units = provider.alias_purchase.units
+    provider.alias_retry = true
+}
+
+ProviderStartAlias :: (provider: *ManagementProvider, buying: bool) {
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) {
+        ProviderFinish(provider, "error", "The account is unavailable")
+        return
+    }
+    if TextUntilNul(provider.alias_owner[:]) != TextUntilNul(provider.queue.request.owner_id[:]) ||
+    TextUntilNul(provider.alias_node[:]) != client.server_url {
+        provider.alias_offer = .{}
+        provider.alias_retry = false
+        provider.alias_purchase = .{}
+    }
+    provider.alias_owner = provider.queue.request.owner_id
+    if !CopyCString(client.server_url, provider.request_node[:]) ||
+    !CopyCString(client.server_url, provider.alias_node[:]) {
+        ProviderFinish(provider, "error", "The node address is not valid")
+        return
+    }
+    client.server_url = TextUntilNul(provider.request_node[:])
+    normalized: [40]u8
+    alias := AliasNormalize(TextUntilNul(provider.queue.request.value[:]), normalized[:])
+    state := ProviderState(provider)
+    if !AliasValid(alias) && alias != TextUntilNul(state.alias[:]) {
+        ProviderFinish(provider, "error", "Use 4–32 lowercase letters, numbers or underscores")
+        return
+    }
+    saved: AliasPurchase
+    found := ProviderAliasRecord(provider, "alias_purchase_load", *saved)
+    if buying && found == 0 {
+        ProviderFinish(provider, "error", "Could not read the saved username purchase")
+        return
+    }
+    if found == 1 {
+        if TextUntilNul(saved.owner[:]) != TextUntilNul(provider.queue.request.owner_id[:]) ||
+        TextUntilNul(saved.node[:]) != client.server_url {
+            ProviderFinish(provider, "error", "Retry the pending username purchase on its original node first")
+            return
+        }
+        provider.alias_purchase = saved
+        ProviderPendingAliasOffer(provider)
+        if !buying {
+            ProviderFinish(provider, "quote", "A username purchase needs an explicit retry")
+            return
+        }
+    }
+    headers: [0]HttpHeader
+    if !buying {
+        provider.alias_offer = .{}
+        provider.alias_retry = false
+        provider.network_operation = 3
+        unused CopyCString(alias, provider.queue.request.value[:])
+        route: Vec(u8)
+        BuilderPrint(*route, "/api/v1/account/alias?alias=%", alias)
+        path := BuilderFinish(route)
+        defer { EntityFree(path) }
+        if !CopyCString(path, provider.request_body[:]) {
+            ProviderFinish(provider, "error", "The username request is too long")
+            return
+        }
+        provider.asynchronous = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+            ProviderTransport(provider), "GET", TextUntilNul(provider.request_body[:]), "", provider.response[:], headers[:])
+    } else {
+        confirmed: s64
+        text := TextUntilNul(provider.queue.request.target[:])
+        if !DewInteger(text, 0, *confirmed) || Json.ValueEnd(text, 0, 0) != text.count || confirmed <= 0 {
+            ProviderFinish(provider, "error", "Confirm the quoted username price first")
+            return
+        }
+        if found == 1 {
+            if alias != TextUntilNul(saved.alias[:]) || confirmed != saved.units {
+                ProviderFinish(provider, "error", "Retry the pending username purchase before choosing another")
+                return
+            }
+        } else {
+            offer := provider.alias_offer
+            if !offer.known || !offer.available || TextUntilNul(offer.alias[:]) != alias || offer.units != confirmed {
+                ProviderFinish(provider, "error", "Check availability and confirm the current username price")
+                return
+            }
+            purchase: AliasPurchase
+            purchase.owner = provider.queue.request.owner_id
+            purchase.node = provider.alias_node
+            purchase.alias = offer.alias
+            purchase.units = confirmed
+            random: [16]u8
+            if SecureRandom(*random[0], random.count) == 0 {
+                ProviderFinish(provider, "error", "Could not prepare the username purchase")
+                return
+            }
+            BytesToHex(*random[0], random.count, *purchase.request_id[0], purchase.request_id.count)
+            if ProviderAliasRecord(provider, "alias_purchase_save", *purchase) != 1 {
+                ProviderFinish(provider, "error", "Could not save the username purchase for a safe retry")
+                return
+            }
+            provider.alias_purchase = purchase
+            ProviderPendingAliasOffer(provider)
+        }
+        unused CopyCString(alias, provider.queue.request.value[:])
+        body: Vec(u8)
+        BuilderPrint(*body, "{\"alias\":\"%\",\"price_units\":%,\"request_id\":\"%\"}",
+            alias, provider.alias_purchase.units, TextUntilNul(provider.alias_purchase.request_id[:]))
+        document := BuilderFinish(body)
+        defer { EntityFree(document) }
+        if !CopyCString(document, provider.request_body[:]) {
+            ProviderFinish(provider, "alias_retry", "Retry the saved username purchase")
+            return
+        }
+        provider.network_operation = 4
+        provider.asynchronous = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+            ProviderTransport(provider), "POST", "/api/v1/account/alias/purchase", TextUntilNul(provider.request_body[:]),
+            provider.response[:], headers[:])
+    }
+    if !provider.asynchronous {
+        ProviderFinish(provider, ifx buying then "alias_retry" else "error", "Could not start the username request")
+    }
+}
+
+ProviderFinishAlias :: (provider: *ManagementProvider, succeeded: bool) {
+    buying := provider.network_operation == 4
+    if !succeeded {
+        status := provider.pending_request.status
+        if !buying && (status == 404 || status == 405) {
+            ProviderFinish(provider, "quote_unsupported", "This node uses the normal alias form")
+            return
+        }
+        if buying && (status == 400 || status == 402 || status == 404 || status == 409) {
+            if ProviderAliasRecord(provider, "alias_purchase_clear", *provider.alias_purchase) == 1 {
+                provider.alias_retry = false
+                provider.alias_offer = .{}
+            }
+            if status == 402 {
+                ProviderFinish(provider, "alias_funds", "Not enough Dew; top up and check the username again")
+            } else {
+                ProviderFinish(provider, "alias_changed", "The username or price changed; check availability again")
+            }
+        } else {
+            ProviderFinish(provider, ifx buying then "alias_retry" else "error",
+                ifx buying then "The result is uncertain; retry the saved purchase" else "Could not check username availability")
+        }
+        return
+    }
+    if !buying {
+        offer: AliasOffer
+        if !AliasOfferParse(TextUntilNul(provider.response[:]), TextUntilNul(provider.queue.request.value[:]), *offer) {
+            ProviderFinish(provider, "error", "The node returned an invalid username offer")
+            return
+        }
+        provider.alias_offer = offer
+        ProviderFinish(provider, "quote", "")
+        return
+    }
+    document := TextUntilNul(provider.response[:])
+    alias: [40]u8
+    units: s64
+    receipt: [128]u8
+    if Json.ReadStringText(document, Json.FieldAt(document, 0, "alias"), alias[:]) <= 0 ||
+    TextUntilNul(alias[:]) != TextUntilNul(provider.alias_purchase.alias[:]) ||
+    !DewInteger(document, Json.FieldAt(document, 0, "price_units"), *units) ||
+    (units != 0 && units != provider.alias_purchase.units) ||
+    (units > 0 && Json.ReadStringText(document, Json.FieldAt(document, 0, "receipt_id"), receipt[:]) <= 0) {
+        ProviderFinish(provider, "alias_retry", "The result is uncertain; retry the saved purchase")
+        return
+    }
+    request := provider.queue.request
+    unused CopyCString("alias_saved", request.operation[:])
+    unused CopyCString(TextUntilNul(alias[:]), request.value[:])
+    if provider.action == null || provider.action(provider.context, *request) != 1 ||
+    ProviderAliasRecord(provider, "alias_purchase_clear", *provider.alias_purchase) != 1 {
+        ProviderFinish(provider, "alias_retry", "The node saved the username; retry to finish saving it on this device")
+        return
+    }
+    provider.alias_offer = .{}
+    provider.alias_retry = false
+    ProviderFinish(provider, "ok", "Account alias saved")
+}
+
 ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
     client: Client
     if provider.client == null || !provider.client(provider.context, *client) { ProviderFinish(provider, "error", "The account is unavailable"); return }
@@ -294,10 +515,14 @@ ProviderPump :: (provider: *ManagementProvider) {
         if !finished { return }
         succeeded := ifx provider.network_operation == 2 then provider.pending_deletion.result == Auth.AuthResult.AUTH_OK else provider.pending_request.result == Auth.AuthResult.AUTH_OK
         provider.asynchronous = false
-        if !succeeded { ProviderFinish(provider, "error", ProviderNetworkFailure(provider)); return }
         current: Client
+        if !succeeded && provider.network_operation < 3 { ProviderFinish(provider, "error", ProviderNetworkFailure(provider)); return }
         if provider.client == null || !provider.client(provider.context, *current) || current.server_url != TextUntilNul(provider.request_node[:]) {
             ProviderFinish(provider, "error", "The original node completed the request; the current node changed")
+            return
+        }
+        if provider.network_operation == 3 || provider.network_operation == 4 {
+            ProviderFinishAlias(provider, succeeded)
             return
         }
         request := provider.queue.request
@@ -352,6 +577,8 @@ ProviderPump :: (provider: *ManagementProvider) {
         RecoveryClear(*provider.incoming)
         provider.has_incoming = false
         ProviderFinish(provider, "cancelled", "Account switch cancelled")
+    } else if operation == "alias_quote" || operation == "alias_purchase" {
+        ProviderStartAlias(provider, operation == "alias_purchase")
     } else if operation == "alias" || operation == "clear_remote" {
         ProviderStartNetwork(provider, operation == "clear_remote")
     } else {
