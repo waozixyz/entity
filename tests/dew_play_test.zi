@@ -5,19 +5,19 @@
 #import "std/text_buffer"
 #import "std/vec"
 
-PURCHASE :: "{\"sequence\":3,\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"error\":\"\",\"products\":[{\"id\":\"dew_500\",\"price\":\"5,49 €\",\"micros\":5490000,\"currency\":\"EUR\"}],\"purchases\":[{\"product\":\"dew_500\",\"token\":\"abcdefghijklmnop.Token-1_2\",\"order\":\"GPA.1\"}]}"
+PURCHASE :: "{\"sequence\":3,\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"error\":\"\",\"products\":[{\"id\":\"dew_10\",\"price\":\"0,79 €\",\"micros\":790000,\"currency\":\"EUR\"}],\"purchases\":[{\"product\":\"dew_10\",\"token\":\"abcdefghijklmnop.Token-1_2\",\"order\":\"GPA.1\"}]}"
 
 #program_export
 main :: () -> s32 {
     play: DewPlay = .{.enabled = DewPlayEdition()}
-    if play.enabled || DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_500") { return 1 }
+    if play.enabled || DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_10") { return 1 }
     play.enabled = true
     if DewPlayBuy(*play, "dew_42") { return 2 }
     unused CopyCString(PURCHASE, play.state[:])
     // A purchase waits while the host cannot send it.
     if DewPlayTick(*play, false) || TextUntilNul(play.status[:]) != "" { return 3 }
     if !DewPlayTick(*play, true) || TextUntilNul(play.status[:]) != "verifying" { return 4 }
-    if TextUntilNul(play.body[:]) != "{\"app_id\":\"entity\",\"package_name\":\"xyz.waozi.inbe\",\"product_id\":\"dew_500\",\"purchase_token\":\"abcdefghijklmnop.Token-1_2\"}" { return 5 }
+    if TextUntilNul(play.body[:]) != "{\"app_id\":\"entity\",\"package_name\":\"xyz.waozi.inbe\",\"product_id\":\"dew_10\",\"purchase_token\":\"abcdefghijklmnop.Token-1_2\"}" { return 5 }
     // A failed answer keeps the purchase and tries again later.
     if DewPlayVerified(*play, false, 503, "busy") || TextUntilNul(play.status[:]) != "failed" ||
     play.wait != 600 || play.token[0] != cast(u8)0 { return 6 }

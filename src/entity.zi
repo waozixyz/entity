@@ -1394,7 +1394,7 @@ DrawDew :: () {
         y += 40.0 * scale
         products := FieldAt(play, 0, "products")
         shown: s32 = 0
-        for index: cast(s32)0..3 {
+        for index: cast(s32)0..4 {
             item := ElementAt(play, products, index)
             if item < 0 { break }
             item_end := ValueEnd(play, item, 0)

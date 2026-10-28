@@ -2,8 +2,10 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import contextlib
+import io
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location(
     'play_dew_products', Path(__file__).resolve().parents[1] / 'tools/play_dew_products.py')
@@ -52,6 +54,26 @@ class ProvisionTest(unittest.TestCase):
                     self.assertEqual(price, price.to_integral_value())
                 else:
                     self.assertEqual(price * 100, (price * 100).to_integral_value())
+
+    def test_ten_dew_product_preserves_regional_price_and_credit_identity(self):
+        rates = ({'US': ('USD', Decimal(1)), 'PY': ('PYG', Decimal(5900))}, {}, '2022/02')
+        body, _, version = products.product('xyz.waozi.inbe', 10, Decimal('0.06'), rates)
+        self.assertEqual(body['productId'], 'dew_10')
+        self.assertEqual(body['listings'][0]['title'], '10 Dew')
+        self.assertEqual(version, '2022/02')
+        self.assertEqual(len(body['purchaseOptions'][0]['regionalPricingAndAvailabilityConfigs']), 2)
+        self.assertFalse(body['purchaseOptions'][0]['buyOption']['multiQuantityEnabled'])
+
+    def test_selected_small_pack_does_not_reprice_existing_products(self):
+        rates = ({'US': ('USD', Decimal(1))}, {}, '2022/02')
+        with patch.object(products, 'Play') as play, \
+             patch.object(products, 'rates', return_value=(Decimal('0.06'), {'xmr_usd_cents': 60000})), \
+             patch.object(products, 'exchange', return_value=rates), \
+             patch.object(products, 'publish_product') as publish, contextlib.redirect_stdout(io.StringIO()):
+            products.main(['fixture.json', 'xyz.waozi.shovey', '--pack', '10', '--apply'])
+        self.assertEqual(publish.call_count, 1)
+        self.assertEqual(publish.call_args.args[0], play.return_value)
+        self.assertEqual(publish.call_args.args[1]['productId'], 'dew_10')
 
     def test_familiar_endings_preserve_the_target_premium(self):
         for amount, expected in [('6.91', '6.99'), ('33.07', '32.99'),

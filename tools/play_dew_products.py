@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Create or update an app's Google Play Dew packs (dew_100 … dew_5000).
+"""Create or update an app's Google Play Dew packs (dew_10 … dew_5000).
 
 Entity's Google Play edition sells these packs (src/dew_play.zi). Play
 prices are the node's Dew price (from its XMR rate), with a declining bulk
-premium of 15%, 10%, 5% and 0%. Google's regional rates include taxes. Local
+premium of 20%, 15%, 10%, 5% and 0%. Google's regional rates include taxes. Local
 price endings stay at or above the Monero value. The app needs an uploaded Google Play edition
 bundle first. The service account key is read, never printed.
 
-    tools/play_dew_products.py KEY.json PACKAGE [--apply]
+    tools/play_dew_products.py KEY.json PACKAGE [--pack 10] [--apply]
 """
+import argparse
 import base64
 import json
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -22,8 +22,8 @@ from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 
 API = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'
-PACKS = (100, 500, 1000, 5000)
-PREMIUM = {100: Decimal('1.15'), 500: Decimal('1.10'),
+PACKS = (10, 100, 500, 1000, 5000)
+PREMIUM = {10: Decimal('1.20'), 100: Decimal('1.15'), 500: Decimal('1.10'),
            1000: Decimal('1.05'), 5000: Decimal('1.00')}
 WHOLE_CURRENCIES = frozenset(('BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF',
                               'KRW', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'))
@@ -169,20 +169,27 @@ def publish_product(play, body, version):
         raise RuntimeError(f'{product_id}: Google Play did not confirm an active buy option')
 
 
-def main():
-    key_path, package = sys.argv[1], sys.argv[2]
-    apply = '--apply' in sys.argv
-    play = Play(key_path, package)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('key_path')
+    parser.add_argument('package')
+    parser.add_argument('--pack', type=int, choices=PACKS, action='append',
+                        help='Only set up this pack; repeat to select more than one')
+    parser.add_argument('--apply', action='store_true')
+    args = parser.parse_args(argv)
+    play = Play(args.key_path, args.package)
     usd_per_dew, data = rates()
     rates_by_region = exchange(play)
-    print(f'node rate: 1 XMR = ${data["xmr_usd_cents"] / 100:.2f}; 1 Dew = ${usd_per_dew:.5f}; Play premiums = 15%, 10%, 5%, 0%, rounded locally')
+    print(f'node rate: 1 XMR = ${data["xmr_usd_cents"] / 100:.2f}; 1 Dew = ${usd_per_dew:.5f}; Play premiums = 20%, 15%, 10%, 5%, 0%, rounded locally')
     for dew in PACKS:
-        body, play_usd, version = product(package, dew, usd_per_dew, rates_by_region)
+        if args.pack and dew not in args.pack:
+            continue
+        body, play_usd, version = product(args.package, dew, usd_per_dew, rates_by_region)
         sample = {r['regionCode']: r['price'] for r in body['purchaseOptions'][0]['regionalPricingAndAvailabilityConfigs']
                   if r['regionCode'] in ('US', 'DE', 'GB', 'JP', 'IN', 'BR', 'PY', 'AR')}
         print(f'dew_{dew}: base ${Decimal(dew) * usd_per_dew:.2f} → Play ${play_usd}; '
               f'{len(body["purchaseOptions"][0]["regionalPricingAndAvailabilityConfigs"])} regions; sample {json.dumps(sample)}')
-        if not apply:
+        if not args.apply:
             continue
         publish_product(play, body, version)
         print('  verified active')
