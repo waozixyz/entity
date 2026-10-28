@@ -2,9 +2,9 @@
 """Create or update an app's Google Play Dew packs (dew_100 … dew_5000).
 
 Entity's Google Play edition sells these packs (src/dew_play.zi). Play
-prices are the node's Dew price (from its XMR rate) plus 10%, converted to
-every Play region with Google's rates and taxes, and rounded up to a clean
-amount in each local currency. The app needs an uploaded Google Play edition
+prices are the node's Dew price (from its XMR rate), with a declining bulk
+premium of 15%, 10%, 5% and 0%. Google's regional rates include taxes. Local
+price endings stay at or above the Monero value. The app needs an uploaded Google Play edition
 bundle first. The service account key is read, never printed.
 
     tools/play_dew_products.py KEY.json PACKAGE [--apply]
@@ -24,7 +24,10 @@ from pathlib import Path
 
 API = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'
 PACKS = (100, 500, 1000, 5000)
-MARKUP = Decimal('1.10')
+PREMIUM = {100: Decimal('1.15'), 500: Decimal('1.10'),
+           1000: Decimal('1.05'), 5000: Decimal('1.00')}
+WHOLE_CURRENCIES = frozenset(('BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF',
+                              'KRW', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'))
 REFERENCE = Decimal(1000)
 
 
@@ -61,7 +64,8 @@ class Play:
         request.add_header('Content-Type', 'application/json')
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
-                return response.status, json.load(response)
+                data = response.read()
+                return response.status, json.loads(data) if data else {}
         except urllib.error.HTTPError as error:
             return error.code, error.read().decode('utf-8', 'replace')
 
@@ -78,14 +82,27 @@ def money(price):
     return Decimal(price.get('units', '0') or '0') + Decimal(price.get('nanos', 0) or 0) / Decimal(10 ** 9)
 
 
-def clean(amount):
-    """Round up to two significant digits, in half steps when the first digit is 1."""
+def clean(amount, currency='USD', minimum=Decimal(0)):
+    """Choose the nearest familiar price ending without undercutting Monero."""
     if amount <= 0:
-        return amount
-    step = Decimal(10) ** (math.floor(math.log10(float(amount))) - 1)
-    if amount / step < 20:
-        step = step / 2
-    return (amount / step).to_integral_value(rounding=ROUND_CEILING) * step
+        raise ValueError('A pack price must be positive')
+    if currency in WHOLE_CURRENCIES:
+        step = max(Decimal(1), Decimal(10) ** (amount.adjusted() - 1))
+        ending = min(Decimal(100), step / 10) if step >= 10 else Decimal(0)
+    else:
+        step = Decimal('0.10') if amount < 100 else Decimal(10) ** (amount.adjusted() - 2)
+        ending = Decimal('0.01')
+    quantum = Decimal(1) if currency in WHOLE_CURRENCIES else Decimal('0.01')
+    while True:
+        center = int((amount + ending) / step)
+        candidates = [Decimal(index) * step - ending for index in range(max(1, center - 1), center + 3)]
+        eligible = [price for price in candidates if price >= minimum and price > 0]
+        price = min(eligible, key=lambda price: (abs(price - amount), price))
+        # A coarse local ending must not erase the next pack's bulk saving.
+        if abs(price - amount) <= amount * Decimal('0.02') or step <= quantum:
+            return price
+        step = max(quantum, step / 10)
+        ending = min(ending, step / 10) if step > quantum else Decimal(0)
 
 
 def as_price(currency, amount):
@@ -109,22 +126,46 @@ def exchange(play):
 
 def product(package, dew, usd_per_dew, rates_by_region):
     regions_rate, other, version = rates_by_region
-    play_usd = Decimal(dew) * usd_per_dew * MARKUP
+    baseline_usd = Decimal(dew) * usd_per_dew
+    play_usd = baseline_usd * PREMIUM[dew]
     regions = []
     for code, (currency, rate) in sorted(regions_rate.items()):
         regions.append({'regionCode': code, 'availability': 'AVAILABLE',
-                        'price': as_price(currency, clean(play_usd * rate))})
+                        'price': as_price(currency, clean(play_usd * rate, currency, baseline_usd * rate))})
     option = {'purchaseOptionId': 'buy', 'buyOption': {'legacyCompatible': True, 'multiQuantityEnabled': False},
               'regionalPricingAndAvailabilityConfigs': regions}
     if other.get('usdPrice') and other.get('eurPrice'):
         option['newRegionsConfig'] = {'availability': 'AVAILABLE',
-                                      'usdPrice': as_price('USD', clean(play_usd * money(other['usdPrice']) / REFERENCE)),
-                                      'eurPrice': as_price('EUR', clean(play_usd * money(other['eurPrice']) / REFERENCE))}
+                                      'usdPrice': as_price('USD', clean(play_usd * money(other['usdPrice']) / REFERENCE, 'USD', baseline_usd * money(other['usdPrice']) / REFERENCE)),
+                                      'eurPrice': as_price('EUR', clean(play_usd * money(other['eurPrice']) / REFERENCE, 'EUR', baseline_usd * money(other['eurPrice']) / REFERENCE))}
     body = {'packageName': package, 'productId': f'dew_{dew}',
             'listings': [{'languageCode': 'en-US', 'title': f'{dew} Dew',
                           'description': f'{dew} Dew for your Waozi account: the same Dew in every Waozi app and game.'}],
             'purchaseOptions': [option]}
     return body, play_usd.quantize(Decimal('0.01'), rounding=ROUND_CEILING), version
+
+
+def require_success(operation, status, answer):
+    if status != 200:
+        raise RuntimeError(f'{operation}: HTTP {status}: {answer}')
+
+
+def publish_product(play, body, version):
+    """Do not report a pack as ready until Play returns its active buy option."""
+    product_id = body['productId']
+    status, answer = play.call('PATCH',
+                              f'/onetimeproducts/{product_id}?allowMissing=true&updateMask=listings,purchaseOptions&regionsVersion.version={version}', body)
+    require_success(f'{product_id} save', status, answer)
+    status, answer = play.call('POST', f'/oneTimeProducts/{product_id}/purchaseOptions:batchUpdateStates',
+                              {'requests': [{'activatePurchaseOptionRequest': {
+                                  'packageName': play.package, 'productId': product_id, 'purchaseOptionId': 'buy'}}]})
+    require_success(f'{product_id} activate', status, answer)
+    status, answer = play.call('GET', f'/oneTimeProducts/{product_id}')
+    require_success(f'{product_id} verify', status, answer)
+    options = answer.get('purchaseOptions', [])
+    if not any(option.get('purchaseOptionId') == 'buy' and option.get('state') == 'ACTIVE'
+               for option in options):
+        raise RuntimeError(f'{product_id}: Google Play did not confirm an active buy option')
 
 
 def main():
@@ -133,7 +174,7 @@ def main():
     play = Play(key_path, package)
     usd_per_dew, data = rates()
     rates_by_region = exchange(play)
-    print(f'node rate: 1 XMR = ${data["xmr_usd_cents"] / 100:.2f}; 1 Dew = ${usd_per_dew:.5f}; Play = +10%, rounded up')
+    print(f'node rate: 1 XMR = ${data["xmr_usd_cents"] / 100:.2f}; 1 Dew = ${usd_per_dew:.5f}; Play premiums = 15%, 10%, 5%, 0%, rounded locally')
     for dew in PACKS:
         body, play_usd, version = product(package, dew, usd_per_dew, rates_by_region)
         sample = {r['regionCode']: r['price'] for r in body['purchaseOptions'][0]['regionalPricingAndAvailabilityConfigs']
@@ -142,14 +183,8 @@ def main():
               f'{len(body["purchaseOptions"][0]["regionalPricingAndAvailabilityConfigs"])} regions; sample {json.dumps(sample)}')
         if not apply:
             continue
-        status, answer = play.call('PATCH', f'/onetimeproducts/dew_{dew}?allowMissing=true&updateMask=listings,purchaseOptions&regionsVersion.version={version}', body)
-        print('  save', status, answer if status != 200 else 'ok')
-        if status != 200:
-            continue
-        status, answer = play.call('POST', f'/oneTimeProducts/dew_{dew}/purchaseOptions:batchUpdateStates',
-                                   {'requests': [{'activatePurchaseOptionRequest': {
-                                       'packageName': package, 'productId': f'dew_{dew}', 'purchaseOptionId': 'buy'}}]})
-        print('  activate', status, answer if status != 200 else 'ok')
+        publish_product(play, body, version)
+        print('  verified active')
 
 
 if __name__ == '__main__':
