@@ -51,7 +51,8 @@ def main():
                     '-o', str(generated), args.source], check=True, env=env)
     runtime = work / 'runtime/libziran.a'
     subprocess.run(['make', '-C', str(toolchain), 'BOOTSTRAP=1', 'BUILD_DIR=' + str(runtime.parent),
-                    'CC=' + emcc, 'AR=' + emar, 'OBJCOPY=true', 'CFLAGS=-O2', str(runtime)], check=True, env=env)
+                    'CC=' + emcc, 'AR=' + emar, 'OBJCOPY=true', 'TARGET_MACHINE=wasm32-unknown-emscripten',
+                    'CFLAGS=-O2', str(runtime)], check=True, env=env)
     oqs_source = package('liboqs')
     oqs = work / ('oqs-' + oqs_source.name)
     subprocess.run([emcmake, 'cmake', '-S', str(oqs_source), '-B', str(oqs),
@@ -95,7 +96,7 @@ def main():
                     '--embed-file', str(kryon / 'assets/fonts/LiberationSans-Regular.ttf') + '@/kryon-font.ttf',
                     *preload,
                     '--embed-file', str(args.profile.resolve()) + '@/entity.zx',
-                    '-sASYNCIFY', '-sALLOW_MEMORY_GROWTH=1', '-sFORCE_FILESYSTEM=1',
+                    '-sUSE_ZLIB=1', '-sASYNCIFY', '-sALLOW_MEMORY_GROWTH=1', '-sFORCE_FILESYSTEM=1',
                     '-sSTACK_SIZE=16777216', '-sASYNCIFY_STACK_SIZE=1048576', '-sENVIRONMENT=web',
                     '-sEXPORTED_RUNTIME_METHODS=FS',
                     '-sEXPORTED_FUNCTIONS=_main',
