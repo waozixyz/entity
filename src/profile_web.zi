@@ -12,6 +12,8 @@ using Canvas :: #import "kryon/Canvas";
 #import "kryon/TestDriver"
 #import "kryon/page_core"
 #import "native_host"
+#import "account_store"
+#import "model"
 #import "std/file"
 #import "std/web"
 
@@ -28,6 +30,9 @@ main :: () -> s32 {
     if !found { return 1 }
     defer { AppFileFree(bytes) }
     if !EntityHostOpen(bytes, "/kryon-apps/entity", "entity") { return 1 }
+    // The standalone manager exposes profile editing even when the shared
+    // preferences last came from a game with a smaller set of controls.
+    account_profile.controls = ENTITY_IDENTITY | ENTITY_NODES
     defer { unused EntityHostClose() }
     session := SessionOpen()
     if !SessionValid(session) { return 1 }
