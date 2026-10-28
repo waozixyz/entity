@@ -1,0 +1,49 @@
+#import, file "../src/dew_play_pricing.zi";
+#import "std/text_buffer"
+#import "std/vec"
+
+PRICES :: #string JSON
+{"products":[{"id":"dew_10","price":"$0.72","micros":720000,"currency":"USD"},{"id":"dew_100","price":"$6.90","micros":6900000,"currency":"USD"},{"id":"dew_500","price":"$33.00","micros":33000000,"currency":"USD"},{"id":"dew_1000","price":"$63.00","micros":63000000,"currency":"USD"},{"id":"dew_5000","price":"$300.00","micros":300000000,"currency":"USD"}]}
+JSON;
+
+Prices :: (small: string, selected: string, small_currency: string = "USD", currency: string = "USD") -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"products\":[{\"id\":\"dew_10\",\"price\":\"small\",\"micros\":%,\"currency\":\"%\"},{\"id\":\"dew_100\",\"price\":\"large\",\"micros\":%,\"currency\":\"%\"}]}",
+        small, small_currency, selected, currency)
+    return BuilderFinish(out)
+}
+
+#program_export
+main :: () -> s32 {
+    ids: [5]string = .["dew_10", "dew_100", "dew_500", "dew_1000", "dew_5000"]
+    wanted: [5]s32 = .[0, 4, 8, 12, 16]
+    for id, index: ids {
+        if DewPlaySavings(PRICES, id) != wanted[index] { return 1 + cast(s32)index }
+    }
+    // Regional price endings, rather than the nominal premium, set savings.
+    if DewPlaySavings(Prices("710000", "6990000"), "dew_100") != 1 { return 10 }
+    if DewPlaySavings(Prices("710000", "6790000"), "dew_100") != 4 { return 11 }
+    if DewPlaySavings(Prices("1000000", "9999999"), "dew_100") != 0 { return 12 }
+    if DewPlaySavings(Prices("1000000", "10000000"), "dew_100") != 0 { return 13 }
+    if DewPlaySavings(Prices("1000000", "11000000"), "dew_100") != 0 { return 14 }
+    if DewPlaySavings(Prices("1000000", "9000000", "USD", "EUR"), "dew_100") != 0 { return 15 }
+    if DewPlaySavings(Prices("1000000", "9000000", "", "USD"), "dew_100") != 0 { return 16 }
+    if DewPlaySavings(Prices("1000000", "9000000", "usd", "usd"), "dew_100") != 0 { return 17 }
+    if DewPlaySavings(Prices("1000000", "9000000", "JPY", "JPY"), "dew_100") != 10 { return 18 }
+    invalid: [8]string = .["0", "-1", "1.5", "1e6", "null", "\"1000000\"", "9223372036854775807", "999999999999999999999"]
+    for number: invalid {
+        if DewPlaySavings(Prices(number, "1"), "dew_100") != 0 ||
+        DewPlaySavings(Prices("1000000", number), "dew_100") != 0 { return 20 }
+    }
+    if DewPlaySavings(Prices("92233720368547758", "1"), "dew_100") != 0 { return 21 }
+    if DewPlaySavings("{}", "dew_100") != 0 || DewPlaySavings(PRICES, "dew_42") != 0 { return 22 }
+    duplicate := #string JSON
+{"products":[{"id":"dew_10","price":"one","micros":1000000,"currency":"USD"},{"id":"dew_10","price":"two","micros":2000000,"currency":"USD"},{"id":"dew_100","price":"large","micros":5000000,"currency":"USD"}]}
+JSON;
+    if DewPlaySavings(duplicate, "dew_100") != 0 { return 23 }
+    missing := #string JSON
+{"products":[{"id":"dew_10","micros":1000000,"currency":"USD"},{"id":"dew_100","price":"large","micros":5000000,"currency":"USD"}]}
+JSON;
+    if DewPlaySavings(missing, "dew_100") != 0 { return 24 }
+    return 0
+}

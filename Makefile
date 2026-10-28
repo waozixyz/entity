@@ -38,11 +38,20 @@ model-test:
 
 # Google Play Dew purchases are forgotten only after the node credits them.
 .PHONY: dew-play-test
-dew-play-test:
+dew-play-test: dew-play-savings-test
 	rm -rf build/dew-play-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry dew_play_test:main -o build/dew-play-test tests/dew_play_test.zi
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/dew-play-test $$(rg --files build/dew-play-test -g '*.c') -o build/dew-play-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/dew-play-test/test
+
+.PHONY: dew-play-savings-test
+dew-play-savings-test:
+	rm -rf build/dew-play-savings-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry dew_play_savings_test:main -o build/dew-play-savings-test tests/dew_play_savings_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/dew-play-savings-test $$(rg --files build/dew-play-savings-test -g '*.c') -o build/dew-play-savings-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/dew-play-savings-test/test
+	$(ZIRAN) bundle --root . $(MODULE_PATHS) --entry dew_play_savings_test:main -o build/dew-play-savings-test/test.zx tests/dew_play_savings_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) run build/dew-play-savings-test/test.zx
 
 .PHONY: achievement-view-test
 achievement-view-test:

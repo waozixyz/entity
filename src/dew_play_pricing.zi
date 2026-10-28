@@ -1,0 +1,79 @@
+// Savings use Play's actual local prices, including regional rounding.
+// They compare the price per Dew with the 10 Dew pack, never with a made-up price.
+#import "std/json_scan"
+#import "std/text_buffer"
+
+DewPlayPackSize :: (id: string) -> s32 {
+    if id == "dew_10" { return 10 }
+    if id == "dew_100" { return 100 }
+    if id == "dew_500" { return 500 }
+    if id == "dew_1000" { return 1000 }
+    if id == "dew_5000" { return 5000 }
+    return 0
+}
+
+// Play quotes integral millionths of the local currency. Reject malformed or
+// implausibly large values before doing integer arithmetic.
+DewPlayMicros :: (product: string) -> s64 {
+    at := FieldAt(product, 0, "micros")
+    end := ValueEnd(product, at, 0)
+    if at < 0 || end <= at || end - at > 17 { return 0 }
+    amount: s64 = 0
+    for byte: product[at:end] {
+        if byte < #char "0" || byte > #char "9" { return 0 }
+        amount = amount * 10 + cast(s64)(byte - #char "0")
+    }
+    return amount
+}
+
+DewPlaySavings :: (state: string, id: string) -> s32 {
+    amount := DewPlayPackSize(id)
+    if amount <= 10 || state.count == 0 || state[0] != #char "{" { return 0 }
+    products := FieldAt(state, 0, "products")
+    small_micros: s64 = 0
+    selected_micros: s64 = 0
+    small_currency: [8]u8
+    selected_currency: [8]u8
+    small_found := false
+    selected_found := false
+    for index: cast(s32)0..7 {
+        at := ElementAt(state, products, index)
+        if at < 0 { break }
+        end := ValueEnd(state, at, 0)
+        if end <= at { return 0 }
+        product := state[at:end]
+        product_id: [64]u8
+        if ReadStringText(product, FieldAt(product, 0, "id"), product_id[:]) <= 0 { continue }
+        name := TextUntilNul(product_id[:])
+        if name != "dew_10" && name != id { continue }
+        price: [64]u8
+        currency: [8]u8
+        if ReadStringText(product, FieldAt(product, 0, "price"), price[:]) <= 0 ||
+        ReadStringText(product, FieldAt(product, 0, "currency"), currency[:]) != 3 { return 0 }
+        for byte: currency[:3] {
+            if byte < #char "A" || byte > #char "Z" { return 0 }
+        }
+        micros := DewPlayMicros(product)
+        if micros <= 0 { return 0 }
+        if name == "dew_10" {
+            if small_found { return 0 }
+            small_found = true
+            small_micros = micros
+            small_currency = currency
+        } else {
+            if selected_found { return 0 }
+            selected_found = true
+            selected_micros = micros
+            selected_currency = currency
+        }
+    }
+    if !small_found || !selected_found ||
+    TextUntilNul(small_currency[:]) != TextUntilNul(selected_currency[:]) { return 0 }
+    multiplier := cast(s64)(amount / 10)
+    // Also leave room for multiplying the difference by 100 below.
+    if small_micros > 92233720368547758 / multiplier { return 0 }
+    reference := small_micros * multiplier
+    if selected_micros >= reference { return 0 }
+    // Whole percentages round down so the label never promises extra savings.
+    return cast(s32)((reference - selected_micros) * 100 / reference)
+}

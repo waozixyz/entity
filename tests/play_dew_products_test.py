@@ -64,6 +64,15 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(len(body['purchaseOptions'][0]['regionalPricingAndAvailabilityConfigs']), 2)
         self.assertFalse(body['purchaseOptions'][0]['buyOption']['multiQuantityEnabled'])
 
+    def test_small_pack_rounding_retains_the_twenty_percent_premium(self):
+        regions = {'US': ('USD', Decimal(1)), 'PY': ('PYG', Decimal(5900)),
+                   'JP': ('JPY', Decimal(156))}
+        body, _, _ = products.product('xyz.waozi.inbe', 10, Decimal('0.061'),
+                                     (regions, {}, '2022/02'))
+        for region in body['purchaseOptions'][0]['regionalPricingAndAvailabilityConfigs']:
+            rate = regions[region['regionCode']][1]
+            self.assertGreaterEqual(products.money(region['price']), Decimal('0.061') * 10 * Decimal('1.20') * rate)
+
     def test_selected_small_pack_does_not_reprice_existing_products(self):
         rates = ({'US': ('USD', Decimal(1))}, {}, '2022/02')
         with patch.object(products, 'Play') as play, \

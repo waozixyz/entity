@@ -6,6 +6,7 @@
 #import "leaderboard_model"
 #import "management"
 #import "dew_model"
+#import "dew_play_pricing"
 #import "dew_view"
 #import "std/json_scan"
 #import "std/number_text"
@@ -1394,6 +1395,7 @@ DrawDew :: () {
         y += 40.0 * scale
         products := FieldAt(play, 0, "products")
         shown: s32 = 0
+        savings_shown := false
         for index: cast(s32)0..4 {
             item := ElementAt(play, products, index)
             if item < 0 { break }
@@ -1405,10 +1407,20 @@ DrawDew :: () {
             if ReadStringText(product, FieldAt(product, 0, "id"), id[:]) <= 4 || ReadStringText(product, FieldAt(product, 0, "price"), price[:]) <= 0 { continue }
             title: Vec(u8)
             BuilderPrint(*title, "% Dew · %", TextUntilNul(id[:])[4:], TextUntilNul(price[:]))
+            savings := DewPlaySavings(play, TextUntilNul(id[:]))
+            if savings > 0 {
+                BuilderPrint(*title, " · −%", savings)
+                BuilderPrint(*title, "%%")
+                savings_shown = true
+            }
             label := BuilderFinish(title)
             if !busy && Action(45051 + index, label, Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("play", sequence, TextUntilNul(id[:])) }
             y += 56.0 * scale
             shown += 1
+        }
+        if savings_shown {
+            Paragraph(45057, Label("profile_dew_play_comparison", "Savings per Dew compared with the 10 Dew pack."), x, y, width, 48.0)
+            y += 56.0 * scale
         }
         status: [16]u8
         unused ReadStringText(json, FieldAt(json, 0, "play_status"), status[:])

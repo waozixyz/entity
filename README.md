@@ -160,6 +160,19 @@ files and the same native Entity account provider; game bundles receive only
 a navigation service and never see account keys. `scripts/build-web.py` links
 this provider for browser applications with the locked cryptography packages.
 
+## Google Play Dew pricing
+
+The 10 Dew pack uses a 20% premium over the node's current Monero value,
+rounded up to a clean local price. The larger packs retain their bulk rates:
+100 Dew at 15%, 500 Dew at 10%, 1,000 Dew at 5%, and 5,000 Dew at the base value.
+Existing products are changed only when their prices are explicitly provisioned.
+
+Purchase screens show savings per Dew against the 10 Dew pack, calculated from
+Google Play's actual prices in the same currency. Whole percentages round down;
+missing prices, currency mismatches and packs without savings have no badge.
+Regional rounding can change the displayed percentage. `--pack 10 --apply`
+provisions only the small pack and leaves the other prices unchanged.
+
 ## Shared game progress
 
 `entity/game_progress` defines `entity.game-progress.v1` records in the

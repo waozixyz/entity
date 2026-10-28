@@ -129,16 +129,17 @@ def product(package, dew, usd_per_dew, rates_by_region):
     regions_rate, other, version = rates_by_region
     baseline_usd = Decimal(dew) * usd_per_dew
     play_usd = baseline_usd * PREMIUM[dew]
+    minimum_usd = play_usd if dew == 10 else baseline_usd
     regions = []
     for code, (currency, rate) in sorted(regions_rate.items()):
         regions.append({'regionCode': code, 'availability': 'AVAILABLE',
-                        'price': as_price(currency, clean(play_usd * rate, currency, baseline_usd * rate))})
+                        'price': as_price(currency, clean(play_usd * rate, currency, minimum_usd * rate))})
     option = {'purchaseOptionId': 'buy', 'buyOption': {'legacyCompatible': True, 'multiQuantityEnabled': False},
               'regionalPricingAndAvailabilityConfigs': regions}
     if other.get('usdPrice') and other.get('eurPrice'):
         option['newRegionsConfig'] = {'availability': 'AVAILABLE',
-                                      'usdPrice': as_price('USD', clean(play_usd * money(other['usdPrice']) / REFERENCE, 'USD', baseline_usd * money(other['usdPrice']) / REFERENCE)),
-                                      'eurPrice': as_price('EUR', clean(play_usd * money(other['eurPrice']) / REFERENCE, 'EUR', baseline_usd * money(other['eurPrice']) / REFERENCE))}
+                                      'usdPrice': as_price('USD', clean(play_usd * money(other['usdPrice']) / REFERENCE, 'USD', minimum_usd * money(other['usdPrice']) / REFERENCE)),
+                                      'eurPrice': as_price('EUR', clean(play_usd * money(other['eurPrice']) / REFERENCE, 'EUR', minimum_usd * money(other['eurPrice']) / REFERENCE))}
     body = {'packageName': package, 'productId': f'dew_{dew}',
             'listings': [{'languageCode': 'en-US', 'title': f'{dew} Dew',
                           'description': f'{dew} Dew for your Waozi account: the same Dew in every Waozi app and game.'}],

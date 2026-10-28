@@ -1,0 +1,17 @@
+---
+description: Google Play Dew pricing and visible bulk savings
+alwaysApply: true
+---
+
+# Google Play Dew pricing
+
+The owner approved this rule on 2026-10-28:
+
+- The 10 Dew pack costs the node's current Monero value plus 20%, rounded up
+  to a clean regional price.
+- Larger packs retain their premiums: 100 Dew at 15%, 500 Dew at 10%,
+  1,000 Dew at 5%, and 5,000 Dew at the base value.
+- Display savings per Dew against the actual 10 Dew Play price in the same
+  currency. Round percentages down. Show no saving for missing, invalid,
+  mixed-currency or non-discounted prices.
+- Provisioning only the new 10 Dew product leaves existing prices unchanged.

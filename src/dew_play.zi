@@ -8,6 +8,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "model"
+#import "dew_play_pricing"
 #import "kryon/play_billing"
 
 DEW_PLAY_PRODUCTS :: "dew_10,dew_100,dew_500,dew_1000,dew_5000"
@@ -36,7 +37,7 @@ DewPlay :: struct {
 }
 
 DewPlayProduct :: (id: string) -> bool {
-    return id == "dew_10" || id == "dew_100" || id == "dew_500" || id == "dew_1000" || id == "dew_5000"
+    return DewPlayPackSize(id) > 0
 }
 
 DewPlayToken :: (token: string) -> bool {
