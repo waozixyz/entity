@@ -222,8 +222,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         y += 40.0 * scale
     }
     if !profile_leaderboard_ready || page.board_count == 0 {
-        AchievementText(session, 55002, LeaderboardLabel(ifx !profile_leaderboard_ready || page.loading then "profile_updating_status" else "profile_no_leaderboard_data",
-                ifx !profile_leaderboard_ready || page.loading then "Updating…" else "No leaderboard data yet."),
+        AchievementText(session, 55002, LeaderboardLabel("profile_updating_status", "Updating…"),
             Rectangle.{x, y, width, 80.0 * scale}, font)
         return true
     }
@@ -317,8 +316,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     }
     y += 44.0 * scale
     if page.row_count == 0 {
-        AchievementText(session, 55204, LeaderboardLabel(ifx page.loading then "profile_updating_status" else "profile_no_leaderboard_data",
-            ifx page.loading then "Updating…" else "No leaderboard data yet."),
+        AchievementText(session, 55204, LeaderboardLabel("profile_updating_status", "Updating…"),
             Rectangle.{x, y, width, 64.0 * scale}, font)
         unused End(session)
         return true

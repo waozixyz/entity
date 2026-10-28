@@ -1,0 +1,70 @@
+// A completed profile read must not undo a picture selected after it began.
+#import "account_store"
+#import "model"
+#import "native_files"
+#import "recovery"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "daochi_client/async_client"
+Auth :: #import "daochi_client/auth";
+
+identity :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+CompletedRead :: (icon: s32) {
+    alias_active = true
+    alias_pending = .{}
+    alias_pending.done = true
+    alias_pending.result = cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK
+    alias_session = .{}
+    alias_session.profile_icon_known = true
+    alias_session.profile_icon = cast(s64)icon
+}
+
+#program_export
+main :: () -> s32 {
+    directory := NativeEnvironment("ENTITY_PROFILE_REFRESH_DATA")
+    if directory == "" || !NativeDirectory(directory) || !CopyCString(directory, account_root[:]) { return 1 }
+    account_profile = EntityDefault()
+    unused CopyCString(identity, account_recovery.keys.public_id[:])
+    unused CopyCString(identity, account_profile.owner_id[:])
+    account_profile.picture = 1
+    alias_owner = account_recovery.keys.public_id
+    unused CopyCString(TextUntilNul(account_profile.nodes[account_profile.preferred][:]), alias_node[:])
+    account_standalone_ready = true
+    old_icon := EntityPublicIcon(account_profile)
+    AccountStoreAliasReadStarted()
+    selected := account_profile
+    selected.picture = 7
+    if !AccountStoreSaveProfile(selected) { return 2 }
+    // Its authenticated upload finished before the older read arrived.
+    picture_dirty = false
+    picture_active = false
+    CompletedRead(old_icon)
+    AccountStoreAliasPump()
+    if account_profile.picture != 7 { return 3 }
+    // A read begun while the new picture was still uploading is stale too,
+    // even if the upload finishes before its response reaches the app.
+    selected = account_profile
+    selected.picture = 8
+    if !AccountStoreSaveProfile(selected) { return 4 }
+    AccountStoreAliasReadStarted()
+    picture_dirty = false
+    picture_active = false
+    CompletedRead(old_icon)
+    AccountStoreAliasPump()
+    if account_profile.picture != 8 { return 5 }
+    // A genuinely fresh remote read can still restore this account's choice.
+    AccountStoreAliasReadStarted()
+    CompletedRead(old_icon)
+    AccountStoreAliasPump()
+    if account_profile.picture != 1 { return 6 }
+    account_recovery.keys.public_id[0] = #char "b"
+    account_profile.owner_id = account_recovery.keys.public_id
+    account_profile.picture = 7
+    account_standalone_ready = false
+    CompletedRead(old_icon)
+    AccountStoreAliasPump()
+    if account_profile.picture != 7 || alias_active { return 7 }
+    print("Profile picture local tests: stale reads, pending uploads, fresh restore and owner change passed.\n")
+    return 0
+}

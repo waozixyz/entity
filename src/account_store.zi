@@ -50,6 +50,8 @@ alias_transfer: HttpTransfer;
 alias_active: bool;
 alias_next: s64;
 alias_sequence: s32;
+alias_picture_sequence: s32;
+alias_picture_restore: bool;
 picture_pending: PendingRequest;
 picture_session: Auth.Session;
 picture_transfer: HttpTransfer;
@@ -238,6 +240,12 @@ AliasCancel :: (context: *void) { HttpTransferCancel(*alias_transfer) }
 
 // Login already returns the node's public alias. Keep that answer with the
 // same verified account, rather than relying on a file from this device.
+AccountStoreAliasReadStarted :: () {
+    alias_sequence = account_provider.queue.sequence
+    alias_picture_sequence = picture_sequence
+    alias_picture_restore = !picture_dirty && !picture_active
+}
+
 AccountStoreAliasPump :: () {
     owner_bytes: [65]u8
     node_bytes: [256]u8
@@ -278,6 +286,7 @@ AccountStoreAliasPump :: () {
             }
         }
         if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known &&
+        alias_picture_restore && alias_picture_sequence == picture_sequence &&
         !picture_dirty && !picture_active {
             icon := alias_session.profile_icon
             choice := EntityPictureFromPublicIcon(cast(s32)icon)
@@ -298,7 +307,7 @@ AccountStoreAliasPump :: () {
     client: Client
     if !AccountStoreClient(null, *client) { return }
     alias_session = .{}
-    alias_sequence = account_provider.queue.sequence
+    AccountStoreAliasReadStarted()
     transport := AsyncTransport.{.start = AliasStart, .poll = AliasPoll, .cancel = AliasCancel}
     alias_active = BeginSession(*alias_pending, client, *alias_session, now, transport)
     if !alias_active { alias_next = now + 60 }

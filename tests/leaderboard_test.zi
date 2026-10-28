@@ -65,6 +65,11 @@ Check :: () -> s32 {
     account_profile = EntityDefault()
     unused CopyCString("http://127.0.0.1:9", account_profile.nodes[0][:])
     if !CopyCString(NativeEnvironment("ENTITY_LEADERBOARD_TEST_DATA"), account_root[:]) { return 1 }
+    // A fresh guest has a board and their own zero-score row immediately.
+    if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 0") { return 50 }
+    fresh: ProfileLeaderboard
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *fresh) || fresh.board_count != 1 ||
+    fresh.row_count != 1 || !fresh.rows[0].own || TextUntilNul(fresh.rows[0].value[:]) != "0" { return 51 }
     // A local score, saved and restored without connecting an account.
     if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 12") { return 2 }
     if EntityLeaderboardReport("arcade", "Arcade", "other/game", "Other", "levels 1") ||
@@ -73,7 +78,8 @@ Check :: () -> s32 {
     EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels ") { return 3 }
     page: ProfileLeaderboard
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 ||
-    page.selected != 0 || page.row_count != 0 || TextUntilNul(page.boards[0].title[:]) != "Shovey" { return 4 }
+    page.selected != 0 || page.row_count != 1 || !page.rows[0].own ||
+    TextUntilNul(page.rows[0].value[:]) != "12" || TextUntilNul(page.boards[0].title[:]) != "Shovey" { return 4 }
     // A retained score must disappear as soon as its game is uninstalled.
     installed = false
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 0 || page.selected != -1 { return 5 }
@@ -135,7 +141,8 @@ Check :: () -> s32 {
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 0 || page.board_count != 0 { return 13 }
     if cancelled <= before_cancel || native_leaderboard_stage != 0 { return 20 }
     account_recovery.keys.public_id = .{}
-    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 || page.row_count != 0 { return 14 }
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 ||
+    page.row_count != 1 || !page.rows[0].own || TextUntilNul(page.rows[0].value[:]) != "12" { return 14 }
     // A run board: the best run's score ranks, its level shows beside it.
     if EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run x 4210") ||

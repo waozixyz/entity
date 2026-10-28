@@ -320,7 +320,7 @@ NativeLeaderboardOwnIcon :: () -> s32 {
 
 NativeLeaderboardRows :: () {
     page := *native_leaderboard_page
-    if page.selected < 0 || TextUntilNul(page.owner[:]) == "local" { return }
+    if page.selected < 0 { return }
     if !native_leaderboard_rows_dirty {
         page.rows = native_leaderboard_rows
         page.row_count = native_leaderboard_row_count

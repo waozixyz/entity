@@ -128,6 +128,12 @@ public-identity-test: build/entity.zx build/ziran/libziran.a
 
 test: public-identity-test
 
+.PHONY: profile-refresh-test
+profile-refresh-test:
+	python3 scripts/profile-refresh-test.py
+
+test: profile-refresh-test
+
 .PHONY: profile-shared-test
 profile-shared-test:
 	LDLIBS="-l:libcurl.so.4 -lm -lpthread" $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_shared_test:main --exe -o build/profile-shared-test tests/profile_shared_test.zi

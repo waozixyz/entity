@@ -1328,6 +1328,40 @@ DewDecimal :: (units: s64, divisor: s64, suffix: string) -> string {
     return BuilderFinish(text)
 }
 
+DewFundingCode :: (address: string, x: float32, y: *float32, width: float32) {
+    wallet: Vec(u8)
+    BuilderPrint(*wallet, "monero:%", address)
+    uri := BuilderFinish(wallet)
+    side := DrawConnectionCode(uri, x, y.*, width)
+    AchievementRelease(uri)
+    if side > 0.0 { y.* += side + 16.0 * scale }
+
+    display: [256]u8
+    start: s64 = 0
+    length: s64 = 0
+    font := cast(s32)(14.0 * scale)
+    for byte, index: address {
+        probe := TextProps.{.text = address[start:index + 1], .font = font}
+        if index > start && TextWidth(session, probe) > cast(s32)(width - 16.0 * scale) {
+            display[length] = #char "\n"
+            length += 1
+            start = index
+        }
+        display[length] = byte
+        length += 1
+    }
+    props := TextProps.{.key = cast(u64)45009, .text = TextUntilNul(display[:]),
+        .bounds = Rectangle.{x + 8.0 * scale, y.*, width - 16.0 * scale, 0.0},
+        .font = font, .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapAuto}
+    props.bounds.height = cast(float32)TextHeight(session, props) + 8.0 * scale
+    Text(session, props)
+    y.* += props.bounds.height + 12.0 * scale
+    if Action(45010, Label("entity.copy_address", "Copy address"), Rectangle.{x, y.*, width, 44.0 * scale}) {
+        unused ClipboardCopy(address, 0)
+    }
+    y.* += 56.0 * scale
+}
+
 DrawDew :: () {
     session = AppSession()
     scale = AppScale()
@@ -1347,27 +1381,30 @@ DrawDew :: () {
     management_scroll = scroll.scroll_offset
     if !scroll.opened { return }
     defer { End(session) }
-    x := scroll.content.x + 24.0 * scale
     y := scroll.content.y + 16.0 * scale
     width := scroll.content.width - 48.0 * scale
+    if width > 600.0 * scale { width = 600.0 * scale }
+    x := scroll.content.x + (scroll.content.width - width) * 0.5
     if !state.host_navigation {
         if Action(45002, Label("entity.back", "Back"), Rectangle.{x, y, 76.0 * scale, 44.0 * scale}) { dew_page = false; dew_confirmation = -1 }
         y += 56.0 * scale
+        TextLine(45003, "Dew", x, y, width, 28)
+        y += 48.0 * scale
     }
-    TextLine(45003, "Dew", x, y, width, 28)
-    y += 48.0 * scale
     if !available { Paragraph(45004, Label("entity.dew_connect", "Sign in to use Dew"), x, y, width, 70.0); return }
     if busy { Paragraph(45005, Label("entity.working", "Working…"), x, y, width, 36.0); y += 42.0 * scale }
     account: DewAccount
     at := FieldAt(json, 0, "account")
     account_end := ValueEnd(json, at, 0)
     known := at >= 0 && account_end > at && DewParseAccount(json[at:account_end], TextUntilNul(owner[:]), *account)
+    balance_row := known && width >= 300.0 * scale
     if known {
         amount := DewDecimal(account.balance, DewUnits, "Dew")
-        TextLine(45006, amount, x, y, width, 24)
-        y += 48.0 * scale
+        TextLine(45006, amount, x, y, ifx balance_row then width - 128.0 * scale else width, 24)
+        if !balance_row { y += 48.0 * scale }
     }
-    if !busy && Action(45007, Label("entity.refresh", "Refresh"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("refresh", sequence) }
+    refresh_width := ifx balance_row then 112.0 * scale else width
+    if !busy && Action(45007, Label("entity.refresh", "Refresh"), Rectangle.{x + width - refresh_width, y, refresh_width, 44.0 * scale}) { DewCommand("refresh", sequence) }
     y += 56.0 * scale
     funding_allowed := !MatchLiteral(json, FieldAt(json, 0, "funding_allowed"), "false")
     if funding_allowed {
@@ -1384,10 +1421,7 @@ DrawDew :: () {
             Label("entity.dew_confirmations", "Confirmations"), funding.confirmations)
         Paragraph(45014, BuilderFinish(explanation), x, y, width, 64.0)
         y += 72.0 * scale
-        Paragraph(45009, TextUntilNul(funding.address[:]), x, y, width, 100.0)
-        y += 108.0 * scale
-        if Action(45010, Label("entity.copy_address", "Copy address"), Rectangle.{x, y, width, 44.0 * scale}) { unused ClipboardCopy(TextUntilNul(funding.address[:]), 0) }
-        y += 56.0 * scale
+        DewFundingCode(TextUntilNul(funding.address[:]), x, *y, width)
     }
     // The Google Play edition sells Dew packs through Play, priced in the buyer's currency.
     play_at := FieldAt(json, 0, "play")

@@ -22,11 +22,29 @@ identity :: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 app: AppContext;
 document: string;
 snapshot: string;
-clipboard: [65]u8;
+clipboard: [256]u8;
 pointer: PointerFrame;
 failures: s32;
 dew_enabled: bool;
 dew_snapshot: string;
+#if #defined(ENTITY_DEW_CAPTURE) {
+    // Optional screenshots contain only the synthetic identity below.
+    capture_pixels: [960000]u32;
+    CaptureDew :: (path: string) {
+        width := cast(s32)app.bounds.width
+        height := cast(s32)1000
+        Expect(PixmapBeginInto(cast(u32)0xeef4f2, width, height, capture_pixels[:]), "private capture surface")
+        Frame()
+        output := OpenReplace(path)
+        Expect(output.valid, "private capture file")
+        if output.valid {
+            pixels := BytesFromPointer(cast(*u8)*capture_pixels[0], cast(u64)(width * height * 4))
+            Expect(Write(output, pixels) == pixels.count, "private synthetic frame saved")
+            unused CloseFile(output)
+        }
+        PixmapEndInto()
+    }
+}
 
 Allows :: (context: *void, name: string) -> bool {
     return (dew_enabled && name == "entity.dew") || name == "ReadStoreHost" || name == "WriteStoreHost" ||
@@ -188,6 +206,47 @@ main :: () -> s32 {
         Expect((FindKey(45013) >= 0) == state.show_storage, "dedicated Dew page hides game storage plans")
         Command("back")
     }
+    // The same hosted page is used by desktop games and Inbe. Its payment
+    // address must be scannable, fully copyable and confined to this owner.
+    address := "41111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    funding: Vec(u8)
+    BuilderPrint(*funding, "% ,\"funding\":{\"account_id\":\"%\",\"asset_id\":\"waozi:token\",\"network\":\"mainnet\",\"address\":\"%\",\"rate\":{\"xmr_atomic_units\":1000000000000,\"token_units\":10000000000},\"confirmations_required\":10,\"minimum_atomic_amount\":100000000}}",
+        dew_snapshot[:dew_snapshot.count - 1], identity, address)
+    EntityFree(dew_snapshot)
+    dew_snapshot = BuilderFinish(funding)
+    state.host_navigation = true
+    state.show_storage = false
+    for size: cast(s32)0..1 {
+        app.bounds = Rectangle.{0.0, 0.0, ifx size == 0 then 960.0 else 390.0, 1100.0}
+        EntityFree(document)
+        document = EntityEncode(state)
+        Command("reload")
+        Command("dew")
+        for frame: 0..15 { Frame() }
+        Expect(FindKey(45003) < 0, "hosted Dew does not repeat the host title")
+        code := FindKey(19000)
+        Expect(code >= 0, "Monero funding shows its QR code")
+        if code >= 0 {
+            bounds := TreeNodeAt(app.session, code).bounds
+            Expect(bounds.width >= 200.0 && bounds.x >= 0.0 && bounds.x + bounds.width <= app.bounds.width,
+                "payment QR is large and fits desktop and narrow views")
+        }
+        copy := FindKey(45010)
+        Expect(copy >= 0 && TreeNodeAt(app.session, copy).bounds.width <= 600.0,
+            "desktop Dew uses a readable centered column")
+        #if #defined(ENTITY_DEW_CAPTURE) {
+            CaptureDew(ifx size == 0 then "backup/account-ux/dew-desktop.argb" else "backup/account-ux/dew-narrow.argb")
+        }
+        ClickKey(45010)
+        Expect(TextUntilNul(clipboard[:]) == address, "copy keeps the complete unwrapped Monero address")
+        Command("back")
+    }
+    account.public_id[0] = #char "a"
+    EntityFree(snapshot)
+    snapshot = ManagementEncode(account)
+    Command("dew")
+    for frame: 0..15 { Frame() }
+    Expect(FindKey(19000) < 0, "another account never sees the previous payment QR")
     EntityFree(dew_snapshot)
     HostedAppClose(*app.app)
     unused SessionClose(app.session)
