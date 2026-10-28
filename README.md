@@ -61,6 +61,12 @@ QR/device connection, explicit merge/replace choices, sync status/controls where
 the host supports them, logout, and confirmed remote deletion. Hosts expose only
 capabilities they implement. Extension cards can include a summary and badge.
 
+Public IDs use the full text where the host font and available width allow it.
+Pressing an ID opens a dialog with its scannable QR code and complete text;
+pressing that text or Copy copies the full public ID. Narrow views shorten
+only the inline label. The dialog follows the current account and closes
+when that account changes.
+
 In the browser every waozi.xyz site shares one sign-in. A page that loads
 https://account.waozi.xyz/share.js and calls `WaoziAccount.attach(Module)`
 before starting gives Entity the shared key as `Module.sharedAccountKey`; a

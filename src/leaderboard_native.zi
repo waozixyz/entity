@@ -66,18 +66,7 @@ NativeBoardLabels :: (score: *NativeGameScore) {
     if score.run { unused CopyCString("Level", score.board.average[:]) }
 }
 
-// A whole number from 0 to 100000, as games report them.
-LeaderboardNumber :: (text: string, value: *s64) -> bool {
-    if text.count == 0 { return false }
-    number: s64 = 0
-    for byte: text {
-        if byte < #char "0" || byte > #char "9" || number > 100000 { return false }
-        number = number * 10 + cast(s64)(byte - #char "0")
-    }
-    if number > 100000 { return false }
-    value.* = number
-    return true
-}
+
 
 LeaderboardNameValid :: (name: string, maximum: s64) -> bool {
     if name.count == 0 || name.count > maximum { return false }
@@ -180,18 +169,11 @@ NativeLeaderboardOwner :: () {
 // run: the level it reached and its score).
 EntityLeaderboardReport :: (app: string, app_title: string, game: string, title: string, request: string) -> bool {
     if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) { return false }
-    value: s64 = 0
-    level: s64 = 0
-    run := false
-    if request.count > 7 && request[:7] == "levels " {
-        if !LeaderboardNumber(request[7:], *value) { return false }
-    } else if request.count > 4 && request[:4] == "run " {
-        rest := request[4:]
-        space: s64 = -1
-        for byte, index: rest { if byte == #char " " && space < 0 { space = index } }
-        if space <= 0 || !LeaderboardNumber(rest[:space], *level) || !LeaderboardNumber(rest[space + 1:], *value) { return false }
-        run = true
-    } else { return false }
+    report: ProfileScore
+    if !ProfileScoreReport(request, *report) { return false }
+    value := report.value
+    level := report.level
+    run := report.run
     NativeLeaderboardOwner()
     index: s32 = -1
     for item: cast(s32)0..native_score_count - 1 {

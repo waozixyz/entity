@@ -10,6 +10,43 @@ LEADERBOARD_SERVICE :: "entity.leaderboard"
 LEADERBOARD_BOARDS :: 32
 LEADERBOARD_ROWS :: 64
 
+// Game hosts accept one score report format, independently of their storage.
+ProfileScore :: struct {
+    value: s64
+    level: s64
+    run: bool
+}
+
+ProfileScoreNumber :: (text: string, output: *s64) -> bool {
+    if text.count == 0 { return false }
+    value: s64 = 0
+    for byte: text {
+        if byte < #char "0" || byte > #char "9" || value > 100000 { return false }
+        value = value * 10 + cast(s64)(byte - #char "0")
+    }
+    if value > 100000 { return false }
+    output.* = value
+    return true
+}
+
+ProfileScoreReport :: (request: string, output: *ProfileScore) -> bool {
+    score: ProfileScore
+    if request.count > 7 && request[:7] == "levels " {
+        if !ProfileScoreNumber(request[7:], *score.value) { return false }
+    } else if request.count > 4 && request[:4] == "run " {
+        rest := request[4:]
+        space: s64 = -1
+        for byte, index: rest { if byte == #char " " && space < 0 { space = index } }
+        if space <= 0 || !ProfileScoreNumber(rest[:space], *score.level) ||
+        !ProfileScoreNumber(rest[space + 1:], *score.value) { return false }
+        score.run = true
+    } else {
+        return false
+    }
+    output.* = score
+    return true
+}
+
 ProfileBoard :: struct {
     app: [97]u8
     app_title: [129]u8

@@ -22,6 +22,7 @@
 #import "text_props"
 #import "text_align"
 #import "text_widget"
+#import "kryon/text_measure"
 #import "text_input_props"
 #import "text_field_widget"
 #import "button_props"
@@ -39,6 +40,8 @@
 #import "toggle_props"
 #import "kryon/svg_icon_props"
 #import "kryon/svg_icon_widget"
+#import "kryon/modal_props"
+#import "kryon/modal_frame_widget"
 
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: EntityState;
@@ -64,6 +67,10 @@ account_short_id: [16]u8;
 qr_code: QrCode;
 qr_text: [1024]u8;
 qr_valid: bool;
+public_id_open: bool;
+public_id_owner: [65]u8;
+public_id_copied: bool;
+public_id_scroll: s32;
 
 Label :: (key: string, fallback: string) -> string {
     value := AppLocale(key)
@@ -144,7 +151,12 @@ PollManagement :: () {
     result_changed := TextUntilNul(next.result[:]) != TextUntilNul(management.result[:])
     owner_changed := TextUntilNul(next.public_id[:]) != TextUntilNul(management.public_id[:])
     management = next
-    if owner_changed && loaded { loaded = false; fields = .{} }
+    if owner_changed && loaded {
+        loaded = false
+        fields = .{}
+        public_id_open = false
+        public_id_copied = false
+    }
     if !fields[3].focused { account_alias = management.alias }
     if management.completed > management_seen || (result_changed && management.completed > 0) {
         management_seen = management.completed
@@ -414,7 +426,10 @@ SignInChoicesHeight :: () -> float32 {
 // The profile's account entry: a card of sign-in choices, or one row.
 AccountSummary :: (x: float32, y: *float32, width: float32) {
     if management.account {
-        if ListRow(702, Label("entity.account", "Account"), AccountName(), x, y, width) { OpenManagement(PAGE_ACCOUNT) }
+        alias := ifx management.alias[0] != 0 then AccountName() else ""
+        if ListRow(702, Label("entity.account", "Account"), alias, x, y, width) { OpenManagement(PAGE_ACCOUNT) }
+        PublicIdLine(705, Rectangle.{x, y.*, width, 44.0 * scale})
+        y.* += 56.0 * scale
         return
     }
     padding := 16.0 * scale
@@ -429,6 +444,83 @@ AccountSummary :: (x: float32, y: *float32, width: float32) {
     top += 56.0 * scale
     SignInChoices(inner, *top, width - padding * 2.0)
     y.* += height + 12.0 * scale
+}
+
+// Use the full public identifier whenever the actual host font can fit it.
+PublicIdLine :: (id: s32, bounds: Rectangle) {
+    identity := TextUntilNul(management.public_id[:])
+    text_bounds := bounds
+    text_bounds.width -= 48.0 * scale
+    props := TextProps.{.key = cast(u64)(id + 1000), .text = identity,
+        .bounds = text_bounds, .font = cast(s32)(14.0 * scale),
+        .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis}
+    if TextWidth(session, props) > cast(s32)text_bounds.width { props.text = ShortId(identity) }
+    Text(session, props)
+    if Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+            .bounds = text_bounds, .label = Label("entity.public_id", "Public ID"), .invisible = true}) != 0 {
+        public_id_owner = management.public_id
+        public_id_copied = false
+        public_id_scroll = 0
+        public_id_open = true
+        fields = .{}
+    }
+    if Button(session, ButtonProps.{.key = cast(u64)(id + 1), .id = id + 1,
+            .bounds = Rectangle.{bounds.x + bounds.width - 44.0 * scale, bounds.y, 44.0 * scale, 44.0 * scale},
+            .label = Label(ifx public_id_copied then "entity.copied" else "entity.copy_id", ifx public_id_copied then "Copied" else "Copy public ID"), .icon_only = true,
+            .icon_shape = ifx public_id_copied then "S1.8rr:M5 12L10 17L20 7" else "S1.6rr:M8 8H20V20H8ZM16 8V4H4V16H8",
+            .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost}) != 0 {
+        public_id_copied = ClipboardCopy(identity, 0)
+    }
+}
+
+PublicIdModal :: () {
+    if !public_id_open { return }
+    identity := TextUntilNul(public_id_owner[:])
+    if !management.account || identity != TextUntilNul(management.public_id[:]) {
+        public_id_open = false
+        return
+    }
+    area := AppBounds()
+    width := area.width - 32.0 * scale
+    if width > 680.0 * scale { width = 680.0 * scale }
+    height := area.height - 24.0 * scale
+    if height > 520.0 * scale { height = 520.0 * scale }
+    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)19500, .id = 19500,
+            .title = Label("entity.public_id", "Public ID"),
+            .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
+            .scale = scale, .has_right_action = true, .right_label = Label("entity.done", "Done")})
+    if modal.dismissed || modal.right_clicked { public_id_open = false }
+    if !modal.opened { return }
+    content := modal.layout.content
+    props := TextProps.{.key = cast(u64)19502, .text = identity,
+        .bounds = Rectangle.{0.0, 0.0, content.width - 16.0 * scale, 0.0},
+        .font = cast(s32)(15.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapAuto}
+    id_height := cast(float32)TextHeight(session, props) + 16.0 * scale
+    if id_height < 44.0 * scale { id_height = 44.0 * scale }
+    // Short landscape screens scroll; the complete ID never truncates.
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)19501, .bounds = content,
+            .content_height = cast(s32)(336.0 * scale + id_height), .scroll_offset = public_id_scroll, .scale = scale})
+    public_id_scroll = scroll.scroll_offset
+    if scroll.opened {
+        y := scroll.content.y
+        side := DrawConnectionCode(identity, scroll.content.x, y, scroll.content.width)
+        y += side + 16.0 * scale
+        props.bounds = Rectangle.{scroll.content.x + 8.0 * scale, y, scroll.content.width - 16.0 * scale, id_height}
+        Text(session, props)
+        if Button(session, ButtonProps.{.key = cast(u64)19503, .id = 19503,
+                .bounds = props.bounds, .label = identity, .invisible = true}) != 0 {
+            public_id_copied = ClipboardCopy(identity, 0)
+        }
+        y += id_height
+        if Action(19504, Label(ifx public_id_copied then "entity.copied" else "entity.copy_id",
+            ifx public_id_copied then "Copied" else "Copy public ID"),
+            Rectangle.{scroll.content.x, y, scroll.content.width, 44.0 * scale}) {
+            public_id_copied = ClipboardCopy(identity, 0)
+        }
+        unused End(session)
+    }
+    unused End(session)
+    AppKeyboard(false)
 }
 
 // Connection codes are drawn as rectangles worked out once per code, so a
@@ -520,23 +612,13 @@ AccountPage :: (x: float32, y: *float32, width: float32) {
                 .fill = ThemeOr("surface", 0x2a4540ff, 0xeaf1eaff)})
         Image(session, Picture(state.picture, Rectangle.{center - 36.0 * scale, y.* + 4.0 * scale, 72.0 * scale, 72.0 * scale}))
         y.* += 92.0 * scale
-        Text(session, TextProps.{.key = cast(u64)812, .text = AccountName(),
-                .bounds = Rectangle.{x, y.*, width, 36.0 * scale}, .font = cast(s32)(26.0 * scale),
-                .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
-        y.* += 40.0 * scale
-        // The short ID is the title until an alias is set; never twice.
-        copy_x := center - 18.0 * scale
-        if management.alias[0] != cast(u8)0 {
-            Muted(813, ShortId(TextUntilNul(management.public_id[:])), x, y.* + 6.0 * scale, width * 0.5 + 40.0 * scale, 14, TextAlign.TextAlignEnd)
-            copy_x = center + 46.0 * scale
+        if management.alias[0] != 0 {
+            Text(session, TextProps.{.key = cast(u64)812, .text = AccountName(),
+                    .bounds = Rectangle.{x, y.*, width, 36.0 * scale}, .font = cast(s32)(26.0 * scale),
+                    .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+            y.* += 40.0 * scale
         }
-        if Button(session, ButtonProps.{.key = cast(u64)814, .id = 814,
-                .bounds = Rectangle.{copy_x, y.*, 36.0 * scale, 36.0 * scale},
-                .label = Label("entity.copy_id", "Copy public ID"), .icon_only = true,
-                .icon_shape = "S1.6rr:M8 8H20V20H8ZM16 8V4H4V16H8",
-                .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisGhost}) != 0 {
-            if ClipboardCopy(TextUntilNul(management.public_id[:]), 0) { notice = Label("entity.copied", "Copied") }
-        }
+        PublicIdLine(813, Rectangle.{x, y.*, width, 44.0 * scale})
         y.* += 52.0 * scale
         if CanManage(ACCOUNT_SYNC) {
             TextLine(815, Label("entity.sync", "Sync"), x + 4.0 * scale, y.* + 10.0 * scale, width - 80.0 * scale, 16)
@@ -759,7 +841,7 @@ DrawAccount :: () {
     if scale <= 0.0 { scale = 1.0 }
     area := AppBounds()
     width := area.width - 40.0 * scale
-    if width > 480.0 * scale { width = 480.0 * scale }
+    if width > 680.0 * scale { width = 680.0 * scale }
     if width < 160.0 * scale { return }
     Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
             .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
@@ -795,6 +877,7 @@ DrawAccount :: () {
     account_height = y - top + 24.0 * scale
     unused End(session)
     AppKeyboard(fields[2].focused || fields[3].focused || fields[4].focused || fields[5].focused)
+    PublicIdModal()
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
@@ -883,7 +966,7 @@ Draw :: () {
     if scale <= 0.0 { scale = 1.0 }
     area := AppBounds()
     width := area.width - 40.0 * scale
-    if width > 480.0 * scale { width = 480.0 * scale }
+    if width > 680.0 * scale { width = 680.0 * scale }
     if width < 160.0 * scale { return }
     inline_dew := AppSupports("entity.dew")
     if inline_dew { ProfileDewRead() }
@@ -997,11 +1080,17 @@ Draw :: () {
     profile_height = y - top + 24.0 * scale
     unused End(session)
     AppKeyboard(fields[0].focused || fields[1].focused)
+    PublicIdModal()
 }
 
 #program_export
 Main :: () -> s64 {
     mode := AppMode()
+    if mode == APP_COMMAND && AppCommand() == "back" && public_id_open {
+        public_id_open = false
+        AppReply("handled")
+        return 0
+    }
     if mode == APP_IDENTIFY {
         AppIdentity("entity")
         AppDescribe("Entity", "S1.6rr:M12 12A4 4 0 1 0 12 4A4 4 0 0 0 12 12ZM4 22V20A8 8 0 0 1 20 20V22")
@@ -1018,6 +1107,7 @@ Main :: () -> s64 {
     if mode == APP_FRAME { Draw() }
     if mode == APP_COMMAND && AppCommand() == "reload" {
         loaded = false
+        public_id_open = false
         fields = .{}
     }
     if mode == APP_COMMAND && AppCommand() == "account" { ManagementHome(PAGE_ACCOUNT) }

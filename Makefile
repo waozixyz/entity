@@ -100,3 +100,10 @@ game-progress-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY build/game-progress-test/test
 
 test: game-progress-test
+
+.PHONY: public-identity-test
+public-identity-test: build/entity.zx build/ziran/libziran.a
+	LDLIBS='$(abspath build/ziran/libziran.a) -lpthread' $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry public_identity_test:main --exe -o build/public-identity-test tests/public_identity_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/public-identity-test/public_identity_test
+
+test: public-identity-test
