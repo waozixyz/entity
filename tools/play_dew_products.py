@@ -89,7 +89,9 @@ def clean(amount, currency='USD', minimum=Decimal(0)):
         step = max(Decimal(1), Decimal(10) ** (amount.adjusted() - 1))
         ending = min(Decimal(100), step / 10) if step >= 10 else Decimal(0)
     else:
-        step = Decimal('0.10') if amount < 100 else Decimal(10) ** (amount.adjusted() - 2)
+        # Try whole-unit .99 endings first; use finer .x9 endings only
+        # when a whole-unit ending would distort the intended premium.
+        step = max(Decimal(1), Decimal(10) ** (amount.adjusted() - 2))
         ending = Decimal('0.01')
     quantum = Decimal(1) if currency in WHOLE_CURRENCIES else Decimal('0.01')
     while True:

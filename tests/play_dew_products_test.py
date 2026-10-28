@@ -53,6 +53,13 @@ class ProvisionTest(unittest.TestCase):
                 else:
                     self.assertEqual(price * 100, (price * 100).to_integral_value())
 
+    def test_familiar_endings_preserve_the_target_premium(self):
+        for amount, expected in [('6.91', '6.99'), ('33.07', '32.99'),
+                                 ('63.13', '62.99'), ('0.50', '0.49')]:
+            self.assertEqual(products.clean(Decimal(amount)), Decimal(expected))
+        self.assertEqual(products.clean(Decimal('300'), minimum=Decimal('300')),
+                         Decimal('300.99'))
+
 
 if __name__ == '__main__':
     unittest.main()
