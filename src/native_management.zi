@@ -68,6 +68,7 @@ ManagementProvider :: struct {
 ProviderState :: (provider: *ManagementProvider) -> Management {
     state: Management
     if provider.snapshot != null { provider.snapshot(provider.context, *state) }
+    state.alias_pricing = true
     state.busy = state.busy || provider.asynchronous
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     client: Client

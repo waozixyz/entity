@@ -46,6 +46,7 @@ Management :: struct {
     message: [256]u8
     public_id: [65]u8
     alias: [40]u8
+    alias_pricing: bool
     alias_offer: AliasOffer
     alias_retry: bool
     status: [256]u8
@@ -179,7 +180,7 @@ ManagementEncode :: (state: Management) -> string {
         BuilderPrint(*out, ",\"%\":", names[index])
         EntityQuote(*out, strings[index])
     }
-    BuilderPrint(*out, ",\"alias_retry\":%,\"alias_offer\":", state.alias_retry)
+    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry)
     AliasOfferAppend(*out, state.alias_offer)
     BuilderPrint(*out, ",\"nodes\":[")
     for index: 0..state.node_count - 1 {
@@ -242,6 +243,7 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
         offer_end := Json.ValueEnd(text, offer_at, 0)
         if offer_end <= offer_at || !AliasOfferParse(text[offer_at:offer_end], "", *state.alias_offer) { return false }
     }
+    state.alias_pricing = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_pricing"), "true")
     state.alias_retry = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_retry"), "true")
     positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])

@@ -59,12 +59,17 @@ main :: () -> s32 {
     AliasPaymentAction(true, 0, 250000000, true) != 3 ||
     AliasPaymentAction(false, 0, 250000000, true) != 3 { return 11 }
     snapshot: Management
+    snapshot.alias_pricing = true
     if !AliasOfferParse(valid, "river", *snapshot.alias_offer) { return 12 }
     snapshot.alias_retry = true
     text := ManagementEncode(snapshot)
     defer { EntityFree(text) }
     decoded: Management
-    if !ManagementDecode(text, *decoded) || !decoded.alias_retry || !decoded.alias_offer.known ||
+    if !ManagementDecode(text, *decoded) || !decoded.alias_pricing || !decoded.alias_retry || !decoded.alias_offer.known ||
     decoded.alias_offer.units != 250000000 || TextUntilNul(decoded.alias_offer.alias[:]) != "river" { return 13 }
+    legacy: Management
+    legacy_text := ManagementEncode(legacy)
+    defer { EntityFree(legacy_text) }
+    if !ManagementDecode(legacy_text, *decoded) || decoded.alias_pricing { return 14 }
     return 0
 }

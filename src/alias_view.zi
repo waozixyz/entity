@@ -55,6 +55,12 @@ AliasPage :: (x: float32, y: *float32, width: float32) {
     y.* += 36.0 * scale
     normalized: [40]u8
     alias := AliasNormalize(TextUntilNul(account_alias[:]), normalized[:])
+    if !management.alias_pricing {
+        // Older hosts keep their existing alias form. Their node remains
+        // responsible for rejecting premium changes without a purchase.
+        if WideButton(827, Label("entity.save", "Save"), x, y, width, true) { Manage("alias", alias) }
+        return
+    }
     if alias != TextUntilNul(alias_observed[:]) {
         unused CopyCString(alias, alias_observed[:])
         alias_delay = 18
