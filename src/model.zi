@@ -65,6 +65,8 @@ EntityState :: struct {
     host_navigation: bool
     controls: s32
     profile_sections: s32
+    // Host capability: games keep Dew without storage controls.
+    show_storage: bool
     nodes: [ENTITY_NODE_LIMIT][256]u8
     node_count: s32
     preferred: s32
@@ -77,6 +79,7 @@ EntityDefault :: () -> EntityState {
         .pictures = 268435455,
         .controls = ENTITY_IDENTITY | ENTITY_NODES,
         .profile_sections = 31,
+        .show_storage = true,
         .node_count = 1}
     unused CopyCString(ENTITY_DEFAULT_NODE, state.nodes[0][:])
     return state
@@ -117,6 +120,7 @@ EntityEncode :: (state: EntityState) -> string {
     BuilderPrint(*out, ",\"picture_kind\":%,\"abstract_picture\":%", state.picture_kind, state.abstract_picture)
     BuilderPrint(*out, ",\"host_navigation\":%", ifx state.host_navigation then 1 else 0)
     BuilderPrint(*out, ",\"profile_sections\":%", state.profile_sections)
+    BuilderPrint(*out, ",\"show_storage\":%", ifx state.show_storage then 1 else 0)
     BuilderPrint(*out, ",\"picture\":%,\"pictures\":%,\"theme\":%,\"accent\":%,\"material\":%,\"controls\":%,\"preferred\":%,\"nodes\":[",
         state.picture, state.pictures, state.theme, state.accent, ifx state.material then 1 else 0, state.controls, state.preferred)
     for index: 0..state.node_count - 1 {
@@ -180,6 +184,10 @@ EntityDecode :: (text: string, output: *EntityState) -> bool {
     sections_at := Json.FieldAt(text, 0, "profile_sections")
     state.profile_sections = ifx sections_at < 0 then 31 else EntityNumber(text, sections_at, 0, 31)
     if state.profile_sections < 0 { return false }
+    storage_at := Json.FieldAt(text, 0, "show_storage")
+    storage := ifx storage_at < 0 then 1 else EntityNumber(text, storage_at, 0, 1)
+    if storage < 0 { return false }
+    state.show_storage = storage == 1
     if state.picture < 0 { return false }
     kind_at := Json.FieldAt(text, 0, "picture_kind")
     abstract_at := Json.FieldAt(text, 0, "abstract_picture")
@@ -260,4 +268,18 @@ EntityPictureFromPublicIcon :: (icon: s32) -> s32 {
     legacy: [12]s32 = .[-1, 1, 2, 5, 12, 13, 14, 21, 22, 23, 24, 24]
     if icon >= 0 && icon < 12 { return legacy[icon] }
     return -1
+}
+
+EntityAbstractFromPublicIcon :: (icon: s32) -> s32 {
+    return ifx icon >= 127 && icon <= 129 then icon - 127 else -1
+}
+
+EntityAbstractPictureAsset :: (index: s32) -> string {
+    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
+    return names[index]
+}
+
+EntityPublicIcon :: (state: EntityState) -> s32 {
+    if state.picture_kind == 1 { return 127 + state.abstract_picture }
+    return ifx state.picture < 25 then state.picture + 41 else state.picture - 25 + 124
 }

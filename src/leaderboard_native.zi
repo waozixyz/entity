@@ -280,7 +280,7 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
     game_icon.value == cast(float64)cast(s32)game_icon.value { row.game_icon = cast(s32)game_icon.value }
     icon := ReadNumber(document, FieldAt(document, at, "profile_icon"))
     row.icon = 0
-    if icon.valid && icon.value >= 0 && icon.value <= 126 &&
+    if icon.valid && icon.value >= 0 && icon.value <= 129 &&
     icon.value == cast(float64)cast(s32)icon.value { row.icon = cast(s32)icon.value }
     if row.icon == 0 {
         friends := TextUntilNul(native_leaderboard_friends[:])
@@ -292,7 +292,7 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
             if friend[0] == 0 { unused ReadStringText(friends, FieldAt(friends, item, "id"), friend[:]) }
             if TextUntilNul(friend[:]) != TextUntilNul(id[:]) { continue }
             picture := ReadNumber(friends, FieldAt(friends, item, "profile_icon"))
-            if picture.valid && picture.value >= 0 && picture.value <= 126 &&
+            if picture.valid && picture.value >= 0 && picture.value <= 129 &&
             picture.value == cast(float64)cast(s32)picture.value { row.icon = cast(s32)picture.value }
             break
         }
@@ -314,8 +314,8 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
 }
 
 NativeLeaderboardOwnIcon :: () -> s32 {
-    if account_profile.picture_kind != 0 || account_profile.picture < 0 || account_profile.picture > 27 { return 0 }
-    return ifx account_profile.picture < 25 then account_profile.picture + 41 else account_profile.picture - 25 + 124
+    if account_profile.picture_kind == 2 { return 0 }
+    return EntityPublicIcon(account_profile)
 }
 
 NativeLeaderboardRows :: () {

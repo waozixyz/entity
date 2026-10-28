@@ -186,7 +186,12 @@ Check :: () -> s32 {
     invalid_appearance := ProfileLeaderboardEncode(*page)
     if ProfileLeaderboardDecode(invalid_appearance, *decoded) { return 38 }
     EntityFree(invalid_appearance)
-    page.rows[0].game_icon = 6; page.rows[0].icon = 127
+    page.rows[0].game_icon = 6; page.rows[0].icon = 129
+    abstract := ProfileLeaderboardEncode(*page)
+    abstract_page: ProfileLeaderboard
+    if !ProfileLeaderboardDecode(abstract, *abstract_page) || abstract_page.rows[0].icon != 129 { return 42 }
+    EntityFree(abstract)
+    page.rows[0].icon = 130
     invalid_icon := ProfileLeaderboardEncode(*page)
     if ProfileLeaderboardDecode(invalid_icon, *decoded) { return 39 }
     EntityFree(invalid_icon)

@@ -87,8 +87,6 @@ AliasPage :: (x: float32, y: *float32, width: float32) {
     }
     if offer.known && TextUntilNul(offer.alias[:]) == alias && valid && !busy {
         if offer.owned {
-            Muted(828, Label("entity.alias_current", "This is your current username. Keeping it is free."), x, y.*, width)
-            y.* += 52.0 * scale
             if WideButton(827, Label("entity.done", "Done"), x, y, width, true) { unused ManagementBack() }
         } else if !offer.available {
             Muted(828, Label("entity.alias_taken", "That username is already taken."), x, y.*, width)

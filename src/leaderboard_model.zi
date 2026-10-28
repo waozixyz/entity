@@ -175,7 +175,7 @@ ProfileLeaderboardDecode :: (document: string, output: *ProfileLeaderboard) -> b
         icon_at := FieldAt(document, item, "icon")
         if icon_at >= 0 {
             icon := ReadNumber(document, icon_at)
-            if !icon.valid || icon.value < 0 || icon.value > 126 ||
+            if !icon.valid || icon.value < 0 || icon.value > 129 ||
             icon.value != cast(float64)cast(s32)icon.value { return false }
             row.icon = cast(s32)icon.value
         }

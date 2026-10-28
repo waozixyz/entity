@@ -43,20 +43,21 @@ LeaderboardLabel :: (key: string, fallback: string) -> string {
 
 ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rectangle) {
     picture := EntityPictureFromPublicIcon(icon)
-    if picture < 0 {
+    abstract := EntityAbstractFromPublicIcon(icon)
+    if picture < 0 && abstract < 0 {
         SvgIcon(session, SvgIconProps.{.bounds = bounds,
             .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6A4 4 0 1 1 8 6A4 4 0 1 1 16 6",
             .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)})
         return
     }
     root := AppService("entity.assets", "")
-    asset := ifx picture == 9 then "assets/entity/flowers.png" else "assets/entity/pfp.png"
+    asset := ifx abstract >= 0 then EntityAbstractPictureAsset(abstract) else ifx picture == 9 then "assets/entity/flowers.png" else "assets/entity/pfp.png"
     out: Vec(u8)
     if root == "" { BuilderPrint(*out, "%", asset) }
     else { BuilderPrint(*out, "%/%", root, asset) }
     path := BuilderFinish(out)
     Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
-        .source = ifx picture == 9 then Rectangle.{} else Rectangle.{cast(float32)(picture % 5) * 64.0,
+        .source = ifx abstract >= 0 || picture == 9 then Rectangle.{} else Rectangle.{cast(float32)(picture % 5) * 64.0,
             cast(float32)(picture / 5) * 64.0, 64.0, 64.0},
         .fit = ImageFit.ImageFitContain, .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     AchievementRelease(path)

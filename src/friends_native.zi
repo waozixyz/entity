@@ -90,9 +90,14 @@ EntityFriendsAnswer :: (request: string) -> string {
     BuilderPrint(*out, ",\"ready\":%,\"busy\":%,\"error\":%,\"list\":%,\"requests\":%}",
         account_standalone_ready, friend_stage != 0 || friend_refresh || friend_queued, friend_error,
         ifx friend_list[0] == 0 then "{\"friends\":[]}" else TextUntilNul(friend_list[:]),
-        ifx friend_requests[0] == 0 then "{\"requests\":[]}" else TextUntilNul(friend_requests[:]))
+        ifx friend_requests[0] == 0 then "{\"incoming\":[],\"outgoing\":[]}" else TextUntilNul(friend_requests[:]))
     friend_answer = BuilderFinish(out)
     return friend_answer
+}
+
+FriendsArrayValid :: (document: string, key: string) -> bool {
+    at := FieldAt(document, 0, key)
+    return at >= 0 && (document[at] == #char "[" || MatchLiteral(document, at, "null"))
 }
 
 EntityFriendsPump :: () {
@@ -103,9 +108,9 @@ EntityFriendsPump :: () {
         valid := friend_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && friend_pending.status >= 200 && friend_pending.status < 300
         document := TextUntilNul(friend_response[:])
         if friend_stage <= 2 {
-            key := ifx friend_stage == 1 then "friends" else "requests"
-            at := FieldAt(document, 0, key)
-            valid = valid && Space(document, ValueEnd(document, 0, 0)) == document.count && at >= 0 && document[at] == #char "["
+            valid = valid && Space(document, ValueEnd(document, 0, 0)) == document.count
+            if friend_stage == 1 { valid = valid && FriendsArrayValid(document, "friends") }
+            else { valid = valid && FriendsArrayValid(document, "incoming") && FriendsArrayValid(document, "outgoing") }
         }
         friend_error = friend_error || !valid
         if valid && friend_stage == 1 { friend_list = friend_response }

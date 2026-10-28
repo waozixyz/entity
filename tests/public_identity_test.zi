@@ -25,9 +25,11 @@ snapshot: string;
 clipboard: [65]u8;
 pointer: PointerFrame;
 failures: s32;
+dew_enabled: bool;
+dew_snapshot: string;
 
 Allows :: (context: *void, name: string) -> bool {
-    return name == "ReadStoreHost" || name == "WriteStoreHost" ||
+    return (dew_enabled && name == "entity.dew") || name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppServiceHost" || name == "AppLocaleHost" || name == "ClipboardCopyHost" || name == "entity.management";
 }
 Answer :: (text: string) -> HostValue {
@@ -38,7 +40,8 @@ Services :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
-        result.* = Answer(ifx AppArgumentText(arguments[0]) == "entity.management" then snapshot else "")
+        service := AppArgumentText(arguments[0])
+        result.* = Answer(ifx service == "entity.management" then snapshot else ifx service == "entity.dew" then dew_snapshot else "")
         return 1
     }
     if name == "AppLocaleHost" && count == 1 { result.* = Answer(AppArgumentText(arguments[0])); return 1 }
@@ -124,10 +127,8 @@ main :: () -> s32 {
     Frame()
     ClickKey(9)
     Expect(FindKey(76000) >= 0, "clicking the profile picture opens the picker modal")
-    Expect(Find("Abstract") >= 0 && Find("Classic") >= 0 && Find("Avatar") >= 0, "picker has all three picture families")
-    ClickKey(76102)
-    Expect(FindKey(76200) >= 0, "Avatar tab offers the shared 3D avatar")
-    Expect(FindKey(70000) >= 0, "Avatar tab renders the illustrated portrait")
+    Expect(Find("Abstract") >= 0 && Find("Classic") >= 0 && Find("Avatar") < 0, "picker offers pictures with Avatar hidden")
+    Expect(FindKey(76102) < 0 && FindKey(76200) < 0 && FindKey(70000) < 0, "Avatar controls are absent")
     Command("back")
     Expect(FindKey(76000) < 0, "Back dismisses the picture modal")
     Expect(Find("0123…cdef") >= 0 && Find(identity) < 0, "Profile keeps the public ID compact even on a wide screen")
@@ -163,6 +164,31 @@ main :: () -> s32 {
     snapshot = ManagementEncode(account)
     for frame: 0..15 { Frame() }
     Expect(FindKey(19500) < 0, "account changes dismiss the old ID modal")
+    account.public_id[0] = #char "0"
+    EntityFree(snapshot)
+    snapshot = ManagementEncode(account)
+    dew_enabled = true
+    dew: Vec(u8)
+    BuilderPrint(*dew, "{\"owner\":\"%\",\"available\":true,\"busy\":false,\"account\":{\"account_id\":\"%\",\"asset_id\":\"waozi:token\",\"units_per_dew\":1000000,\"free_bytes\":10485760,\"used_bytes\":4096,\"enabled\":true,\"plan\":{\"balance\":12000000,\"limit_bytes\":10485760,\"expires_at\":0,\"size\":\"free\"},\"plans\":[{\"size\":\"1gb\",\"limit_bytes\":1073741824,\"monthly_units\":1000000,\"yearly_units\":10000000},{\"size\":\"5gb\",\"limit_bytes\":5368709120,\"monthly_units\":5000000,\"yearly_units\":50000000}]}}", identity, identity)
+    dew_snapshot = BuilderFinish(dew)
+    app.bounds = Rectangle.{0.0, 0.0, 960.0, 1600.0}
+    state.controls = ENTITY_APPEARANCE | ENTITY_WIDGETS
+    for policy: cast(s32)0..1 {
+        state.show_storage = policy == 1
+        EntityFree(document)
+        document = EntityEncode(state)
+        Command("reload")
+        for frame: 0..15 { Frame() }
+        Expect(Find("Widgets") < 0 && FindKey(60) < 0 && FindKey(61) < 0, "appearance has no widget style selector")
+        Expect(FindKey(46004) >= 0, "Dew top-up remains available")
+        Expect((FindKey(46006) >= 0) == state.show_storage, "storage indicator follows host capability")
+        Expect((Find("Storage plans") >= 0) == state.show_storage, "Profile storage plans follow host capability")
+        Command("dew")
+        Expect(FindKey(45006) >= 0 && FindKey(45008) >= 0, "Dew balance and funding remain available")
+        Expect((FindKey(45013) >= 0) == state.show_storage, "dedicated Dew page hides game storage plans")
+        Command("back")
+    }
+    EntityFree(dew_snapshot)
     HostedAppClose(*app.app)
     unused SessionClose(app.session)
     print("Public identity local test failures: %\n", failures)

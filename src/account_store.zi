@@ -196,7 +196,7 @@ AccountStoreSaveProfile :: (state: EntityState) -> bool {
     if !NativeWrite(AccountStorePath("entity.json", path[:]), document) { return false }
     if !SharedProfileSave(TextUntilNul(state.owner_id[:]), state) { return false }
     if !AccountStorePersist() { return false }
-    if !picture_remote && state.picture_kind == 0 && state.picture != account_profile.picture {
+    if !picture_remote && EntityPublicIcon(state) != EntityPublicIcon(account_profile) {
         pending_path: [4096]u8
         if !NativeWrite(AccountStorePicturePath(pending_path[:]), "pending") { return false }
         picture_dirty = true
@@ -280,12 +280,13 @@ AccountStoreAliasPump :: () {
         if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known &&
         !picture_dirty && !picture_active {
             icon := alias_session.profile_icon
-            choice: s32 = -1
-            if icon >= 41 && icon <= 65 { choice = cast(s32)icon - 41 }
-            if icon >= 124 && icon <= 126 { choice = cast(s32)icon - 124 + 25 }
-            if choice >= 0 && account_profile.picture_kind == 0 && choice != account_profile.picture {
+            choice := EntityPictureFromPublicIcon(cast(s32)icon)
+            abstract := EntityAbstractFromPublicIcon(cast(s32)icon)
+            if (choice >= 0 || abstract >= 0) && cast(s32)icon != EntityPublicIcon(account_profile) {
                 state := account_profile
-                state.picture = choice
+                state.picture_kind = ifx abstract >= 0 then 1 else 0
+                if abstract >= 0 { state.abstract_picture = abstract }
+                else { state.picture = choice }
                 picture_remote = true
                 unused AccountStoreSaveProfile(state)
                 picture_remote = false
@@ -326,7 +327,7 @@ AccountStorePicturePump :: () {
     if !picture_dirty || alias_active || now < picture_next || account_provider.queue.pending { return }
     client: Client
     if !AccountStoreClient(null, *client) { return }
-    icon := ifx account_profile.picture < 25 then account_profile.picture + 41 else account_profile.picture - 25 + 124
+    icon := EntityPublicIcon(account_profile)
     out: Vec(u8)
     BuilderPrint(*out, "{\"user_id_hash\":\"%\",\"profile_icon\":%}", TextUntilNul(account_recovery.keys.public_id[:]), icon)
     document := BuilderFinish(out)

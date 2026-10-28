@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {key: value for key, value in os.environ.items()
        if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')}
 ZIRAN = os.environ.get('ZIRAN_BIN', 'ziran')
-DAOCHI = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[1] / 'kryonlabs/daochi/daochi'))
+DAOCHI = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
 
 
 def package(name):
@@ -110,11 +110,19 @@ with (node_folder / 'node.log').open('w') as log:
         profile_path.write_text(json.dumps(profile))
         step('first', 'picture_restore', node_url)
         step('second', 'second', node_url)
+        step('first', 'friends_send', node_url)
+        step('second', 'friends_accept', node_url)
+        step('first', 'friends_check', node_url)
+        step('second', 'friends_changed', node_url)
+        step('first', 'friends_abstract', node_url)
+        step('second', 'friends_abstract_check', node_url)
+        step('first', 'restore_abstract', node_url)
+        step('first', 'friends_remove', node_url)
         # Nothing listens on this port: the node cannot be reached.
         step('offline', 'create', f'http://127.0.0.1:{free_port()}')
         step('offline', 'offline', '')
     finally:
         node.terminate()
         node.wait(timeout=10)
-print('Account aliases: capitals, @ and spaces save as the node stores them; changing, a taken alias, '
+print('Friends: send, incoming/outgoing, accept, selected-picture refresh, remove and failed-target paths passed.\nAccount aliases: capitals, @ and spaces save as the node stores them; changing, a taken alias, '
       'a too short one and an unreachable node each answer as they should')

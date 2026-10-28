@@ -112,6 +112,7 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         account_profile.abstract_picture = state.abstract_picture
         state.host_navigation = entity_host_navigation
         state.profile_sections = entity_profile_sections
+        state.show_storage = !entity_host_game
         if entity_host_game { state.controls = ENTITY_NODES }
         state.extensions = .{}
         state.extension_count = 0

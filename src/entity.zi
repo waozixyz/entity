@@ -801,12 +801,12 @@ NodePage :: (x: float32, y: *float32, width: float32) {
     TextLine(862, status, x, y.*, width, 16)
     y.* += 36.0 * scale
     at := ManagementNodeAt(address)
-    if at >= 0 && management.nodes[at].known {
+    if state.show_storage && at >= 0 && management.nodes[at].known {
         node := management.nodes[at]
         Muted(863, StorageUsageLabel(node.used, node.limit), x, y.*, width)
         y.* += 32.0 * scale
     }
-    if at >= 0 && management.nodes[at].media_supported {
+    if state.show_storage && at >= 0 && management.nodes[at].media_supported {
         TextLine(864, Label("entity.node_media", "Upload photos and videos"), x, y.* + 10.0 * scale, width - 80.0 * scale, 15)
         result := Toggle(session, ToggleProps.{.key = cast(u64)865, .id = 865,
                 .bounds = Rectangle.{x + width - 64.0 * scale, y.*, 64.0 * scale, 40.0 * scale},
@@ -1206,11 +1206,12 @@ ProfileDewBalance :: (x: float32, y: float32, width: float32, draw: bool) -> Dew
     else if !account.known { notice = Label("profile_dew_loading", "Checking Dew…") }
     result := DewBalance(session, DewBalanceProps.{.bounds = Rectangle.{x, y, width, 0.0}, .scale = scale,
             .title = Label("profile_dew_title", "Dew balance"), .balance = TextUntilNul(amount[:]),
-            .plan = plan, .usage = usage, .notice = notice,
-            .top_up = ifx dew_profile_top_up then Label("profile_dew_topup", "Top up") else "", .plans = Label("profile_dew_plans", "Storage plans"),
-            .data = ifx dew_profile_manage_data then Label("entity.manage_data", "Manage data") else "",
+            .plan = ifx state.show_storage then plan else "", .usage = ifx state.show_storage then usage else "", .notice = notice,
+            .top_up = ifx dew_profile_top_up then Label("profile_dew_topup", "Top up") else "",
+            .plans = ifx state.show_storage then Label("profile_dew_plans", "Storage plans") else "",
+            .data = ifx state.show_storage && dew_profile_manage_data then Label("entity.manage_data", "Manage data") else "",
             .ready = dew_profile_available, .known = account.known, .busy = dew_profile_busy, .enabled = account.enabled,
-            .has_usage = account.limit_bytes > 0,
+            .has_usage = state.show_storage && account.limit_bytes > 0,
             .usage_percent = ifx account.limit_bytes > 0 then cast(s32)(account.used_bytes * 100 / account.limit_bytes) else 0,
             .fill = Darken(ThemeOr("canvas", 0x142724ff, 0xeef4f2ff), 7), .track = ThemeOr("border", 0x34514aff, 0xdde7e3ff),
             .accent = ThemeOr("accent", 0x49a68eff, 0x298a71ff),
@@ -1438,12 +1439,12 @@ DrawDew :: () {
             y += 72.0 * scale
         }
     }
-    if MatchLiteral(json, FieldAt(json, 0, "pending"), "true") {
+    if state.show_storage && MatchLiteral(json, FieldAt(json, 0, "pending"), "true") {
         Paragraph(45011, Label("entity.dew_pending", "A purchase is awaiting confirmation. Retry checks the same purchase."), x, y, width, 60.0)
         y += 68.0 * scale
         if !busy && Action(45012, Label("entity.retry", "Retry"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("retry", sequence) }
         y += 56.0 * scale
-    } else if known && account.enabled && !busy {
+    } else if state.show_storage && known && account.enabled && !busy {
         TextLine(45013, Label("entity.storage_plans", "Storage plans"), x, y, width, 20)
         y += 40.0 * scale
         for index: cast(s32)0..3 {
@@ -1471,15 +1472,14 @@ DrawDew :: () {
 }
 
 OpenPicturePicker :: () {
-    picture_tab = 1
+    picture_tab = ifx state.picture_kind == 1 then 0 else 1
     choosing_picture = true
     picture_scroll = 0
     fields = .{}
 }
 
 AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
-    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
-    path := names[index]
+    path := EntityAbstractPictureAsset(index)
     if asset_root[0] != 0 {
         out: Vec(u8)
         BuilderPrint(*out, "%/%", TextUntilNul(asset_root[:]), path)
@@ -1490,8 +1490,7 @@ AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
 }
 
 ProfilePicture :: (id: s32, bounds: Rectangle) {
-    if state.picture_kind == 2 { AvatarDraw(session, bounds, AvatarDefaultCamera()) }
-    else if state.picture_kind == 1 { Image(session, AbstractPicture(state.abstract_picture, bounds)) }
+    if state.picture_kind == 1 { Image(session, AbstractPicture(state.abstract_picture, bounds)) }
     else { Image(session, Picture(state.picture, bounds)) }
     if Button(session, ButtonProps.{.key = cast(u64)id, .id = id, .bounds = bounds,
             .label = Label("entity.change_picture", "Change picture"), .invisible = true}) != 0 {
@@ -1522,19 +1521,15 @@ PictureModal :: () {
     if modal.dismissed || modal.right_clicked { choosing_picture = false }
     if !modal.opened { return }
     content := modal.layout.content
-    labels: [3]string = .[Label("entity.abstract", "Abstract"), Label("entity.classic", "Classic"), Label("entity.avatar", "Avatar")]
-    if picture_tab == 2 {
-        view := content
-        view.height -= 112.0 * scale
-        if view.height > 0.0 {
-            AvatarInteract(view)
-            AvatarDraw(session, view, avatar_camera)
-            AvatarControls(session, Rectangle.{content.x, view.y + view.height, content.width, 44.0 * scale}, Label("entity.reset_view", "Reset view"))
-        }
-        if Action(76200, Label("entity.use_avatar", "Use avatar"), Rectangle.{content.x, content.y + content.height - 52.0 * scale, content.width, 44.0 * scale}) {
-            SelectPicture(2, 0)
-        }
-    } else {
+    labels: [2]string = .[Label("entity.abstract", "Abstract"), Label("entity.classic", "Classic")]
+    half := (content.width - 8.0 * scale) / 2.0
+    for index: cast(s32)0..1 {
+        if Action(76100 + index, labels[index], Rectangle.{content.x + cast(float32)index * (half + 8.0 * scale),
+                content.y, half, 44.0 * scale}, picture_tab == index) { picture_tab = index; picture_scroll = 0 }
+    }
+    content.y += 56.0 * scale
+    content.height -= 56.0 * scale
+    {
         columns := cast(s32)((content.width + 12.0 * scale) / (76.0 * scale))
         if columns < 3 { columns = 3 }
         if columns > 7 { columns = 7 }
@@ -1610,14 +1605,6 @@ AppearanceControls :: (x: float32, top: *float32, width: float32, controls: s32)
             }
         }
         y += 2.0 * (size + 8.0 * scale) + 16.0 * scale
-    }
-    if (controls & ENTITY_WIDGETS) != 0 {
-        TextLine(32, Label("entity.widgets", "Widgets"), x, y, width, 20)
-        y += 36.0 * scale
-        half := (width - 8.0 * scale) * 0.5
-        if Action(60, "Material", Rectangle.{x, y, half, 40.0 * scale}, state.material) { state.material = true; Save() }
-        if Action(61, "Classic", Rectangle.{x + half + 8.0 * scale, y, half, 40.0 * scale}, !state.material) { state.material = false; Save() }
-        y += 64.0 * scale
     }
     top.* = y
 }

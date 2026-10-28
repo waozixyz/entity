@@ -54,6 +54,63 @@ SavedAlias :: () -> string {
     return TextUntilNul(saved_alias[:])
 }
 
+FriendCountTest :: () -> s32 {
+    document := TextUntilNul(friend_list[:])
+    return ArrayCount(document, FieldAt(document, 0, "friends"))
+}
+RequestCountTest :: (key: string) -> s32 {
+    document := TextUntilNul(friend_requests[:])
+    return ArrayCount(document, FieldAt(document, 0, key))
+}
+FirstRequestIdTest :: (output: []u8) -> bool {
+    document := TextUntilNul(friend_requests[:])
+    item := ElementAt(document, FieldAt(document, 0, "incoming"), 0)
+    return ReadStringText(document, FieldAt(document, item, "id"), output) > 0
+}
+FirstFriendIdTest :: (output: []u8) -> bool {
+    document := TextUntilNul(friend_list[:])
+    item := ElementAt(document, FieldAt(document, 0, "friends"), 0)
+    return ReadStringText(document, FieldAt(document, item, "user_id_hash"), output) == 64
+}
+FirstFriendIconTest :: () -> s32 {
+    document := TextUntilNul(friend_list[:])
+    item := ElementAt(document, FieldAt(document, 0, "friends"), 0)
+    icon := ReadNumber(document, FieldAt(document, item, "profile_icon"))
+    return ifx icon.valid then cast(s32)icon.value else -1
+}
+FirstFriendPictureTest :: () -> s32 { return EntityPictureFromPublicIcon(FirstFriendIconTest()) }
+FriendsWait :: () -> bool {
+    for round: 0..1200 {
+        EntityFriendsPump()
+        if !friend_queued && !friend_refresh && friend_stage == 0 { return !friend_error }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
+FriendsRefreshTest :: () -> bool { unused EntityFriendsAnswer("refresh"); return FriendsWait() }
+FriendsActionTest :: (operation: string, target: string) -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":\"%\",\"operation\":\"%\",\"target\":\"%\"}",
+        TextUntilNul(account_recovery.keys.public_id[:]), operation, target)
+    request := BuilderFinish(out)
+    accepted := EntityFriendsAnswer(request) == "queued"
+    EntityFree(request)
+    return accepted && FriendsWait()
+}
+SaveTestPicture :: (picture: s32, kind: s32 = 0) -> bool {
+    state := account_profile
+    state.picture_kind = kind
+    if kind == 1 { state.abstract_picture = picture }
+    else { state.picture = picture }
+    if !AccountStoreSaveProfile(state) { return false }
+    for round: 0..1200 {
+        AccountStorePump()
+        if round > 0 && !picture_dirty && !picture_active { return true }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
+
 #program_export
 Check :: () -> s32 {
     root := NativeEnvironment("ENTITY_DATA")
@@ -121,6 +178,46 @@ Check :: () -> s32 {
         // The first account's earlier alias is free again.
         if !SaveAlias("live_tester") || !Answered("ok", "Account alias saved") || SavedAlias() != "live_tester" { return 14 }
         return 0
+    }
+    if step == "friends_send" {
+        if !FriendsRefreshTest() || FriendCountTest() != 0 { return 60 }
+        if !FriendsActionTest("add", " @LIVE_TESTER ") || RequestCountTest("outgoing") != 1 { return 62 }
+        return 0
+    }
+    if step == "friends_accept" {
+        if !SaveTestPicture(12) || !FriendsRefreshTest() || RequestCountTest("incoming") != 1 { return 64 }
+        id: [129]u8
+        if !FirstRequestIdTest(id[:]) || !FriendsActionTest("accept", TextUntilNul(id[:])) { return 67 }
+        return ifx FriendCountTest() == 1 && FirstFriendPictureTest() == 7 then 0 else 69
+    }
+    if step == "friends_check" || step == "friends_changed" {
+        if !FriendsRefreshTest() || FriendCountTest() != 1 { return 70 }
+        expected := ifx step == "friends_check" then 12 else 24
+        if FirstFriendPictureTest() != expected { return 72 }
+        if step == "friends_check" && !SaveTestPicture(24) { return 73 }
+        return 0
+    }
+    if step == "friends_remove" {
+        if !FriendsRefreshTest() { return 74 }
+        id: [65]u8
+        if !FirstFriendIdTest(id[:]) || !FriendsActionTest("remove", TextUntilNul(id[:])) { return 76 }
+        if FriendCountTest() != 0 { return 77 }
+        if FriendsActionTest("add", "@no_such_friend_account") || !friend_error { return 78 }
+        return 0
+    }
+    if step == "friends_abstract" { return ifx SaveTestPicture(2, 1) then 0 else 84 }
+    if step == "friends_abstract_check" {
+        if !FriendsRefreshTest() || FriendCountTest() != 1 { return 85 }
+        return ifx FirstFriendIconTest() == 129 then 0 else 86
+    }
+    if step == "restore_abstract" {
+        account_profile.picture_kind = 0
+        for round: 0..1200 {
+            AccountStorePump()
+            if account_profile.picture_kind == 1 && account_profile.abstract_picture == 2 { return 0 }
+            unused SleepMilliseconds(25)
+        }
+        return 87
     }
     if step == "offline" {
         // A node that cannot be reached says so.

@@ -153,7 +153,7 @@ queues opening `https://waozi.xyz/` after the guest frame.
 retries, fresh-device restoration and account isolation on a private local node
 with throwaway keys and Dew.
 
-The Profile shows Inbe's shared `DewBalance` card inline. Game hosts hide the
+The Profile shows Inbe's shared `DewBalance` card inline. Native game hosts hide storage usage, storage plans and node media-storage controls; Inbe retains its storage indicator and actions. The picture modal offers Abstract and Classic choices with large thumbnails; Avatar is temporarily hidden. Both picture families publish the chosen picture for Friends and Leaderboard through the authenticated public profile metadata. Game hosts hide the
 Name and Intention fields and identify players by their alias or public ID.
 The browser host uses Kryon's existing `BundleApp` lifecycle, IndexedDB-backed
 files and the same native Entity account provider; game bundles receive only
