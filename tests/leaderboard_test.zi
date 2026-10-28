@@ -175,6 +175,8 @@ Check :: () -> s32 {
     for step: 0..4 { EntityLeaderboardPump() }
     if !native_leaderboard_loaded || native_leaderboard_requested || published_appearance != 6 { return 45 }
     native_leaderboard_owner = .{}
+    if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 5") ||
+    !native_leaderboard_requested { return 46 }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) ||
     page.rows[0].game_icon != 6 || TextUntilNul(page.rows[0].value[:]) != "4210" { return 36 }
     encoded_appearance := ProfileLeaderboardEncode(*page)

@@ -210,7 +210,12 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
             native_score_count -= 1
             return false
         }
-        if score.appearance == cast(s32)appearance + 1 { return true }
+        if score.appearance == cast(s32)appearance + 1 {
+            // The game reports once after account reload too, so a saved
+            // choice that was offline last time gets another publication.
+            NativeLeaderboardChanged(game)
+            return true
+        }
         score.appearance = cast(s32)appearance + 1
         if NativeLeaderboardSave() { NativeLeaderboardChanged(game); return true }
         score.* = previous
