@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#eff6f4">
+  <meta name="description" content="Manage your shared Waozi profile, account key and connected devices.">
+  <link rel="canonical" href="https://entity.waozi.xyz/">
+  <title>Entity — Your Waozi profile</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #eff6f4; color: #18352b; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    #loading { position: fixed; inset: 0; display: grid; place-content: center; padding: 24px; gap: 16px; text-align: center; background: #eff6f4; font: 16px/1.5 system-ui, sans-serif; }
+    #loading.done { display: none; }
+    #loading.error { display: grid; }
+    #loading .failed { display: none; }
+    #loading.error .failed { display: block; }
+    #loading.error .starting { display: none; }
+    button { border: 0; border-radius: 12px; padding: 14px 24px; background: #18352b; color: white; font: inherit; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" tabindex="0" aria-label="Waozi profile manager"></canvas>
+  <div id="loading" role="status" aria-live="polite">
+    <p class="starting">Opening your Waozi profile…</p>
+    <p class="failed">Your profile could not open. Your saved data is kept.</p>
+    <button class="failed" id="retry" type="button">Try again</button>
+  </div>
+  <script>
+    (function () {
+      var loading = document.getElementById('loading');
+      var revision = '__ENTITY_ASSET_REVISION__';
+      function asset(name) { var url = new URL(name, document.baseURI); url.searchParams.set('v', revision); return url.href; }
+      function failed() { loading.classList.add('error'); }
+      document.getElementById('retry').onclick = function () { location.reload(); };
+      window.Module = { canvas: document.getElementById('canvas'), locateFile: asset, onAbort: failed,
+        onExit: function (code) { if (code) failed(); } };
+      function watch() {
+        if (Module.profileFailed || Module.sharedAccountError) { failed(); return; }
+        if (Module.profileReady) loading.classList.add('done');
+        requestAnimationFrame(watch);
+      }
+      var started = false;
+      function start() {
+        if (started) return;
+        started = true;
+        var script = document.createElement('script');
+        script.src = asset('runtime.js');
+        script.onerror = failed;
+        document.body.appendChild(script);
+        watch();
+      }
+      var shared = document.createElement('script');
+      shared.src = 'https://account.waozi.xyz/share.js';
+      shared.onload = function () { WaoziAccount.attach(Module, 5000).then(start, failed); };
+      shared.onerror = failed;
+      document.head.appendChild(shared);
+    })();
+  </script>
+</body>
+</html>

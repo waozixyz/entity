@@ -1,0 +1,79 @@
+// Standalone browser Profile, using the same provider as every hosted app.
+using Canvas :: #import "kryon/Canvas";
+#import "kryon/bundle_storage_web"
+#import "kryon/app_files"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/tree"
+#import "kryon/tree_input"
+#import "kryon/Frame"
+#import "kryon/ScrollDevice"
+#import "kryon/key_input"
+#import "kryon/TestDriver"
+#import "kryon/page_core"
+#import "native_host"
+#import "std/file"
+#import "std/web"
+
+profile_text: [4096]u8;
+
+#program_export
+main :: () -> s32 {
+    if !OpenCanvas() { return 1 }
+    defer CloseCanvas()
+    if !BundleStorageOpen() { return 1 }
+    while !BundleStorageReady() && !BundleStorageFailed() { WebSleep(10) }
+    if !BundleStorageReady() { return 1 }
+    bytes, found := ReadEntireFile("/entity.zx")
+    if !found { return 1 }
+    defer { AppFileFree(bytes) }
+    if !EntityHostOpen(bytes, "/kryon-apps/entity", "entity") { return 1 }
+    defer { unused EntityHostClose() }
+    session := SessionOpen()
+    if !SessionValid(session) { return 1 }
+    defer { SessionClose(session) }
+    saved := PageNow()
+    while PollCanvas() {
+        scope := WebScope()
+        unused BeginCanvasFrame()
+        area := CanvasViewport()
+        key := CanvasPressedKey()
+        modifiers := CanvasModifiers()
+        if key == 256 && EntityHostBack() { key = 0 }
+        KeyboardModifiersSend(session, modifiers)
+        KeyboardSend(session, key)
+        point := CanvasTypedCodepoint()
+        while point != 0 { unused TypedCodepointSend(session, point); point = CanvasTypedCodepoint() }
+        pointer := PollPointer()
+        TreePointerUpdate(session, pointer)
+        TreeSecondaryPointerUpdate(session, PollSecondaryPointer())
+        wheel := CanvasWheelMove()
+        PointerWheelSend(session, pointer.x, pointer.y, wheel)
+        BeginScrollFrame(session, Vector2.{pointer.x, pointer.y}, pointer.pressed,
+            pointer.down, pointer.released, wheel, PageNow() / 1000.0)
+        ok := BeginFrame(session, cast(u64)1, area) == FrameStatus.FrameOk
+        if ok {
+            input := TextFieldInputFor(key, modifiers, TypedTextTake(session, profile_text[:]))
+            ok = EntityHostFrame(session, area, key, modifiers, input)
+        }
+        if ok { ok = EndCanvasUiFrame(session) == FrameStatus.FrameOk }
+        if ok {
+            TestDriverFrame(session)
+            CanvasCursor(session)
+            ok = EndCanvasFrame()
+        }
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        WebSet(module, WebName(ifx ok then "profileReady" else "profileFailed"), WebBool(true))
+        if !ok { WebEnd(scope); return 1 }
+        EntityHostPump()
+        if PageNow() - saved >= 1000.0 {
+            unused EntityHostSave()
+            unused BundleStorageSync(false)
+            saved = PageNow()
+        }
+        WebEnd(scope)
+    }
+    unused EntityHostSave()
+    unused BundleStorageSync(false)
+    return 0
+}
