@@ -67,9 +67,9 @@ Check :: () -> s32 {
     }
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
-    if step == "restored" { return ifx shop_owned == 142 then 0 else 8 }
+    if step == "restored" { return ifx shop_owned == 654 then 0 else 8 }
     if step == "buy" {
-        products: [4]s32 = .[1, 2, 3, 7]
+        products: [5]s32 = .[1, 2, 3, 7, 9]
         for product: products {
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() || (shop_owned & (1 << product)) == 0 { print("purchase % failed: %\n", product, shop_status); return 9 }

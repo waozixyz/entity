@@ -29,6 +29,21 @@ friend_refresh: bool;
 friend_queued: bool;
 friend_error: bool;
 friend_answer: string;
+friend_game: [65]u8;
+friend_game_icons: [32768]u8;
+friend_game_path: [256]u8;
+
+EntityFriendsGame :: (game: string) {
+    if TextUntilNul(friend_game[:]) == game { return }
+    // Host-defined board names are used in a query path, never arbitrary URLs.
+    for byte: game {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "0" && byte <= #char "9") ||
+            byte == #char "." || byte == #char "_" || byte == #char "-") { return }
+    }
+    if !CopyCString(game, friend_game[:]) { return }
+    friend_game_icons = .{}
+    friend_refresh = true
+}
 
 FriendsScope :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
@@ -45,6 +60,7 @@ FriendsScope :: () {
     friend_error = false
     friend_list = .{}
     friend_requests = .{}
+    friend_game_icons = .{}
 }
 FriendsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     return HttpTransferStart(*friend_transfer, request, output, 15000)
@@ -87,7 +103,10 @@ EntityFriendsAnswer :: (request: string) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "{\"owner\":")
     EntityQuote(*out, TextUntilNul(friend_owner[:]))
-    BuilderPrint(*out, ",\"ready\":%,\"busy\":%,\"error\":%,\"list\":%,\"requests\":%}",
+    BuilderPrint(*out, ",\"game\":")
+    EntityQuote(*out, TextUntilNul(friend_game[:]))
+    BuilderPrint(*out, ",\"game_icons\":%,\"ready\":%,\"busy\":%,\"error\":%,\"list\":%,\"requests\":%}",
+        ifx friend_game_icons[0] == 0 then "{\"rows\":[]}" else TextUntilNul(friend_game_icons[:]),
         account_standalone_ready, friend_stage != 0 || friend_refresh || friend_queued, friend_error,
         ifx friend_list[0] == 0 then "{\"friends\":[]}" else TextUntilNul(friend_list[:]),
         ifx friend_requests[0] == 0 then "{\"incoming\":[],\"outgoing\":[]}" else TextUntilNul(friend_requests[:]))
@@ -112,10 +131,16 @@ EntityFriendsPump :: () {
             if friend_stage == 1 { valid = valid && FriendsArrayValid(document, "friends") }
             else { valid = valid && FriendsArrayValid(document, "incoming") && FriendsArrayValid(document, "outgoing") }
         }
-        friend_error = friend_error || !valid
+        if friend_stage == 4 {
+            valid = valid && Space(document, ValueEnd(document, 0, 0)) == document.count && FriendsArrayValid(document, "rows")
+        }
+        // Missing optional game stats use the default character; Friends stays usable.
+        if friend_stage != 4 { friend_error = friend_error || !valid }
         if valid && friend_stage == 1 { friend_list = friend_response }
         if valid && friend_stage == 2 { friend_requests = friend_response }
+        if valid && friend_stage == 4 { friend_game_icons = friend_response }
         if friend_stage == 1 && valid { friend_stage = 2 }
+        else if friend_stage == 2 && valid && friend_game[0] != 0 { friend_stage = 4 }
         else {
             if friend_stage == 3 && valid { friend_refresh = true }
             friend_stage = 0
@@ -132,6 +157,17 @@ EntityFriendsPump :: () {
     client: Client
     if !AccountStoreClient(null, *client) { friend_stage = 0; return }
     path := ifx friend_stage == 1 then "/api/v1/friends" else ifx friend_stage == 2 then "/api/v1/friends/requests" else TextUntilNul(friend_path[:])
+    game_path: Vec(u8)
+    if friend_stage == 4 {
+        BuilderPrint(*game_path, "/api/v1/friends/stats?app=inbe&practice=%&metric=appearance", TextUntilNul(friend_game[:]))
+        if !CopyCString(TextView(VecSlice(game_path, 0, game_path.count)), friend_game_path[:]) {
+            VecFree(game_path)
+            friend_stage = 0
+            return
+        }
+        path = TextUntilNul(friend_game_path[:])
+    }
+    defer { VecFree(game_path) }
     method := ifx friend_stage == 3 then friend_method else "GET"
     body := ifx friend_stage == 3 then TextUntilNul(friend_body[:]) else ""
     headers: [1]HttpHeader

@@ -1,0 +1,11 @@
+#import "friends_model"
+
+#program_export
+main :: () -> s32 {
+    document := "{\"game_icons\":{\"rows\":[{\"user_id_hash\":\"moon\",\"value\":8},{\"user_id_hash\":\"invalid\",\"value\":1.5},{\"user_id_hash\":\"future\",\"value\":10}]}}"
+    if FriendWurmSkin(document, "moon") != 8 { return 1 }
+    if FriendWurmSkin(document, "missing") != 1 || FriendWurmSkin(document, "invalid") != 1 ||
+    FriendWurmSkin(document, "future") != 1 || FriendWurmSkin("{}", "moon") != 1 ||
+    FriendWurmSkin("{\"game_icons\":{\"rows\":null}}", "moon") != 1 { return 2 }
+    return 0
+}

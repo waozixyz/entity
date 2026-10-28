@@ -1,6 +1,6 @@
 // Included by Entity so Friends uses the same fields and navigation as Profile.
 friends_target: [129]u8;
-friends_page: [65537]u8;
+friends_page: [100353]u8;
 friends_refresh: bool = true;
 friends_remove: [65]u8;
 friends_page_owner: [65]u8;
@@ -36,6 +36,7 @@ FriendName :: (document: string, item: s32, name_key: string, id_key: string, ou
     }
     return TextUntilNul(output)
 }
+
 
 FriendsPage :: (x: float32, y: *float32, width: float32) {
     if !management.account { SignInChoices(x, y, width); return }
@@ -81,9 +82,19 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
         image_bounds := Rectangle.{x, y.*, 44.0 * scale, 44.0 * scale}
         if abstract >= 0 { Image(session, AbstractPicture(abstract, image_bounds)) }
         else if picture >= 0 { Image(session, Picture(picture, image_bounds)) }
-        else { SvgIcon(session, SvgIconProps.{.bounds = image_bounds,
-            .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6A4 4 0 1 1 8 6A4 4 0 1 1 16 6",
-            .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)}) }
+        game: [65]u8
+        unused ReadStringText(document, FieldAt(document, 0, "game"), game[:])
+        wurm := TextUntilNul(game[:]) == "wurm" || TextUntilNul(game[:]) == "xyz.waozi.wurm"
+        if wurm {
+            if abstract >= 0 || picture >= 0 {
+                image_bounds = Rectangle.{x + 24.0 * scale, y.* + 24.0 * scale, 24.0 * scale, 24.0 * scale}
+            }
+            unused ProfileLeaderboardWurm(session, cast(u64)(63000 + index * 10), FriendWurmSkin(document, TextUntilNul(id[:])), image_bounds)
+        } else if abstract < 0 && picture < 0 {
+            fallback: s32 = 0
+            for byte: TextUntilNul(id[:]) { fallback = (fallback + cast(s32)byte) % 3 }
+            Image(session, AbstractPicture(fallback, image_bounds))
+        }
         TextLine(cast(u64)(60100 + index * 4), FriendName(document, item, "alias", "user_id_hash", name[:]), x + 52.0 * scale, y.*, width - 152.0 * scale, 16)
         confirming := TextUntilNul(friends_remove[:]) == TextUntilNul(id[:])
         if !busy && Action(60101 + index * 4, Label(ifx confirming then "entity.confirm" else "profile_remove_friend", ifx confirming then "Confirm" else "Remove"),

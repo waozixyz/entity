@@ -259,9 +259,10 @@ ProviderNetworkFailure :: (provider: *ManagementProvider) -> string {
 }
 
 ProviderAliasValid :: (alias: string) -> bool {
-    if alias.count < 4 || alias.count > 32 { return false }
+    if alias.count < 1 || alias.count > 32 { return false }
     for byte: alias {
-        if !((byte >= cast(u8)97 && byte <= cast(u8)122) || (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)95) { return false }
+        if !((byte >= cast(u8)97 && byte <= cast(u8)122) || (byte >= cast(u8)65 && byte <= cast(u8)90) ||
+            (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)95) { return false }
     }
     return true
 }
@@ -487,7 +488,13 @@ ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
         for index: 0..alias_buffer.count - 1 { alias_buffer[index] = provider.queue.request.value[index] }
         normalized: [1024]u8
         alias := ProviderNormalizeAlias(TextUntilNul(alias_buffer[:]), normalized[:])
-        if !ProviderAliasValid(alias) || !BuildAliasBody(client.identity.account_id, alias, provider.request_body[:]) {
+        current_normalized: [40]u8
+        current := ProviderState(provider)
+        same := alias != "" && alias == AliasNormalize(TextUntilNul(current.alias[:]), current_normalized[:])
+        display: [1024]u8
+        if same { alias = AliasDisplay(TextUntilNul(alias_buffer[:]), display[:]) }
+        if !ProviderAliasValid(alias) || (alias.count < 4 && !same) ||
+        !BuildAliasBody(client.identity.account_id, alias, provider.request_body[:]) {
             ProviderFinish(provider, "error", "Use 4–32 lowercase letters, numbers or underscores")
             return
         }

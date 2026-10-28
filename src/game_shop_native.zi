@@ -72,7 +72,7 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "visit" { shop_visit = true; return "queued" }
     if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0 }
-    products: [4]s32 = .[1, 2, 3, 7]
+    products: [5]s32 = .[1, 2, 3, 7, 9]
     for product: products {
         if request == GameShopProduct(cast(s32)product) && !shop_active && !shop_requested {
             if (shop_owned & (1 << product)) != 0 {

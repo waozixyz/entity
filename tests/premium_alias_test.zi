@@ -16,6 +16,7 @@ main :: () -> s32 {
     normalized: [40]u8
     if AliasNormalize("  @Ab_C  ", normalized[:]) != "ab_c" || !AliasValid("ab_c") ||
     AliasValid("abc") || AliasValid("ab-c") || AliasValid("ABCD") { return 1 }
+    if AliasDisplay("  @Ab_C  ", normalized[:]) != "Ab_C" { return 15 }
     valid := Quote("river", "250000000")
     defer { EntityFree(valid) }
     offer: AliasOffer

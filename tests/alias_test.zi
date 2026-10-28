@@ -141,6 +141,8 @@ Check :: () -> s32 {
         // Changing it keeps the new one.
         if !SaveAlias("live_tester_one") || !Answered("ok", "Account alias saved") { return 9 }
         if SavedAlias() != "live_tester_one" { return 10 }
+        if !SaveAlias("Live_Tester_One") || !Answered("ok", "Account alias saved") || SavedAlias() != "Live_Tester_One" { return 80 }
+        if !SaveAlias("live_tester_one") || !Answered("ok", "Account alias saved") { return 81 }
         return 0
     }
     if step == "picture" {
@@ -191,6 +193,7 @@ Check :: () -> s32 {
         return ifx FriendCountTest() == 1 && FirstFriendPictureTest() == 7 then 0 else 69
     }
     if step == "friends_check" || step == "friends_changed" {
+        EntityFriendsGame("wurm")
         if !FriendsRefreshTest() || FriendCountTest() != 1 { return 70 }
         expected := ifx step == "friends_check" then 12 else 24
         if FirstFriendPictureTest() != expected { return 72 }

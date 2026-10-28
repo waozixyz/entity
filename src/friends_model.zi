@@ -1,0 +1,18 @@
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+
+FriendWurmSkin :: (document: string, id: string) -> s32 {
+    rows := FieldAt(document, FieldAt(document, 0, "game_icons"), "rows")
+    for index: cast(s32)0..ArrayCount(document, rows) - 1 {
+        item := ElementAt(document, rows, index)
+        owner: [65]u8
+        unused ReadStringText(document, FieldAt(document, item, "user_id_hash"), owner[:])
+        if TextUntilNul(owner[:]) != id { continue }
+        icon := ReadNumber(document, FieldAt(document, item, "value"))
+        if icon.valid && icon.value >= 1 && icon.value <= 9 &&
+        icon.value == cast(float64)cast(s32)icon.value { return cast(s32)icon.value }
+    }
+    return 1
+}
+

@@ -5,6 +5,7 @@
 #import "avatar_view"
 #import "leaderboard_view"
 #import "leaderboard_model"
+#import "friends_model"
 #import "management"
 #import "alias_model"
 #import "dew_model"

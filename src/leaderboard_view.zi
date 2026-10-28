@@ -66,8 +66,7 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
 // The released Apfelwurm skins, rendered with the game's own colours and
 // markings. Only its stable board ID may choose this trusted game badge.
 ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectangle) -> bool {
-    if icon < 1 || icon > 9 { return false }
-    skin := icon - 1
+    skin := ifx icon >= 1 && icon <= 9 then icon - 1 else 0
     if skin >= 7 {
         root := AppService("entity.assets", "")
         out: Vec(u8)
@@ -210,8 +209,21 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         }
         y += 56.0 * scale
     }
+    if page.loading {
+        for dot: cast(s32)0..2 {
+            color := ThemeOr("text", 0xe5eef3ff, 0x203b4bff)
+            color.a = ifx (profile_leaderboard_ticks / 10) % 3 == dot then 255 else 64
+            Box(session, BoxProps.{.key = cast(u64)(55007 + dot),
+                .bounds = Rectangle.{x + cast(float32)dot * 7.0 * scale, y + 12.0 * scale, 4.0 * scale, 4.0 * scale},
+                .fill = color, .radius = 2.0 * scale})
+        }
+        AchievementText(session, 55006, LeaderboardLabel("profile_updating_status", "Updating…"),
+            Rectangle.{x + 28.0 * scale, y, width - 28.0 * scale, 32.0 * scale}, font)
+        y += 40.0 * scale
+    }
     if !profile_leaderboard_ready || page.board_count == 0 {
-        AchievementText(session, 55002, LeaderboardLabel("profile_no_leaderboard_data", "No leaderboard data yet."),
+        AchievementText(session, 55002, LeaderboardLabel(ifx !profile_leaderboard_ready || page.loading then "profile_updating_status" else "profile_no_leaderboard_data",
+                ifx !profile_leaderboard_ready || page.loading then "Updating…" else "No leaderboard data yet."),
             Rectangle.{x, y, width, 80.0 * scale}, font)
         return true
     }

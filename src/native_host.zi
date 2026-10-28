@@ -35,6 +35,7 @@ entity_host_navigation: bool;
 entity_host_game: bool;
 entity_profile_sections: s32 = 31;
 EntityHostProfileSections :: (sections: s32) { entity_profile_sections = sections & 31 }
+EntityHostGameContext :: (game: string) { EntityFriendsGame(game) }
 EntityAppearance :: struct { theme: s32; accent: s32; material: bool }
 EntityHostAppearance :: () -> EntityAppearance {
     return EntityAppearance.{account_profile.theme, account_profile.accent, account_profile.material}

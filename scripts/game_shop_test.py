@@ -90,7 +90,7 @@ def main():
             step('other', 'local')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 110000000,
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 130000000,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -109,13 +109,13 @@ def main():
             step('other', 'insufficient')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
-                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000], events
+                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000], events
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
-            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 4,
+            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 5,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
                               'receipt restore on a fresh device', 'unfunded account cannot acquire paid skins',
                               'different accounts have separate ownership']}, indent=2))
-            print('Game shop integration local tests: four private-node debits including 50 Dew Moon dragon, cross-device restore, retries, account isolation and December claim persistence passed.')
+            print('Game shop integration local tests: five private-node debits including 20 Dew Mountains, cross-device restore, retries, account isolation and December claim persistence passed.')
         finally:
             node.terminate()
             node.wait(timeout=10)

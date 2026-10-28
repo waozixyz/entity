@@ -11,7 +11,7 @@ Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") ->
 main :: () -> s32 {
     owner := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     other := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    products: [4]s32 = .[1, 2, 3, 7]
+    products: [5]s32 = .[1, 2, 3, 7, 9]
     for product: products {
         p := cast(s32)product
         text := Receipt(p, owner, -GameShopPrice(p))

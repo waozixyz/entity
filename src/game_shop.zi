@@ -5,11 +5,13 @@
 
 GAME_SHOP_SERVICE :: "entity.game-shop"
 GameShopPrice :: (product: s32) -> s64 {
+    if product == 9 { return 20000000 }
     if product == 7 { return 50000000 }
     if product < 1 || product > 3 { return 0 }
     return cast(s64)product * 10000000
 }
 GameShopProduct :: (product: s32) -> string {
+    if product == 9 { return "wurm.mountains" }
     if product == 1 { return "wurm.mint" }
     if product == 2 { return "wurm.berry" }
     if product == 3 { return "wurm.rose" }
@@ -17,6 +19,7 @@ GameShopProduct :: (product: s32) -> string {
     return ""
 }
 GameShopKey :: (product: s32) -> string {
+    if product == 9 { return "stage-wurm-mountains-v1" }
     if product == 1 { return "skin-wurm-mint-v2" }
     if product == 2 { return "skin-wurm-berry-v2" }
     if product == 3 { return "skin-wurm-rose-v2" }
@@ -24,6 +27,7 @@ GameShopKey :: (product: s32) -> string {
     return ""
 }
 GameShopReference :: (product: s32) -> string {
+    if product == 9 { return "wurm.mountains:stage-wurm-mountains-v1" }
     if product == 1 { return "wurm.mint:skin-wurm-mint-v2" }
     if product == 2 { return "wurm.berry:skin-wurm-berry-v2" }
     if product == 3 { return "wurm.rose:skin-wurm-rose-v2" }
@@ -45,7 +49,7 @@ GameShopReceipt :: (text: string, owner: string) -> s32 {
     !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
     !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
     amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
-    products: [4]s32 = .[1, 2, 3, 7]
+    products: [5]s32 = .[1, 2, 3, 7, 9]
     for product: products {
         if amount.valid && amount.value == -cast(float64)GameShopPrice(cast(s32)product) &&
         GameShopField(text, "source_ref", GameShopReference(cast(s32)product)) { return cast(s32)product }

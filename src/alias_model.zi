@@ -33,6 +33,14 @@ AliasPaymentAction :: (balance_known: bool, balance: s64, price: s64, retry: boo
 }
 
 AliasNormalize :: (value: string, output: []u8) -> string {
+    return AliasText(value, output, true)
+}
+
+AliasDisplay :: (value: string, output: []u8) -> string {
+    return AliasText(value, output, false)
+}
+
+AliasText :: (value: string, output: []u8, fold: bool) -> string {
     start: s64 = 0
     end := value.count
     while start < end && value[start] <= cast(u8)32 { start += 1 }
@@ -42,7 +50,7 @@ AliasNormalize :: (value: string, output: []u8) -> string {
     count: s64 = 0
     for index: start..end - 1 {
         byte := value[index]
-        if byte >= #char "A" && byte <= #char "Z" { byte = byte - #char "A" + #char "a" }
+        if fold && byte >= #char "A" && byte <= #char "Z" { byte = byte - #char "A" + #char "a" }
         output[count] = byte
         count += 1
     }
