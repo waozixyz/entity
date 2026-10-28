@@ -38,7 +38,7 @@ class ProvisionTest(unittest.TestCase):
 
     def test_prices_have_bulk_savings_and_do_not_undercut_monero(self):
         for currency, rate in [('USD', '1'), ('EUR', '1.04'), ('PYG', '5900'),
-                               ('JPY', '156'), ('KRW', '1370'), ('BRL', '5.4')]:
+                               ('JPY', '156'), ('KRW', '1370'), ('BRL', '5.4'), ('XAF', '703')]:
             previous = None
             for pack in products.PACKS:
                 baseline = Decimal('0.06') * pack * Decimal(rate)
@@ -51,7 +51,7 @@ class ProvisionTest(unittest.TestCase):
                 if currency in products.WHOLE_CURRENCIES:
                     self.assertEqual(price, price.to_integral_value())
                 else:
-                    self.assertEqual(price % Decimal('0.10'), Decimal('0.09'))
+                    self.assertEqual(price * 100, (price * 100).to_integral_value())
 
 
 if __name__ == '__main__':

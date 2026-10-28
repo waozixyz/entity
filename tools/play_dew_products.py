@@ -11,7 +11,6 @@ bundle first. The service account key is read, never printed.
 """
 import base64
 import json
-import math
 import subprocess
 import sys
 import tempfile
