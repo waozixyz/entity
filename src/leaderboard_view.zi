@@ -23,6 +23,11 @@
 #import "kryon/text_widget"
 #import "kryon/text_props"
 #import "kryon/text_align"
+#import "kryon/image_props"
+#import "kryon/image_widget"
+#import "kryon/svg_icon_props"
+#import "kryon/svg_icon_widget"
+#import "profile_theme"
 
 profile_leaderboard_open: bool;
 profile_leaderboard_ready: bool;
@@ -34,6 +39,64 @@ profile_leaderboard_request: [256]u8;
 LeaderboardLabel :: (key: string, fallback: string) -> string {
     label := AppLocale(key)
     return ifx label == "" || label == key then fallback else label
+}
+
+ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rectangle) {
+    picture := EntityPictureFromPublicIcon(icon)
+    if picture < 0 {
+        SvgIcon(session, SvgIconProps.{.bounds = bounds,
+            .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6A4 4 0 1 1 8 6A4 4 0 1 1 16 6",
+            .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)})
+        return
+    }
+    root := AppService("entity.assets", "")
+    asset := ifx picture == 9 then "assets/entity/flowers.png" else "assets/entity/pfp.png"
+    out: Vec(u8)
+    if root == "" { BuilderPrint(*out, "%", asset) }
+    else { BuilderPrint(*out, "%/%", root, asset) }
+    path := BuilderFinish(out)
+    Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
+        .source = ifx picture == 9 then Rectangle.{} else Rectangle.{cast(float32)(picture % 5) * 64.0,
+            cast(float32)(picture / 5) * 64.0, 64.0, 64.0},
+        .fit = ImageFit.ImageFitContain, .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+    AchievementRelease(path)
+}
+
+// The released Apfelwurm skins, rendered with the game's own colours and
+// markings. Only its stable board ID may choose this trusted game badge.
+ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectangle) -> bool {
+    if icon < 1 || icon > 7 { return false }
+    skin := icon - 1
+    colours: [7]Color = .[Color.{236, 151, 67, 255}, Color.{94, 192, 151, 255},
+        Color.{154, 119, 207, 255}, Color.{221, 133, 151, 255}, Color.{107, 139, 199, 255},
+        Color.{227, 185, 80, 255}, Color.{135, 173, 91, 255}]
+    unit := bounds.width / 32.0
+    for segment: cast(s32)0..2 {
+        size := (ifx segment == 2 then 20.0 else 14.0) * unit
+        left := bounds.x + cast(float32)segment * 6.0 * unit
+        top := bounds.y + (ifx segment == 2 then 3.0 else 16.0 - cast(float32)segment * 4.0) * unit
+        Box(session, BoxProps.{.key = key + cast(u64)segment,
+            .bounds = Rectangle.{left, top, size, size}, .fill = colours[skin],
+            .radius = size / 2.0, .border = Color.{30, 48, 35, 100}})
+    }
+    for eye: cast(s32)0..1 {
+        left := bounds.x + 25.0 * unit
+        top := bounds.y + (8.0 + cast(float32)eye * 8.0) * unit
+        Box(session, BoxProps.{.key = key + 3 + cast(u64)eye * 2,
+            .bounds = Rectangle.{left, top, 4.0 * unit, 4.0 * unit},
+            .fill = Color.{246, 244, 223, 255}, .radius = 2.0 * unit})
+        Box(session, BoxProps.{.key = key + 4 + cast(u64)eye * 2,
+            .bounds = Rectangle.{left + 1.0 * unit, top + 1.0 * unit, 2.0 * unit, 2.0 * unit},
+            .fill = Color.{28, 44, 35, 255}, .radius = 1.0 * unit})
+    }
+    if skin >= 4 {
+        shape := "S2rr:M3 19L9 5L15 15L18 10L22 19Z"
+        if skin == 4 { shape = "S1.6rr:M19 15A8 8 0 0 1 9 5A8 8 0 1 0 19 15Z" }
+        if skin == 5 { shape = "S1.6rr:M12 2L15 9L22 9L17 14L19 22L12 17L5 22L7 14L2 9L9 9Z" }
+        SvgIcon(session, SvgIconProps.{.bounds = Rectangle.{bounds.x + 16.0 * unit, bounds.y, 10.0 * unit, 10.0 * unit},
+            .shape = shape, .color = Color.{249, 229, 157, 255}})
+    }
+    return true
 }
 
 ProfileLeaderboardCommand :: (command: string) -> bool {
@@ -112,9 +175,11 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         }
         y += 56.0 * scale
     }
-    AchievementText(session, 55001, LeaderboardLabel("leaderboard_title", "Leaderboard"),
-        Rectangle.{x, y, width, 36.0 * scale}, cast(s32)(24.0 * scale))
-    y += 44.0 * scale
+    if navigation {
+        AchievementText(session, 55001, LeaderboardLabel("leaderboard_title", "Leaderboard"),
+            Rectangle.{x, y, width, 36.0 * scale}, cast(s32)(24.0 * scale))
+        y += 44.0 * scale
+    }
     if page.error {
         AchievementText(session, 55004, LeaderboardLabel("leaderboard_refresh_failed", "Could not refresh the leaderboard."),
             Rectangle.{x, y, width, 64.0 * scale}, font)
@@ -165,8 +230,11 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     }
     columns := cast(s32)((width + 8.0 * scale) / (168.0 * scale))
     if columns < 2 { columns = 2 }
-    rows := (count + columns - 1) / columns
-    columns = (count + rows - 1) / rows
+    rows: s32 = 0
+    if count > 1 {
+        rows = (count + columns - 1) / columns
+        columns = (count + rows - 1) / rows
+    }
     choice_width := (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
     row_height := cast(s32)(44.0 * scale)
     content_height := cast(s32)(cast(float32)rows * 48.0 * scale + 116.0 * scale) + page.row_count * row_height
@@ -179,7 +247,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     width = scroll.content.width
     choice_width = (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
     y = scroll.content.y
-    for index: cast(s32)0..count - 1 {
+    for index: cast(s32)0..(ifx count > 1 then count else 0) - 1 {
         chosen := choices[index]
         if Button(session, ButtonProps.{.id = 55100 + index,
                 .bounds = Rectangle.{x + cast(float32)(index % columns) * (choice_width + 8.0 * scale),
@@ -195,7 +263,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     value_width := (width - name_width) / (ifx average then 2.0 else 1.0)
     Text(session, TextProps.{.key = cast(u64)55200,
         .text = LeaderboardLabel("profile_friends_title", "Friends"),
-        .bounds = Rectangle.{x + 44.0 * scale, y, name_width - 52.0 * scale, 44.0 * scale},
+        .bounds = Rectangle.{x + 84.0 * scale, y, name_width - 92.0 * scale, 44.0 * scale},
         .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
     for metric: cast(s32)0..(ifx average then 1 else 0) {
         left := x + name_width + cast(float32)metric * value_width
@@ -226,7 +294,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     for index: cast(s32)0..page.row_count - 1 {
         row := *page.rows[index]
         row_y := y + cast(float32)(index * row_height)
-        key := cast(u64)(55400 + index * 5)
+        key := cast(u64)(55400 + index * 16)
         if row.own || index % 2 == 1 {
             Box(session, BoxProps.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},
                     .fill = ifx row.own then Color.{156, 188, 143, 64} else Color.{156, 156, 156, 24}, .radius = 8.0 * scale})
@@ -238,12 +306,17 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
             .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
             .wrap = TextWrap.TextWrapEllipsis})
         Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(row.name[:]),
-            .bounds = Rectangle.{x + 44.0 * scale, row_y, name_width - 52.0 * scale, cast(float32)row_height},
+            .bounds = Rectangle.{x + 84.0 * scale, row_y, name_width - 92.0 * scale, cast(float32)row_height},
             .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
         Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(row.value[:]),
             .bounds = Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
             .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
             .wrap = TextWrap.TextWrapEllipsis})
+        picture_bounds := Rectangle.{x + 40.0 * scale, row_y + 6.0 * scale, 32.0 * scale, 32.0 * scale}
+        game := TextUntilNul(current.id[:])
+        worm := (game == "xyz.waozi.wurm" || game == "wurm") &&
+            ProfileLeaderboardWurm(session, key + 5, row.game_icon, picture_bounds)
+        if !worm { ProfileLeaderboardPicture(session, key + 5, row.icon, picture_bounds) }
         if average {
             Text(session, TextProps.{.key = key + 4, .text = TextUntilNul(row.average[:]),
                 .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},

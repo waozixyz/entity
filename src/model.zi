@@ -251,3 +251,13 @@ EntityDescribeExtension :: (state: *EntityState, id: string, summary: string, ba
     }
     return false
 }
+
+// Public node icons retain the same image across legacy and current clients.
+// Zero means no public choice; it must not invent a bamboo picture.
+EntityPictureFromPublicIcon :: (icon: s32) -> s32 {
+    if icon >= 41 && icon <= 65 { return icon - 41 }
+    if icon >= 124 && icon <= 126 { return icon - 124 + 25 }
+    legacy: [12]s32 = .[-1, 1, 2, 5, 12, 13, 14, 21, 22, 23, 24, 24]
+    if icon >= 0 && icon < 12 { return legacy[icon] }
+    return -1
+}

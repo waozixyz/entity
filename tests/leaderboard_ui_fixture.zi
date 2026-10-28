@@ -4,6 +4,7 @@ Desktop :: #import "kryon/Desktop";
 #import "native_host"
 #import "leaderboard_model"
 #import "model"
+#import "native_files"
 #import "std/c_string"
 #import "std/byte_text_linux"
 #import "std/bundle_host"
@@ -50,6 +51,20 @@ main :: (argc: s32, argv: **u8) -> s32 {
     unused CopyCString("4", page.rows[1].value[:])
     unused CopyCString("42", page.rows[1].average[:])
     page.rows[1].own = true
+    page.rows[0].icon = 52
+    page.rows[1].icon = 54
+    if NativeEnvironment("ENTITY_LEADERBOARD_WURM") == "1" {
+        entity_host_navigation = true
+        page.board_count = 1
+        unused CopyCString("wurm", page.boards[0].app[:])
+        unused CopyCString("Apfelwurm", page.boards[0].app_title[:])
+        unused CopyCString("xyz.waozi.wurm", page.boards[0].id[:])
+        unused CopyCString("Apfelwurm", page.boards[0].title[:])
+        unused CopyCString("Score", page.boards[0].primary[:])
+        unused CopyCString("Level", page.boards[0].average[:])
+        page.rows[0].game_icon = 3
+        page.rows[1].game_icon = 6
+    }
     portable.services = FixtureServices
     if !Desktop.OpenDesktopSized(480, 800) { return 1 }
     defer Desktop.CloseDesktop()

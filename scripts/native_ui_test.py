@@ -118,6 +118,12 @@ try:
     click_word('Leaderboard', True)
     find('@river' if '--leaderboard-populated' in sys.argv else 'data')
     capture('profile-leaderboard')
+    if '--leaderboard-wurm' in sys.argv:
+        visible = {text for text, _ in words()}
+        assert 'Leaderboard' not in visible, 'The host already owns the leaderboard heading'
+        assert 'Apfelwurm' not in visible and 'Arcade' not in visible, 'A sole app/board has no selection control'
+        print('PASS: embedded Wurm board shows skins without a duplicate heading or single-choice selector.')
+        sys.exit(0)
     click_word('Back')
     find('Leaderboard')
     capture('profile-after-leaderboard')

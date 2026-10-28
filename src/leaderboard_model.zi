@@ -61,6 +61,9 @@ ProfileRank :: struct {
     value: [49]u8
     average: [49]u8
     own: bool
+    // Public node icon, never an account key or an arbitrary image URL.
+    icon: s32
+    game_icon: s32
 }
 
 ProfileLeaderboard :: struct {
@@ -109,7 +112,7 @@ ProfileLeaderboardEncode :: (page: *ProfileLeaderboard) -> string {
         EntityQuote(*out, TextUntilNul(row.value[:]))
         BuilderPrint(*out, ",\"average\":")
         EntityQuote(*out, TextUntilNul(row.average[:]))
-        BuilderPrint(*out, ",\"own\":%}", ifx row.own then 1 else 0)
+        BuilderPrint(*out, ",\"own\":%,\"icon\":%,\"game_icon\":%}", ifx row.own then 1 else 0, row.icon, row.game_icon)
     }
     BuilderPrint(*out, "]}")
     return BuilderFinish(out)
@@ -169,6 +172,20 @@ ProfileLeaderboardDecode :: (document: string, output: *ProfileLeaderboard) -> b
         own := ReadNumber(document, FieldAt(document, item, "own"))
         if !own.valid || (own.value != 0 && own.value != 1) { return false }
         row.own = own.value == 1
+        icon_at := FieldAt(document, item, "icon")
+        if icon_at >= 0 {
+            icon := ReadNumber(document, icon_at)
+            if !icon.valid || icon.value < 0 || icon.value > 126 ||
+            icon.value != cast(float64)cast(s32)icon.value { return false }
+            row.icon = cast(s32)icon.value
+        }
+        game_icon_at := FieldAt(document, item, "game_icon")
+        if game_icon_at >= 0 {
+            game_icon := ReadNumber(document, game_icon_at)
+            if !game_icon.valid || game_icon.value < 0 || game_icon.value > 256 ||
+            game_icon.value != cast(float64)cast(s32)game_icon.value { return false }
+            row.game_icon = cast(s32)game_icon.value
+        }
     }
     output.* = next
     return true

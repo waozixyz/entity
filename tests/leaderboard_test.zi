@@ -11,6 +11,7 @@
 #import "std/vec"
 #import "std/net_http"
 #import "std/date_time_linux"
+#import "std/json_scan"
 #import "daochi_client/async_client"
 Auth :: #import "daochi_client/auth";
 
@@ -20,30 +21,44 @@ requests: s32;
 cancelled: s32;
 request_error: bool;
 mock_status: s32 = 200;
+appearance_reported: bool;
 MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     requests += 1
     if request.method == "PUT" {
         request_error = request.method != "PUT" || request.url != "http://127.0.0.1:9/api/v1/profile/stats"
+        metrics := FieldAt(request.body, 0, "metrics")
+        for index: cast(s32)0..ArrayCount(request.body, metrics) - 1 {
+            item := ElementAt(request.body, metrics, index)
+            metric: [32]u8
+            unused ReadStringText(request.body, FieldAt(request.body, item, "metric"), metric[:])
+            if TextUntilNul(metric[:]) == "appearance" {
+                value := ReadNumber(request.body, FieldAt(request.body, item, "value"))
+                appearance_reported = value.valid && value.value == 6
+            }
+        }
         return CopyCString("{}", output)
     }
     if request.url == "http://127.0.0.1:9/api/v1/friends" {
         request_error = request_error || request.method != "GET" || request.url != "http://127.0.0.1:9/api/v1/friends"
-        return CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", output)
+        return CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":52},{\"id\":\"friend-b\",\"alias\":\"cedar\",\"profile_icon\":124}]}", output)
     }
     // A run board asks for the score board, then the level board.
     if request.url == "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=wurm&metric=score" {
-        return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":900}]}", output)
+        return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":54,\"game_icon\":3,\"value\":900}]}", output)
     }
     if request.url == "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=wurm&metric=level" {
         return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":60}]}", output)
     }
     request_error = request_error || request.url != "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=arcade.shovey&metric=levels"
-    return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12}]}", output)
+    return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"value\":12}]}", output)
 }
 MockPoll :: (context: *void, status: *s32) -> s32 { status.* = mock_status; return 1 }
 MockCancel :: (context: *void) { cancelled += 1 }
 
 Check :: () -> s32 {
+    if EntityPictureFromPublicIcon(0) != -1 || EntityPictureFromPublicIcon(1) != 1 ||
+    EntityPictureFromPublicIcon(11) != 24 || EntityPictureFromPublicIcon(65) != 24 ||
+    EntityPictureFromPublicIcon(124) != 25 || EntityPictureFromPublicIcon(127) != -1 { return 40 }
     leaderboard_installed = IsInstalled
     account_profile = EntityDefault()
     unused CopyCString("http://127.0.0.1:9", account_profile.nodes[0][:])
@@ -81,6 +96,9 @@ Check :: () -> s32 {
     if requests != 3 || request_error || native_leaderboard_error || !native_leaderboard_loaded { return 16 }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
     TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 17 }
+    if page.rows[0].icon != 50 || page.rows[1].icon != 41 || page.rows[2].icon != 124 { return 31 }
+    account_profile.picture = 7
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.rows[1].icon != 48 { return 32 }
     mock_status = 500
     unused EntityLeaderboardAnswer("refresh")
     for step: 0..3 { EntityLeaderboardPump() }
@@ -89,8 +107,8 @@ Check :: () -> s32 {
     unused EntityLeaderboardAnswer("refresh")
     for step: 0..3 { EntityLeaderboardPump() }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.error || page.loading { return 19 }
-    unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
-    unused CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\"},{\"id\":\"friend-b\",\"alias\":\"cedar\"}]}", native_leaderboard_friends[:])
+    unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
+    unused CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":52},{\"id\":\"friend-b\",\"alias\":\"cedar\",\"profile_icon\":124}]}", native_leaderboard_friends[:])
     native_leaderboard_rows_dirty = true
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
     TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own ||
@@ -121,7 +139,12 @@ Check :: () -> s32 {
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run x 4210") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57 100001") { return 21 }
     unused CopyCString("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", account_recovery.keys.public_id[:])
+    if EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 2") { return 33 }
     if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57 4210") { return 22 }
+    if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 5") ||
+    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 7") ||
+    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin -1") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin 2") { return 34 }
     // The account change dropped the old session; this one is fixture text too.
     unused CopyCString("fixture-token", native_leaderboard_session.token[:])
     native_leaderboard_session.expires_at_local = UnixNow() + 3600
@@ -134,9 +157,24 @@ Check :: () -> s32 {
     TextUntilNul(page.boards[page.selected].primary[:]) != "Score" || TextUntilNul(page.boards[page.selected].average[:]) != "Level" { return 24 }
     if page.row_count != 3 || !page.rows[0].own || TextUntilNul(page.rows[0].value[:]) != "4210" || TextUntilNul(page.rows[0].average[:]) != "57" ||
     TextUntilNul(page.rows[1].name[:]) != "@river" || TextUntilNul(page.rows[1].value[:]) != "900" || TextUntilNul(page.rows[1].average[:]) != "60" { return 25 }
+    if !appearance_reported || page.rows[0].game_icon != 6 || page.rows[1].game_icon != 3 || page.rows[1].icon != 54 { return 35 }
     // Choosing the Level column ranks by level.
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer("{\"owner\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"board\":\"wurm\",\"metric\":1}"), *page) ||
     page.metric != 1 || TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 26 }
+    native_leaderboard_owner = .{}
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) ||
+    page.rows[0].game_icon != 6 || TextUntilNul(page.rows[0].value[:]) != "4210" { return 36 }
+    encoded_appearance := ProfileLeaderboardEncode(*page)
+    if !ProfileLeaderboardDecode(encoded_appearance, *decoded) || decoded.rows[0].game_icon != 6 { return 37 }
+    EntityFree(encoded_appearance)
+    page.rows[0].game_icon = 257
+    invalid_appearance := ProfileLeaderboardEncode(*page)
+    if ProfileLeaderboardDecode(invalid_appearance, *decoded) { return 38 }
+    EntityFree(invalid_appearance)
+    page.rows[0].game_icon = 6; page.rows[0].icon = 127
+    invalid_icon := ProfileLeaderboardEncode(*page)
+    if ProfileLeaderboardDecode(invalid_icon, *decoded) { return 39 }
+    EntityFree(invalid_icon)
     return 0
 }
 

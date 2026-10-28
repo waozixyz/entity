@@ -56,3 +56,6 @@ if '--ui' in sys.argv:
         private = env | dict(ENTITY_PRIVATE_DISPLAY='1', ENTITY_TEST_BINARY=str(binary))
         subprocess.run(['xvfb-run', '-a', sys.executable, 'scripts/native_ui_test.py', '--leaderboard-only', *extra],
                        cwd=root, env=private, check=True)
+    private = env | dict(ENTITY_PRIVATE_DISPLAY='1', ENTITY_TEST_BINARY=str(fixture), ENTITY_LEADERBOARD_WURM='1')
+    subprocess.run(['xvfb-run', '-a', sys.executable, 'scripts/native_ui_test.py', '--leaderboard-only',
+                    '--leaderboard-populated', '--leaderboard-wurm'], cwd=root, env=private, check=True)

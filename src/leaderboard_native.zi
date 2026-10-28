@@ -30,6 +30,7 @@ NativeGameScore :: struct {
     // the level that run reached beside it; other boards count levels solved.
     run: bool
     level: s64
+    appearance: s32
 }
 
 native_scores: [LEADERBOARD_BOARDS]NativeGameScore;
@@ -98,6 +99,7 @@ NativeLeaderboardSave :: () -> bool {
         BuilderPrint(*out, ",\"title\":")
         EntityQuote(*out, TextUntilNul(score.board.title[:]))
         BuilderPrint(*out, ",\"value\":%", score.value)
+        BuilderPrint(*out, ",\"appearance\":%", score.appearance)
         if score.run { BuilderPrint(*out, ",\"level\":%", score.level) }
         BuilderPrint(*out, "}")
     }
@@ -154,6 +156,9 @@ NativeLeaderboardOwner :: () {
         !LeaderboardNameValid(TextUntilNul(score.board.id[:]), 31) ||
         !value.valid || value.value < 0 || value.value > 100000 || value.value != cast(float64)cast(s64)value.value { continue }
         score.value = cast(s64)value.value
+        appearance := ReadNumber(document, FieldAt(document, item, "appearance"))
+        if appearance.valid && appearance.value >= 1 && appearance.value <= 256 &&
+        appearance.value == cast(float64)cast(s32)appearance.value { score.appearance = cast(s32)appearance.value }
         level := ReadNumber(document, FieldAt(document, item, "level"))
         if level.valid && level.value >= 0 && level.value <= 100000 && level.value == cast(float64)cast(s64)level.value {
             score.run = true
@@ -169,8 +174,12 @@ NativeLeaderboardOwner :: () {
 // run: the level it reached and its score).
 EntityLeaderboardReport :: (app: string, app_title: string, game: string, title: string, request: string) -> bool {
     if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) { return false }
+    cosmetic := request.count > 5 && request[:5] == "skin "
+    appearance: s64
+    if cosmetic && (!ProfileScoreNumber(request[5:], *appearance) || appearance > 6 ||
+        (game != "xyz.waozi.wurm" && game != "wurm")) { return false }
     report: ProfileScore
-    if !ProfileScoreReport(request, *report) { return false }
+    if !cosmetic && !ProfileScoreReport(request, *report) { return false }
     value := report.value
     level := report.level
     run := report.run
@@ -186,6 +195,20 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
     }
     score := *native_scores[index]
     previous := score.*
+    if cosmetic {
+        if previous.board.id[0] == 0 {
+            // A cosmetic cannot install a board or invent a score.
+            native_score_count -= 1
+            return false
+        }
+        if score.appearance == cast(s32)appearance + 1 { return true }
+        score.appearance = cast(s32)appearance + 1
+        native_leaderboard_loaded = false
+        native_leaderboard_rows_dirty = true
+        if NativeLeaderboardSave() { return true }
+        score.* = previous
+        return false
+    }
     if TextUntilNul(score.board.id[:]) == game && score.value == value && score.run == run && score.level == level &&
     TextUntilNul(score.board.title[:]) == title { return true }
     score.value = value
@@ -241,6 +264,29 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
     unused ReadStringText(document, FieldAt(document, at, "user_id_hash"), id[:])
     if id[0] == cast(u8)0 { unused ReadStringText(document, FieldAt(document, at, "id"), id[:]) }
     row := *page.rows[page.row_count]
+    game_icon := ReadNumber(document, FieldAt(document, at, "game_icon"))
+    row.game_icon = 0
+    if game_icon.valid && game_icon.value >= 1 && game_icon.value <= 256 &&
+    game_icon.value == cast(float64)cast(s32)game_icon.value { row.game_icon = cast(s32)game_icon.value }
+    icon := ReadNumber(document, FieldAt(document, at, "profile_icon"))
+    row.icon = 0
+    if icon.valid && icon.value >= 0 && icon.value <= 126 &&
+    icon.value == cast(float64)cast(s32)icon.value { row.icon = cast(s32)icon.value }
+    if row.icon == 0 {
+        friends := TextUntilNul(native_leaderboard_friends[:])
+        list := FieldAt(friends, 0, "friends")
+        for index: cast(s32)0..ArrayCount(friends, list) - 1 {
+            item := ElementAt(friends, list, index)
+            friend: [97]u8
+            unused ReadStringText(friends, FieldAt(friends, item, "user_id_hash"), friend[:])
+            if friend[0] == 0 { unused ReadStringText(friends, FieldAt(friends, item, "id"), friend[:]) }
+            if TextUntilNul(friend[:]) != TextUntilNul(id[:]) { continue }
+            picture := ReadNumber(friends, FieldAt(friends, item, "profile_icon"))
+            if picture.valid && picture.value >= 0 && picture.value <= 126 &&
+            picture.value == cast(float64)cast(s32)picture.value { row.icon = cast(s32)picture.value }
+            break
+        }
+    }
     display: Vec(u8)
     if alias[0] != cast(u8)0 { BuilderPrint(*display, "@%", TextUntilNul(alias[:])) }
     else {
@@ -257,6 +303,11 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
     page.row_count += 1
 }
 
+NativeLeaderboardOwnIcon :: () -> s32 {
+    if account_profile.picture_kind != 0 || account_profile.picture < 0 || account_profile.picture > 27 { return 0 }
+    return ifx account_profile.picture < 25 then account_profile.picture + 41 else account_profile.picture - 25 + 124
+}
+
 NativeLeaderboardRows :: () {
     page := *native_leaderboard_page
     if page.selected < 0 || TextUntilNul(page.owner[:]) == "local" { return }
@@ -268,12 +319,14 @@ NativeLeaderboardRows :: () {
     selected := TextUntilNul(page.boards[page.selected].id[:])
     own: s64 = 0
     own_level: s64 = 0
+    own_appearance: s32 = 0
     run := false
     for index: cast(s32)0..native_score_count - 1 {
         if TextUntilNul(native_scores[index].board.id[:]) == selected {
             own = native_scores[index].value
             own_level = native_scores[index].level
             run = native_scores[index].run
+            own_appearance = native_scores[index].appearance
         }
     }
     stats := TextUntilNul(native_leaderboard_stats[:])
@@ -328,6 +381,8 @@ NativeLeaderboardRows :: () {
     unused CopyCString(FormatInteger(own, digits[:]), row.value[:])
     if run { unused CopyCString(FormatInteger(own_level, digits[:]), row.average[:]) }
     row.own = true
+    row.game_icon = own_appearance
+    row.icon = NativeLeaderboardOwnIcon()
     page.row_count += 1
     // A run board ranks by the column the player chose.
     by_level := run && native_leaderboard_metric == 1
@@ -392,6 +447,9 @@ EntityLeaderboardAnswer :: (request: string) -> string {
             native_leaderboard_requested = true
         }
         NativeLeaderboardRows()
+        for index: cast(s32)0..page.row_count - 1 {
+            if page.rows[index].own { page.rows[index].icon = NativeLeaderboardOwnIcon() }
+        }
     } else {
         CancelRequest(*native_leaderboard_pending)
         native_leaderboard_stage = 0
@@ -465,6 +523,10 @@ EntityLeaderboardPump :: () {
                     ifx count > 0 then "," else "", TextUntilNul(score.board.id[:]), score.value, score.value, date)
             }
             count += 1
+            if score.appearance > 0 && score.appearance <= 256 {
+                BuilderPrint(*out, ",{\"practice\":\"%\",\"metric\":\"appearance\",\"value\":%,\"local_date\":%}",
+                    TextUntilNul(score.board.id[:]), score.appearance, date)
+            }
         }
         BuilderPrint(*out, "]}")
         native_leaderboard_body = BuilderFinish(out)
