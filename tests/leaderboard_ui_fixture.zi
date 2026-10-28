@@ -40,12 +40,15 @@ main :: (argc: s32, argv: **u8) -> s32 {
         unused CopyCString(ifx index == 0 then "arcade.shovey" else "arcade.shovey-island", board.id[:])
         unused CopyCString(ifx index == 0 then "Shovey" else "Island", board.title[:])
         unused CopyCString("Levels", board.primary[:])
+        unused CopyCString("Average", board.average[:])
     }
     page.row_count = 2
     unused CopyCString("@river", page.rows[0].name[:])
     unused CopyCString("12", page.rows[0].value[:])
+    unused CopyCString("1234.56", page.rows[0].average[:])
     unused CopyCString("@you", page.rows[1].name[:])
     unused CopyCString("4", page.rows[1].value[:])
+    unused CopyCString("42", page.rows[1].average[:])
     page.rows[1].own = true
     portable.services = FixtureServices
     if !Desktop.OpenDesktopSized(480, 800) { return 1 }

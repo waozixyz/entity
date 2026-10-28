@@ -20,6 +20,9 @@
 #import "kryon/box_props"
 #import "kryon/box_widget"
 #import "kryon/tree"
+#import "kryon/text_widget"
+#import "kryon/text_props"
+#import "kryon/text_align"
 
 profile_leaderboard_open: bool;
 profile_leaderboard_ready: bool;
@@ -165,13 +168,16 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     rows := (count + columns - 1) / columns
     columns = (count + rows - 1) / rows
     choice_width := (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
-    row_height := cast(s32)(40.0 * scale)
+    row_height := cast(s32)(44.0 * scale)
     content_height := cast(s32)(cast(float32)rows * 48.0 * scale + 116.0 * scale) + page.row_count * row_height
     scroll := Scroll(session, ScrollProps.{.key = cast(u64)55300,
             .bounds = Rectangle.{x, y, width, area.y + area.height - y - 8.0 * scale},
             .content_height = content_height, .scroll_offset = profile_leaderboard_scroll})
     profile_leaderboard_scroll = scroll.scroll_offset
     if !scroll.opened { return true }
+    x = scroll.content.x
+    width = scroll.content.width
+    choice_width = (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
     y = scroll.content.y
     for index: cast(s32)0..count - 1 {
         chosen := choices[index]
@@ -187,14 +193,26 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     average := current.average[0] != cast(u8)0
     name_width := width * (ifx average then 0.5 else 0.666667)
     value_width := (width - name_width) / (ifx average then 2.0 else 1.0)
-    AchievementText(session, 55200, LeaderboardLabel("profile_friends_title", "Friends"),
-        Rectangle.{x, y, name_width, 36.0 * scale}, font)
+    Text(session, TextProps.{.key = cast(u64)55200,
+        .text = LeaderboardLabel("profile_friends_title", "Friends"),
+        .bounds = Rectangle.{x + 44.0 * scale, y, name_width - 52.0 * scale, 44.0 * scale},
+        .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
     for metric: cast(s32)0..(ifx average then 1 else 0) {
+        left := x + name_width + cast(float32)metric * value_width
+        label := TextUntilNul(ifx metric == 0 then current.primary[:] else current.average[:])
         if Button(session, ButtonProps.{.id = 55201 + metric,
-                .bounds = Rectangle.{x + name_width + cast(float32)metric * value_width, y, value_width, 36.0 * scale},
-                .label = TextUntilNul(ifx metric == 0 then current.primary[:] else current.average[:]),
-                .selected = metric == page.metric, .fit_content = true}) != 0 && metric != page.metric {
+                .bounds = Rectangle.{left, y, value_width, 44.0 * scale},
+                .label = label, .invisible = true}) != 0 && metric != page.metric {
             ProfileLeaderboardSelect(page.selected, metric)
+        }
+        Text(session, TextProps.{.key = cast(u64)(55210 + metric), .text = label,
+            .bounds = Rectangle.{left + 8.0 * scale, y, value_width - 16.0 * scale, 44.0 * scale},
+            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+            .wrap = TextWrap.TextWrapEllipsis})
+        if metric == page.metric {
+            Box(session, BoxProps.{.key = cast(u64)(55220 + metric),
+                .bounds = Rectangle.{left + 8.0 * scale, y + 42.0 * scale, value_width - 16.0 * scale, 2.0 * scale},
+                .fill = Color.{73, 166, 142, 255}})
         }
     }
     y += 44.0 * scale
@@ -208,19 +226,29 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     for index: cast(s32)0..page.row_count - 1 {
         row := *page.rows[index]
         row_y := y + cast(float32)(index * row_height)
-        key := cast(u64)(55400 + index * 4)
+        key := cast(u64)(55400 + index * 5)
         if row.own || index % 2 == 1 {
             Box(session, BoxProps.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},
                     .fill = ifx row.own then Color.{156, 188, 143, 64} else Color.{156, 156, 156, 24}, .radius = 8.0 * scale})
         }
-        name: Vec(u8)
-        BuilderPrint(*name, "%. %", index + 1, TextUntilNul(row.name[:]))
-        text := BuilderFinish(name)
-        AchievementText(session, key + 1, text, Rectangle.{x + 8.0 * scale, row_y, name_width - 16.0 * scale, cast(float32)row_height}, font)
-        AchievementRelease(text)
-        AchievementText(session, key + 2, TextUntilNul(row.value[:]), Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 8.0 * scale, cast(float32)row_height}, font)
+        rank: [16]u8
+        rank_text := FormatInteger(index + 1, rank[:])
+        Text(session, TextProps.{.key = key + 1, .text = rank_text,
+            .bounds = Rectangle.{x + 8.0 * scale, row_y, 24.0 * scale, cast(float32)row_height},
+            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+            .wrap = TextWrap.TextWrapEllipsis})
+        Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(row.name[:]),
+            .bounds = Rectangle.{x + 44.0 * scale, row_y, name_width - 52.0 * scale, cast(float32)row_height},
+            .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+        Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(row.value[:]),
+            .bounds = Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
+            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+            .wrap = TextWrap.TextWrapEllipsis})
         if average {
-            AchievementText(session, key + 3, TextUntilNul(row.average[:]), Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 8.0 * scale, cast(float32)row_height}, font)
+            Text(session, TextProps.{.key = key + 4, .text = TextUntilNul(row.average[:]),
+                .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
+                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = TextWrap.TextWrapEllipsis})
         }
     }
     unused End(session)
