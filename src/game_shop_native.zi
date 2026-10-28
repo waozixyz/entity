@@ -4,6 +4,7 @@
 #import "dew_native"
 #import "native_files"
 #import "model"
+#import "entity_records"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/json_scan"
@@ -52,11 +53,27 @@ ShopStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
 ShopPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*shop_transfer, status) }
 ShopCancel :: (context: *void) { HttpTransferCancel(*shop_transfer) }
 
+ShopChristmasClaim :: (now: s64) -> bool {
+    if !DewReady() { shop_status = "signin"; return false }
+    if !ChristmasClaimWindow(now) { shop_status = "expired"; return false }
+    answer := EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"wurm-cosmetics\",\"id\":\"00000000000000000000000000000001\",\"schema\":\"wurm.cosmetics.v1\",\"document\":{\"christmas_2026\":true}}")
+    if !MatchLiteral(answer, FieldAt(answer, 0, "status"), "\"done\"") { shop_status = "failed"; return false }
+    shop_owned |= 256
+    shop_status = "done"
+    return true
+}
+
 EntityGameShopAnswer :: (request: string) -> string {
     ShopOwner()
+    holiday := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"wurm-cosmetics\",\"id\":\"00000000000000000000000000000001\"}")
+    if MatchLiteral(holiday, FieldAt(holiday, FieldAt(holiday, 0, "document"), "christmas_2026"), "true") { shop_owned |= 256 }
+    if request == "wurm.christmas-2026" {
+        unused ShopChristmasClaim(UnixNow())
+    }
     if request == "visit" { shop_visit = true; return "queued" }
     if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0 }
-    for product: 1..3 {
+    products: [4]s32 = .[1, 2, 3, 7]
+    for product: products {
         if request == GameShopProduct(cast(s32)product) && !shop_active && !shop_requested {
             if (shop_owned & (1 << product)) != 0 {
                 shop_status = "done"
@@ -68,8 +85,9 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "status" && !shop_loaded && !shop_active && shop_status == "idle" { shop_requested = true }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"status\":\"%\"}",
+    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
         TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), shop_owned,
+        ChristmasClaimWindow(UnixNow()),
         ifx shop_active || shop_requested then "pending" else shop_status)
     text := BuilderFinish(out)
     unused CopyCString(text, shop_answer[:])

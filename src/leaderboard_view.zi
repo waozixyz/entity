@@ -66,8 +66,27 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
 // The released Apfelwurm skins, rendered with the game's own colours and
 // markings. Only its stable board ID may choose this trusted game badge.
 ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectangle) -> bool {
-    if icon < 1 || icon > 7 { return false }
+    if icon < 1 || icon > 9 { return false }
     skin := icon - 1
+    if skin >= 7 {
+        root := AppService("entity.assets", "")
+        out: Vec(u8)
+        if root != "" { BuilderPrint(*out, "%/", root) }
+        BuilderPrint(*out, "assets/entity/wurm-special-skins.png")
+        path := BuilderFinish(out)
+        column := ifx skin == 7 then 0 else 2
+        for segment: cast(s32)0..2 {
+            head := segment == 2
+            size := bounds.width * (ifx head then 0.72 else 0.5)
+            Image(session, ImageProps.{.key = key + cast(u64)segment,
+                .asset_path = path, .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.16,
+                    bounds.y + (ifx head then 0.0 else bounds.height * 0.34), size, size},
+                .source = Rectangle.{cast(float32)(column + (ifx head then 0 else 1)) * 543.0, 0.0, 543.0, 724.0},
+                .fit = ImageFit.ImageFitContain, .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+        }
+        AchievementRelease(path)
+        return true
+    }
     colours: [7]Color = .[Color.{236, 151, 67, 255}, Color.{94, 192, 151, 255},
         Color.{154, 119, 207, 255}, Color.{221, 133, 151, 255}, Color.{107, 139, 199, 255},
         Color.{227, 185, 80, 255}, Color.{135, 173, 91, 255}]

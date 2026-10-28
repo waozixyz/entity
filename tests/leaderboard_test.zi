@@ -144,7 +144,7 @@ Check :: () -> s32 {
     if EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 2") { return 33 }
     if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57 4210") { return 22 }
     if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 5") ||
-    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 7") ||
+    EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 9") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin -1") ||
     EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin 2") { return 34 }
     // The account change dropped the old session; this one is fixture text too.

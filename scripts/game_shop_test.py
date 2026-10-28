@@ -64,7 +64,7 @@ def main():
                 'DAOCHI_BASE_URL': url, 'DAOCHI_LAN_DISCOVERY': '0', 'DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET': '1',
                 'DAOCHI_ADMIN_TOKEN': admin, 'DAOCHI_TOKEN_ISSUER_PUBLIC_KEY_HEX': public.hex(),
                 'DAOCHI_TOKEN_ISSUER_PRIVATE_KEY_HEX': private.hex()}
-    node_binary = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[1] / 'kryonlabs/daochi/daochi'))
+    node_binary = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
     devices = {name: fixture / name for name in ('first', 'second', 'other')}
     for path in devices.values():
         path.mkdir(mode=0o700)
@@ -90,7 +90,7 @@ def main():
             step('other', 'local')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 60000000,
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 110000000,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -101,18 +101,21 @@ def main():
             step('second', 'restored')
             # Retrying from another installation also uses the same three keys.
             step('second', 'buy')
+            step('first', 'holiday_early')
+            step('first', 'holiday_claim')
+            step('first', 'holiday_after')
             step('other', 'create')
             step('other', 'empty')
             step('other', 'insufficient')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
-                assert [row[0] for row in events] == [-10000000, -20000000, -30000000], events
+                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000], events
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
-            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 3,
+            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 4,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
                               'receipt restore on a fresh device', 'unfunded account cannot acquire paid skins',
                               'different accounts have separate ownership']}, indent=2))
-            print('Game shop integration local tests: three real private-node debits, cross-device restore, retries and account isolation passed.')
+            print('Game shop integration local tests: four private-node debits including 50 Dew Moon dragon, cross-device restore, retries, account isolation and December claim persistence passed.')
         finally:
             node.terminate()
             node.wait(timeout=10)

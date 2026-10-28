@@ -11,7 +11,8 @@ Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") ->
 main :: () -> s32 {
     owner := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     other := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    for product: 1..3 {
+    products: [4]s32 = .[1, 2, 3, 7]
+    for product: products {
         p := cast(s32)product
         text := Receipt(p, owner, -GameShopPrice(p))
         if GameShopReceipt(text, owner) != p { return 1 }
@@ -19,9 +20,12 @@ main :: () -> s32 {
         if GameShopReceipt(Receipt(p, owner, -1), owner) != 0 { return 3 }
         if GameShopReceipt(Receipt(p, owner, GameShopPrice(p)), owner) != 0 { return 4 }
         if GameShopKey(p) == "" || GameShopKey(p) != GameShopKey(p) { return 5 }
-        if GameShopReceipt(Receipt(p, owner, -GameShopPrice(p) / 10, GameShopLegacyReference(p)), owner) != p { return 8 }
+        if p <= 3 && GameShopReceipt(Receipt(p, owner, -GameShopPrice(p) / 10, GameShopLegacyReference(p)), owner) != p { return 8 }
     }
     if GameShopPrice(0) != 0 || GameShopPrice(4) != 0 || GameShopReceipt("{}", owner) != 0 { return 6 }
+    if GameShopPrice(7) != 50000000 || GameShopKey(7) == GameShopKey(3) { return 9 }
+    if ChristmasClaimWindow(1796083199) || !ChristmasClaimWindow(1796083200) ||
+    !ChristmasClaimWindow(1798761599) || ChristmasClaimWindow(1798761600) { return 10 }
     if GameShopKey(1) == GameShopKey(2) || GameShopKey(1) == GameShopKey(3) || GameShopKey(2) == GameShopKey(3) { return 7 }
     print("Game shop local tests: exact paid receipt, account isolation, amount validation and stable purchase keys.\n")
     return 0
