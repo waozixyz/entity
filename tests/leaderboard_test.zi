@@ -22,6 +22,7 @@ cancelled: s32;
 request_error: bool;
 mock_status: s32 = 200;
 appearance_reported: bool;
+published_appearance: s32;
 MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     requests += 1
     if request.method == "PUT" {
@@ -34,6 +35,7 @@ MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
             if TextUntilNul(metric[:]) == "appearance" {
                 value := ReadNumber(request.body, FieldAt(request.body, item, "value"))
                 appearance_reported = value.valid && value.value == 6
+                if value.valid { published_appearance = cast(s32)value.value }
             }
         }
         return CopyCString("{}", output)
@@ -161,6 +163,17 @@ Check :: () -> s32 {
     // Choosing the Level column ranks by level.
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer("{\"owner\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"board\":\"wurm\",\"metric\":1}"), *page) ||
     page.metric != 1 || TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 26 }
+    // A player need not open their own board to publish a changed skin.
+    if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 2") || !native_leaderboard_requested { return 41 }
+    EntityLeaderboardPump()
+    if published_appearance != 3 { return 42 }
+    // A second choice during an active request must not be marked published
+    // by completion of the older one.
+    if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 5") { return 43 }
+    for step: 0..3 { EntityLeaderboardPump() }
+    if native_leaderboard_loaded || !native_leaderboard_requested || native_leaderboard_stage != 0 { return 44 }
+    for step: 0..4 { EntityLeaderboardPump() }
+    if !native_leaderboard_loaded || native_leaderboard_requested || published_appearance != 6 { return 45 }
     native_leaderboard_owner = .{}
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) ||
     page.rows[0].game_icon != 6 || TextUntilNul(page.rows[0].value[:]) != "4210" { return 36 }

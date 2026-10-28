@@ -172,6 +172,15 @@ NativeLeaderboardOwner :: () {
 
 // A game reports "levels N" (levels solved) or "run LEVEL SCORE" (its best
 // run: the level it reached and its score).
+NativeLeaderboardChanged :: (game: string) {
+    native_leaderboard_loaded = false
+    native_leaderboard_rows_dirty = true
+    if TextUntilNul(native_leaderboard_owner[:]) == "local" || leaderboard_installed == null ||
+    !leaderboard_installed(game) { return }
+    if native_leaderboard_selected[0] == 0 { unused CopyCString(game, native_leaderboard_selected[:]) }
+    native_leaderboard_requested = true
+}
+
 EntityLeaderboardReport :: (app: string, app_title: string, game: string, title: string, request: string) -> bool {
     if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) { return false }
     cosmetic := request.count > 5 && request[:5] == "skin "
@@ -203,9 +212,7 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
         }
         if score.appearance == cast(s32)appearance + 1 { return true }
         score.appearance = cast(s32)appearance + 1
-        native_leaderboard_loaded = false
-        native_leaderboard_rows_dirty = true
-        if NativeLeaderboardSave() { return true }
+        if NativeLeaderboardSave() { NativeLeaderboardChanged(game); return true }
         score.* = previous
         return false
     }
@@ -219,9 +226,7 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
     unused CopyCString(game, score.board.id[:])
     unused CopyCString(ifx title == "" then game else title, score.board.title[:])
     NativeBoardLabels(score)
-    native_leaderboard_loaded = false
-    native_leaderboard_rows_dirty = true
-    if NativeLeaderboardSave() { return true }
+    if NativeLeaderboardSave() { NativeLeaderboardChanged(game); return true }
     score.* = previous
     if previous.board.id[0] == cast(u8)0 { native_score_count -= 1 }
     return false
@@ -484,7 +489,9 @@ EntityLeaderboardPump :: () {
         if native_leaderboard_stage == 4 || (native_leaderboard_stage == 3 && !NativeSelectedRun()) {
             native_leaderboard_rows_dirty = true
             native_leaderboard_stage = 0
-            native_leaderboard_loaded = true
+            // A score or skin changed while this request was in flight.
+            // Keep its queued publication for the next pump.
+            native_leaderboard_loaded = !native_leaderboard_requested
             return
         }
         native_leaderboard_stage += 1
