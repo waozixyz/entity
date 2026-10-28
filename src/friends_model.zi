@@ -15,4 +15,3 @@ FriendWurmSkin :: (document: string, id: string) -> s32 {
     }
     return 1
 }
-
