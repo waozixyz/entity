@@ -16,7 +16,7 @@ ProfileAppearanceRead :: (document: string, state: *EntityState) -> bool {
     picture := EntityNumber(document, FieldAt(document, 0, "picture"), 0, 27)
     abstract := EntityNumber(document, FieldAt(document, 0, "abstract_picture"), 0, 2)
     if version != 1 || kind < 0 || picture < 0 || abstract < 0 { return false }
-    state.picture_kind = kind
+    state.picture_kind = ifx kind == 2 then 0 else kind
     state.abstract_picture = abstract
     if (state.pictures & (1 << picture)) != 0 { state.picture = picture }
     return true

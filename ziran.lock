@@ -61,16 +61,16 @@
       "url": "https://github.com/open-quantum-safe/liboqs.git"
     },
     {
-      "commit": "e948c3f280e2e3fa3ef7317dfaca27bd36a4900b",
+      "commit": "8250ece58a03f4d9c07cd8434780d659b54f5d7f",
       "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
-      "id": "pf7b24c15869d6839",
+      "id": "p7de54c8ad98fe034",
       "name": "DaochiClient",
       "ref": "master",
       "url": "https://github.com/ziranlang/daochi-client.git"
     }
   ],
   "root": {
-    "dependencies": {"daochi_client": "pf7b24c15869d6839", "kryon": "p77028198b0e09537", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
+    "dependencies": {"daochi_client": "p7de54c8ad98fe034", "kryon": "p77028198b0e09537", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096"},
     "name": "Entity"
   },
   "toolchain": {

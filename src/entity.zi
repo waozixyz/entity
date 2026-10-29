@@ -3,7 +3,6 @@
 #import "model"
 #import "achievement_view"
 #import "telegram_view"
-#import "avatar_view"
 #import "leaderboard_view"
 #import "leaderboard_model"
 #import "friends_model"

@@ -21,10 +21,7 @@ ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
 UI_SOURCES = $(wildcard $(KRYON_DIR)/src/ui/*.zi $(KRYON_DIR)/src/backend/*.zi $(ZIRAN_ROOT)/std/*.zi)
 .PHONY: all test run native native-test model-test publication
-all: build/entity.zx build/avatar.zx native
-build/avatar.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) ziran.lock Makefile
-	mkdir -p build
-	$(ZIRAN) bundle --root . $(MODULE_PATHS) --define KRYON_HOSTED_UI --entry avatar_app:Main -o $@ src/avatar_app.zi
+all: build/entity.zx native
 build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
 	mkdir -p build
 	$(ZIRAN) bundle --root . --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
@@ -137,11 +134,9 @@ profile-refresh-test:
 
 test: profile-refresh-test
 
-.PHONY: profile-shared-test avatar
+.PHONY: profile-shared-test
 profile-shared-test:
 	LDLIBS='-l:libcurl.so.4 -lm -lpthread' $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_shared_test:main --exe -o build/profile-shared-test tests/profile_shared_test.zi
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-shared-test/profile_shared_test
 
 test: profile-shared-test
-avatar: all
-	./build/entity build/avatar.zx

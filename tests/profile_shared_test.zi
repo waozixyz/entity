@@ -23,13 +23,15 @@ Receive :: (document: string) { received += 1 }
 #program_export
 main :: () -> s32 {
     state := EntityDefault()
-    state.picture_kind = 2
+    state.picture_kind = 1
     state.abstract_picture = 2
     state.picture = 27
     document := ProfileAppearanceWrite(state)
     next := EntityDefault()
-    if !ProfileAppearanceRead(document, *next) || next.picture_kind != 2 || next.picture != 27 || next.abstract_picture != 2 { return 1 }
+    if !ProfileAppearanceRead(document, *next) || next.picture_kind != 1 || next.picture != 27 || next.abstract_picture != 2 { return 1 }
     EntityFree(document)
+    // A record saved with the removed Avatar shows the Classic picture.
+    if !ProfileAppearanceRead("{\"version\":1,\"picture_kind\":2,\"picture\":0,\"abstract_picture\":0}", *next) || next.picture_kind != 0 { return 20 }
     if ProfileAppearanceRead("{\"version\":1,\"picture_kind\":3,\"picture\":0,\"abstract_picture\":0}", *next) { return 2 }
     if ProfileAppearanceRead("{}", *next) { return 3 }
     token: [65]u8

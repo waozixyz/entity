@@ -16,7 +16,6 @@ module_aliases = { FileDialogLinux = "file_dialog_linux" }
 model = "src/model.zi"
 telegram_connection = "src/telegram_connection.zi"
 profile_appearance = "src/profile_appearance.zi"
-avatar_view = "src/avatar_view.zi"
 dew_model = "src/dew_model.zi"
 dew_view = "src/dew_view.zi"
 node_url = "src/node_url.zi"

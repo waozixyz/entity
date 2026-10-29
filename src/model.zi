@@ -55,7 +55,7 @@ EntityState :: struct {
     name: [64]u8
     intention: [128]u8
     picture: s32
-    // Classic icon, abstract artwork, or the account's 3D avatar.
+    // Classic icon or abstract artwork.
     picture_kind: s32
     abstract_picture: s32
     pictures: s32
@@ -194,6 +194,8 @@ EntityDecode :: (text: string, output: *EntityState) -> bool {
     state.picture_kind = ifx kind_at < 0 then 0 else EntityNumber(text, kind_at, 0, 2)
     state.abstract_picture = ifx abstract_at < 0 then 0 else EntityNumber(text, abstract_at, 0, 2)
     if state.picture_kind < 0 || state.abstract_picture < 0 { return false }
+    // Kind 2 was the removed Avatar; those profiles show their Classic icon.
+    if state.picture_kind == 2 { state.picture_kind = 0 }
     picture_keys: [1]string = .["pictures"]
     picture_at: [1]s32
     unused Json.ObjectPositions(text, 0, picture_keys[:], picture_at[:])

@@ -315,11 +315,6 @@ NativeLeaderboardRow :: (document: string, at: s32, value: s64, own: bool, run: 
     page.row_count += 1
 }
 
-NativeLeaderboardOwnIcon :: () -> s32 {
-    if account_profile.picture_kind == 2 { return 0 }
-    return EntityPublicIcon(account_profile)
-}
-
 NativeLeaderboardRows :: () {
     page := *native_leaderboard_page
     if page.selected < 0 { return }
@@ -394,7 +389,7 @@ NativeLeaderboardRows :: () {
     if run { unused CopyCString(FormatInteger(own_level, digits[:]), row.average[:]) }
     row.own = true
     row.game_icon = own_appearance
-    row.icon = NativeLeaderboardOwnIcon()
+    row.icon = EntityPublicIcon(account_profile)
     page.row_count += 1
     // A run board ranks by the column the player chose.
     by_level := run && native_leaderboard_metric == 1
@@ -461,7 +456,7 @@ EntityLeaderboardAnswer :: (request: string) -> string {
         }
         NativeLeaderboardRows()
         for index: cast(s32)0..page.row_count - 1 {
-            if page.rows[index].own { page.rows[index].icon = NativeLeaderboardOwnIcon() }
+            if page.rows[index].own { page.rows[index].icon = EntityPublicIcon(account_profile) }
         }
     } else {
         CancelRequest(*native_leaderboard_pending)

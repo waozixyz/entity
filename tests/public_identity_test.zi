@@ -145,7 +145,7 @@ main :: () -> s32 {
     Frame()
     ClickKey(9)
     Expect(FindKey(76000) >= 0, "clicking the profile picture opens the picker modal")
-    Expect(Find("Abstract") >= 0 && Find("Classic") >= 0 && Find("Avatar") < 0, "picker offers pictures with Avatar hidden")
+    Expect(Find("Abstract") >= 0 && Find("Classic") >= 0 && Find("Avatar") < 0, "picker offers only Abstract and Classic")
     Expect(FindKey(76102) < 0 && FindKey(76200) < 0 && FindKey(70000) < 0, "Avatar controls are absent")
     Command("back")
     Expect(FindKey(76000) < 0, "Back dismisses the picture modal")
