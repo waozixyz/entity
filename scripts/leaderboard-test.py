@@ -52,6 +52,9 @@ print('PASS: installed-only boards, retained scores, account changes, async frie
 if '--capacity' in sys.argv:
     subprocess.run(['make', 'all'], cwd=root, env=env, check=True)
     subprocess.run([str(build('leaderboard_capacity_fixture', output, ui=True))], cwd=root, env=env, check=True)
+if '--friends' in sys.argv:
+    subprocess.run(['make', 'all'], cwd=root, env=env, check=True)
+    subprocess.run([str(build('friends_ui_fixture', output, ui=True))], cwd=root, env=env, check=True)
 if '--ui' in sys.argv:
     subprocess.run(['make', 'all'], cwd=root, env=env, check=True)
     fixture = build('leaderboard_ui_fixture', root / 'build/leaderboard-ui-fixture', ui=True)

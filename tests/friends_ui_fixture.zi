@@ -1,0 +1,136 @@
+#import "std/bundle_host"
+#import "std/file"
+#import "std/byte_text_linux"
+#import "recovery"
+#import "kryon/widget_codec"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/json_scan"
+#import "native_host"
+#import "native_files"
+#import "account_store"
+#import "model"
+#import "kryon/widget_host"
+#import "kryon/app_context_host"
+#import "kryon/hosted_values"
+#import "kryon/pixmap"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/tree_draw"
+#import "kryon/geometry"
+
+owner :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+target :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+answer: string;
+cancelled: bool;
+busy: bool;
+activate: s32;
+failures: s32;
+profile_rows: s32;
+profile_mixed: bool;
+Expect :: (value: bool, message: string) {
+    if !value { print("FAIL: %\n", message); failures += 1 }
+}
+Services :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(function) == "WriteStoreHost" {
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if TextFromCString(function) != "AppServiceHost" || count != 2 || AppArgumentText(arguments[0]) != "entity.friends" {
+        return EntityHostServices(context, module, function, arguments, count, result)
+    }
+    request := AppArgumentText(arguments[1])
+    if request != "" && request != "refresh" {
+        operation: [16]u8
+        id: [129]u8
+        account: [65]u8
+        unused ReadStringText(request, FieldAt(request, 0, "operation"), operation[:])
+        unused ReadStringText(request, FieldAt(request, 0, "target"), id[:])
+        unused ReadStringText(request, FieldAt(request, 0, "owner"), account[:])
+        Expect(!busy && TextUntilNul(operation[:]) == "decline" && TextUntilNul(id[:]) == "pending-1" && TextUntilNul(account[:]) == owner,
+            "cancel sends the account-scoped pending request action")
+        cancelled = true
+        result.* = EntityHostText("queued")
+        return 1
+    }
+    EntityFree(answer)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":\"%\",\"busy\":%,\"list\":{\"friends\":[]},\"requests\":{\"incoming\":[],\"outgoing\":[", owner, ifx busy then "true" else "false")
+    if !cancelled { BuilderPrint(*out, "{\"id\":\"pending-1\",\"status\":\"pending\",\"target_user_id_hash\":\"%\",\"target_alias\":\"river_with_a_long_display_name\"}", target) }
+    BuilderPrint(*out, "]}}")
+    answer = BuilderFinish(out)
+    result.* = EntityHostText(answer)
+    return 1
+}
+Widgets :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    called := WidgetHostCall(context, module, function, arguments, count, result)
+    if called != 0 && TextFromCString(function) == "ButtonHostedHost" && count == 2 {
+        button := WidgetDecodeButtonProps(arguments[1], *widget_button_codec)
+        if button.id == 10 || button.id == 704 || button.id == 551 || button.id == 550 ||
+            button.id == 819 || button.id == 823 || button.id == 832 || button.id == 824 ||
+            button.id == 830 || button.id == 831 {
+            profile_rows += 1
+            profile_mixed = profile_mixed || !button.invisible
+        }
+        if activate != 0 && button.id == activate {
+            result.* = HostScalar("s32", cast(s64)activate)
+            activate = 0
+        }
+    }
+    return called
+}
+Node :: (session: Session, key: u64) -> s32 {
+    for index: cast(s32)0..TreeCount(session) - 1 {
+        if TreeNodeAt(session, index).key == key { return index }
+    }
+    return -1
+}
+Frame :: (session: Session, width: float32) {
+    bounds := Rectangle.{0.0, 0.0, width, 900.0}
+    PixmapBegin(cast(u32)PixmapBackground)
+    unused BeginFrame(session, 1, bounds)
+    Expect(EntityHostFrame(session, bounds, 0, 0, .{}), "compose the real Friends page")
+    unused EndFrame(session)
+}
+#program_export
+main :: () -> s32 {
+    bytes, found := ReadEntireFile("build/entity.zx")
+    if !found || !EntityHostOpen(bytes, NativeEnvironment("ENTITY_LEADERBOARD_TEST_DATA"), "entity", true) { return 1 }
+    unused CopyCString(owner, account_recovery.keys.public_id[:])
+    account_standalone_ready = true
+    portable.services = Services
+    portable.widgets = Widgets
+    session := SessionOpen()
+    if !SessionValid(session) { return 1 }
+    defer { PixmapCloseWorkers(); CloseSession(session); EntityFree(answer) }
+    activate = 551
+    Frame(session, 390.0)
+    Expect(profile_rows == 10 && !profile_mixed, "Profile navigation and account actions use one row system")
+    widths: [3]float32 = .[320.0, 390.0, 720.0]
+    for width: widths {
+        Frame(session, width)
+        name := Node(session, 62000)
+        status := Node(session, 62003)
+        cancel := Node(session, 62002)
+        Expect(name >= 0 && status >= 0 && cancel >= 0, "outgoing request has name, sent state and Cancel")
+        if name < 0 || status < 0 || cancel < 0 { continue }
+        a := TreeNodeAt(session, name).bounds
+        b := TreeNodeAt(session, status).bounds
+        c := TreeNodeAt(session, cancel).bounds
+        Expect(a.y == b.y && a.x + a.width <= b.x && b.x + b.width <= c.x, "sent state stays beside the name without overlapping Cancel")
+    }
+    busy = true
+    activate = 62002
+    Frame(session, 390.0)
+    Expect(!cancelled && Node(session, 62002) < 0, "busy requests cannot be submitted twice")
+    busy = false
+    activate = 62002
+    Frame(session, 390.0)
+    Expect(cancelled, "Cancel withdraws the outgoing request")
+    Frame(session, 390.0)
+    Expect(Node(session, 62000) < 0 && Node(session, 62002) < 0, "withdrawn pending row disappears after refresh")
+    print("Friends UI local test failures: %\n", failures)
+    return ifx failures == 0 then 0 else 1
+}

@@ -117,15 +117,33 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
         unused ReadStringText(document, FieldAt(document, item, "target_user_id_hash"), target[:])
         unused ReadStringText(document, FieldAt(document, item, "id"), id[:])
         incoming := direction == 0 && TextUntilNul(target[:]) == TextUntilNul(management.public_id[:])
-        TextLine(cast(u64)(61000 + direction * 1000 + index * 4), FriendName(document, item,
-            ifx incoming then "requester_alias" else "target_alias", ifx incoming then "requester_user_id_hash" else "target_user_id_hash", name[:]), x, y.*, width, 16)
-        y.* += 36.0 * scale
-        if incoming && !busy {
-            half := (width - 8.0 * scale) * 0.5
-            if Action(61001 + direction * 1000 + index * 4, Label("profile_accept_friend", "Accept"), Rectangle.{x, y.*, half, 44.0 * scale}) { FriendAction("accept", TextUntilNul(id[:])) }
-            if Action(61002 + direction * 1000 + index * 4, Label("profile_decline_friend", "Decline"), Rectangle.{x + half + 8.0 * scale, y.*, half, 44.0 * scale}) { FriendAction("decline", TextUntilNul(id[:])) }
+        row_key := 61000 + direction * 1000 + index * 4
+        name_text := FriendName(document, item,
+            ifx incoming then "requester_alias" else "target_alias", ifx incoming then "requester_user_id_hash" else "target_user_id_hash", name[:])
+        if incoming {
+            TextLine(cast(u64)row_key, name_text, x, y.*, width, 16)
+            y.* += 36.0 * scale
+            if !busy {
+                half := (width - 8.0 * scale) * 0.5
+                if Action(row_key + 1, Label("profile_accept_friend", "Accept"), Rectangle.{x, y.*, half, 44.0 * scale}) { FriendAction("accept", TextUntilNul(id[:])) }
+                if Action(row_key + 2, Label("profile_decline_friend", "Decline"), Rectangle.{x + half + 8.0 * scale, y.*, half, 44.0 * scale}) { FriendAction("decline", TextUntilNul(id[:])) }
+                y.* += 56.0 * scale
+            }
+        } else {
+            // Keep the sent state beside the name and leave a separate touch target.
+            cancel_width := 72.0 * scale
+            content_width := width - cancel_width - 16.0 * scale
+            status_width := content_width * 0.5
+            TextLine(cast(u64)row_key, name_text, x, y.* + 8.0 * scale, content_width - status_width - 8.0 * scale, 16)
+            Muted(cast(u64)(row_key + 3), Label("profile_request_sent", "Request sent"),
+                x + content_width - status_width, y.* + 8.0 * scale, status_width)
+            // Daochi lets the sender withdraw a pending request through decline.
+            if !busy && Action(row_key + 2, Label("entity.cancel", "Cancel"),
+                    Rectangle.{x + width - cancel_width, y.*, cancel_width, 44.0 * scale}) {
+                FriendAction("decline", TextUntilNul(id[:]))
+            }
             y.* += 56.0 * scale
-        } else if !incoming { Muted(cast(u64)(61003 + direction * 1000 + index * 4), Label("profile_request_sent", "Request sent"), x, y.*, width); y.* += 36.0 * scale }
+        }
     }
     }
 }
