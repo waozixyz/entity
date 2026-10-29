@@ -49,6 +49,9 @@ def build(entry, directory, ui=False):
 
 subprocess.run([str(build('leaderboard_test', output))], cwd=root, env=env, check=True)
 print('PASS: installed-only boards, retained scores, account changes, async friend rankings and validation')
+if '--capacity' in sys.argv:
+    subprocess.run(['make', 'all'], cwd=root, env=env, check=True)
+    subprocess.run([str(build('leaderboard_capacity_fixture', output, ui=True))], cwd=root, env=env, check=True)
 if '--ui' in sys.argv:
     subprocess.run(['make', 'all'], cwd=root, env=env, check=True)
     fixture = build('leaderboard_ui_fixture', root / 'build/leaderboard-ui-fixture', ui=True)

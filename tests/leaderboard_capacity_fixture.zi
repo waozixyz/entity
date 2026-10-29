@@ -1,0 +1,68 @@
+#import "std/bundle_host"
+#import "kryon/tree_draw"
+#import "kryon/tree_input"
+// Exercise the production portable leaderboard at its supported row limit.
+#import "native_host"
+#import "native_files"
+#import "leaderboard_model"
+#import "model"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/file"
+#import "kryon/pixmap"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/geometry"
+#import "kryon/hosted_values"
+#import "kryon/app_context_host"
+
+page: ProfileLeaderboard;
+answer: string;
+FixtureServices :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(function) == "AppServiceHost" && count == 2 &&
+    AppArgumentText(arguments[0]) == LEADERBOARD_SERVICE {
+        result.* = EntityHostText(answer)
+        return 1
+    }
+    return EntityHostServices(context, module, function, arguments, count, result)
+}
+
+#program_export
+main :: () -> s32 {
+    bytes, found := ReadEntireFile("build/entity.zx")
+    if !found || !EntityHostOpen(bytes, NativeEnvironment("ENTITY_LEADERBOARD_TEST_DATA"), "entity", true) { print("FAIL open: %\n", EntityHostProblem()); return 1 }
+    unused CopyCString("fixture", page.owner[:])
+    page.board_count = 1
+    unused CopyCString("wurm", page.boards[0].app[:])
+    unused CopyCString("Apfelwurm", page.boards[0].app_title[:])
+    unused CopyCString("xyz.waozi.wurm", page.boards[0].id[:])
+    unused CopyCString("Apfelwurm", page.boards[0].title[:])
+    unused CopyCString("Score", page.boards[0].primary[:])
+    unused CopyCString("Level", page.boards[0].average[:])
+    portable.services = FixtureServices
+    session := SessionOpen()
+    if !SessionValid(session) { return 1 }
+    defer { PixmapCloseWorkers(); CloseSession(session) }
+    bounds := Rectangle.{0.0, 0.0, 390.0, 780.0}
+    for count: cast(s32)1..LEADERBOARD_ROWS {
+        if count != 1 && count != 2 && count != 9 && count != 16 && count != 32 && count != 64 { continue }
+        page.row_count = count
+        for index: cast(s32)0..count - 1 {
+            unused CopyCString("@river", page.rows[index].name[:])
+            unused CopyCString("1234", page.rows[index].value[:])
+            unused CopyCString("12", page.rows[index].average[:])
+            page.rows[index].game_icon = index % 9 + 1
+        }
+        answer = ProfileLeaderboardEncode(*page)
+        if !EntityHostLeaderboard() { print("FAIL command at % rows\n", count); return 1 }
+        PixmapBegin(cast(u32)PixmapBackground)
+        unused BeginFrame(session, cast(u64)1, bounds)
+        good := EntityHostFrame(session, bounds, 0, 0, .{})
+        if !good { print("FAIL frame at % rows\n", count); return 1 }
+        unused EndFrame(session)
+        EntityFree(answer)
+        print("PASS frame at % rows\n", count)
+    }
+    return 0
+}

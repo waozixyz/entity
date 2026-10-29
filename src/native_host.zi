@@ -147,7 +147,7 @@ EntityHostAssetAllowed :: (path: string) -> bool {
     first: [4096]u8
     second: [4096]u8
     abstract: [4096]u8
-    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
+    names: [4]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png", "assets/entity/wurm-special-skins.png"]
     for name: names { if path == NativeJoin(abstract[:], TextUntilNul(asset_folder[:]), name) { return true } }
     return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/entity/pfp.png") ||
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
@@ -193,7 +193,7 @@ EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigati
         for index: cast(u64)0..asset_count - 1 {
             name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
             if name != "assets/entity/pfp.png" && name != "assets/entity/flowers.png" &&
-            name != "assets/entity/abstract-jade.png" && name != "assets/entity/abstract-amber.png" && name != "assets/entity/abstract-violet.png" { continue }
+            name != "assets/entity/abstract-jade.png" && name != "assets/entity/abstract-amber.png" && name != "assets/entity/abstract-violet.png" && name != "assets/entity/wurm-special-skins.png" { continue }
             folder: [4096]u8
             path: [4096]u8
             if !NativeDirectory(NativeJoin(folder[:], root, "assets/entity")) { return false }
