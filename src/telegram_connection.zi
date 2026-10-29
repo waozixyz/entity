@@ -1,0 +1,168 @@
+// Shared bot connection policy. Apps supply only their bot/relay and their
+// authenticated transport, account store and message handler.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/vec"
+#import "model"
+#import "kryon/open_uri"
+
+TelegramBot :: struct { name: string; relay: string }
+TelegramConnection :: struct {
+    owner: [65]u8
+    linked: bool
+    linked_at: s64
+    error: bool
+    waiting: bool
+    link_requested: bool
+    disconnect_requested: bool
+    active: bool
+    stage: s32
+    retry: s64
+    ack: s64
+}
+TelegramStartFn :: #type (method: string, path: string, body: string) -> bool;
+TelegramPollFn :: #type (output: []u8) -> s32;
+TelegramCancelFn :: #type () -> ();
+TelegramReceiveFn :: #type (document: string) -> ();
+TelegramTransport :: struct {
+    start: TelegramStartFn
+    poll: TelegramPollFn
+    cancel: TelegramCancelFn
+    receive: TelegramReceiveFn
+}
+TelegramBotValid :: (name: string) -> bool {
+    if name.count < 5 || name.count > 32 || name[name.count - 4:] != "_bot" { return false }
+    for byte: name {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_") { return false }
+    }
+    return true
+}
+TelegramOpenBot :: (bot: string, start: string = "") -> bool {
+    if !TelegramBotValid(bot) || start.count > 64 { return false }
+    for byte: start {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "-") { return false }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "https://t.me/%", bot)
+    if start != "" { BuilderPrint(*out, "?start=%", start) }
+    uri := BuilderFinish(out)
+    defer { EntityFree(uri) }
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_ANDROID) || #defined(__ANDROID__) {
+        native: Vec(u8)
+        BuilderPrint(*native, "tg://resolve?domain=%", bot)
+        if start != "" { BuilderPrint(*native, "&start=%", start) }
+        link := BuilderFinish(native)
+        opened := OpenUri(link)
+        EntityFree(link)
+        if opened { return true }
+    }
+    return OpenUri(uri)
+}
+TelegramLinkStart :: (bot: string, document: string, output: []u8) -> bool {
+    if !TelegramBotValid(bot) { return false }
+    url: [256]u8
+    if ReadStringText(document, FieldAt(document, 0, "url"), url[:]) <= 0 { return false }
+    out: Vec(u8)
+    BuilderPrint(*out, "https://t.me/%?start=", bot)
+    prefix := BuilderFinish(out)
+    defer { EntityFree(prefix) }
+    link := TextUntilNul(url[:])
+    if link.count != prefix.count + 32 || link[:prefix.count] != prefix { return false }
+    token := link[prefix.count:]
+    for byte: token {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return CopyCString(token, output)
+}
+TelegramRequest :: (state: *TelegramConnection, host: TelegramTransport, method: string, path: string, body: string, stage: s32) -> bool {
+    state.active = host.start != null && host.start(method, path, body)
+    if state.active { state.stage = stage }
+    else { state.error = true }
+    return state.active
+}
+TelegramConnectionPump :: (state: *TelegramConnection, bot: TelegramBot, host: TelegramTransport,
+    owner: string, has_account: bool, allowed: bool, message_busy: bool, client: string, now: s64) {
+    if TextUntilNul(state.owner[:]) != owner {
+        if host.cancel != null { host.cancel() }
+        if state.owner[0] != 0 { state.* = .{} }
+        unused CopyCString(owner, state.owner[:])
+    }
+    if state.active && !allowed && state.stage != 5 {
+        host.cancel()
+        state.active = false
+        state.stage = 0
+        state.ack = 0
+        state.waiting = false
+    }
+    if state.active {
+        response: [65536]u8
+        result := host.poll(response[:])
+        if result == 0 { return }
+        state.active = false
+        stage := state.stage
+        state.stage = 0
+        if result < 0 {
+            state.error = true
+            state.retry = now + 5
+            if stage == 1 { state.waiting = false }
+        } else {
+            state.error = false
+            if stage == 1 {
+                token: [65]u8
+                state.waiting = TelegramLinkStart(bot.name, TextUntilNul(response[:]), token[:]) && TelegramOpenBot(bot.name, TextUntilNul(token[:]))
+                state.error = !state.waiting
+            } else if stage == 2 {
+                document := TextUntilNul(response[:])
+                state.linked = MatchLiteral(document, FieldAt(document, 0, "linked"), "true")
+                time := ReadNumber(document, FieldAt(document, 0, "linked_at"))
+                state.linked_at = ifx time.valid then cast(s64)time.value else 0
+                if state.linked { state.waiting = false }
+                if host.receive != null { host.receive(document) }
+                if state.ack != 0 { state.retry = 0 }
+            } else if stage == 3 {
+                state.ack = 0
+                state.retry = 0
+            } else if stage == 5 {
+                state.linked = false
+                state.waiting = false
+                state.linked_at = 0
+            }
+        }
+    }
+    if !allowed { state.link_requested = false }
+    if !has_account || client.count != 64 { return }
+    if !state.link_requested && !state.disconnect_requested && now < state.retry { return }
+    if state.disconnect_requested || state.link_requested {
+        disconnect := state.disconnect_requested
+        state.disconnect_requested = false
+        state.link_requested = false
+        out: Vec(u8)
+        BuilderPrint(*out, "%/link", bot.relay)
+        path := BuilderFinish(out)
+        unused TelegramRequest(state, host, ifx disconnect then "DELETE" else "POST", path, ifx disconnect then "" else "{}", ifx disconnect then 5 else 1)
+        EntityFree(path)
+        return
+    }
+    if !allowed { return }
+    state.retry = now + 2
+    if state.ack != 0 {
+        out: Vec(u8)
+        BuilderPrint(*out, "%/ack", bot.relay)
+        path := BuilderFinish(out)
+        body: Vec(u8)
+        BuilderPrint(*body, "{\"id\":%,\"client\":\"%\"}", state.ack, client)
+        text := BuilderFinish(body)
+        unused TelegramRequest(state, host, "POST", path, text, 3)
+        EntityFree(path)
+        EntityFree(text)
+    } else if !message_busy {
+        out: Vec(u8)
+        BuilderPrint(*out, "%/updates?client=%", bot.relay, client)
+        path := BuilderFinish(out)
+        unused TelegramRequest(state, host, "GET", path, "", 2)
+        EntityFree(path)
+    }
+}

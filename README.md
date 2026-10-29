@@ -224,3 +224,24 @@ requests and clear old friend rows. No game gets another game's records or keys.
 asynchronous publication and friend ranking with a private in-memory transport.
 Add `--ui` to render empty and populated boards on private Xvfb displays and
 verify Profile/Back navigation.
+
+## Profile pictures and Avatar
+
+Click the picture in Profile or Account to open one modal with Abstract,
+Classic and Avatar tabs. Classic retains the existing icon set; Abstract
+contains three generated bitmap pictures. Avatar is a warm illustrated portrait with expressive eyes, a slight smile
+and a shirt. Drag a little left or right for a small turn; use + and − to
+zoom and Reset view to return to the initial view.
+
+`make avatar` opens the same editor as an independent Entity sub-app;
+`scripts/run-avatar.sh` launches an already built editor. The camera is local
+view state. The chosen picture family follows the verified Daochi account in
+`private.entity.v1.profile`, record `00000000000000000000000000000001`, schema
+`entity.profile-appearance.v1`, through the existing encrypted Entity record
+service. Old profile documents keep their classic picture.
+
+`entity/telegram_connection` owns bot URI validation, account-change cancellation,
+link/disconnect/poll/ack ordering and retry policy. An app configures its bot name
+and relay path and supplies authenticated transport and its message handler.
+Profile draws `entity.telegram` snapshots and sends owner-bound actions; hosts
+retain key access and validate pending authorization request IDs before approval.

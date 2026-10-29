@@ -4,8 +4,10 @@
 #import "account_store"
 #import "recovery"
 #import "daochi_client/keys"
+#import "daochi_client/crypto"
 #import "native_files"
 #import "std/number_text"
+#import "std/byte_text_linux"
 #import "std/date_time_linux"
 #import "std/net_http"
 #import "std/json_scan"
@@ -452,6 +454,7 @@ EntityLeaderboardAnswer :: (request: string) -> string {
             native_leaderboard_metric = 0
             native_leaderboard_loaded = false
             native_leaderboard_rows_dirty = true
+            NativeLeaderboardCacheLoad()
         }
         if !native_leaderboard_loaded && native_leaderboard_stage == 0 && TextUntilNul(page.owner[:]) != "local" {
             native_leaderboard_requested = true
@@ -493,6 +496,7 @@ EntityLeaderboardPump :: () {
         if native_leaderboard_stage == 4 && valid { native_leaderboard_levels = native_leaderboard_response }
         if native_leaderboard_stage == 4 || (native_leaderboard_stage == 3 && !NativeSelectedRun()) {
             native_leaderboard_rows_dirty = true
+            if valid && !native_leaderboard_error { NativeLeaderboardCacheSave() }
             native_leaderboard_stage = 0
             // A score or skin changed while this request was in flight.
             // Keep its queued publication for the next pump.
@@ -567,4 +571,60 @@ EntityLeaderboardPump :: () {
         native_leaderboard_loaded = true
         native_leaderboard_error = true
     }
+}
+
+
+// Last complete ranking inputs, scoped to the node, account and board. A
+// background refresh never replaces these with a partial/failed response.
+NativeLeaderboardCachePath :: (output: []u8) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%\n%\n%", TextUntilNul(native_leaderboard_node[:]), TextUntilNul(native_leaderboard_owner[:]), TextUntilNul(native_leaderboard_selected[:]))
+    text := BuilderFinish(out)
+    defer { EntityFree(text) }
+    digest: [65]u8
+    bytes := cast(*TextDescriptor)(*text)
+    Sha256Hex(bytes.data, text.count, *digest[0])
+    folder: [4096]u8
+    directory := AccountStorePath("leaderboards", folder[:])
+    if !NativeDirectory(directory) { return "" }
+    name: Vec(u8)
+    BuilderPrint(*name, "cache.%.json", TextUntilNul(digest[:]))
+    filename := BuilderFinish(name)
+    defer { EntityFree(filename) }
+    return NativeJoin(output, directory, filename)
+}
+NativeLeaderboardCacheSave :: () {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"friends\":%,\"stats\":%,\"levels\":%}",
+        ifx native_leaderboard_friends[0] != 0 then TextUntilNul(native_leaderboard_friends[:]) else "{\"friends\":[]}",
+        ifx native_leaderboard_stats[0] != 0 then TextUntilNul(native_leaderboard_stats[:]) else "{\"rows\":[]}",
+        ifx native_leaderboard_levels[0] != 0 then TextUntilNul(native_leaderboard_levels[:]) else "{\"rows\":[]}")
+    document := BuilderFinish(out)
+    defer { EntityFree(document) }
+    path: [4096]u8
+    unused NativeWrite(NativeLeaderboardCachePath(path[:]), document)
+}
+NativeLeaderboardCachePart :: (document: string, name: string, array: string, output: []u8) -> bool {
+    at := FieldAt(document, 0, name)
+    end := ValueEnd(document, at, 0)
+    if at < 0 || end <= at { return false }
+    data := document[at:end]
+    count := ArrayCount(data, FieldAt(data, 0, array))
+    return count >= 0 && count <= LEADERBOARD_ROWS && CopyCString(data, output)
+}
+NativeLeaderboardCacheLoad :: () {
+    path: [4096]u8
+    buffer: [65536]u8
+    if NativeRead(NativeLeaderboardCachePath(path[:]), buffer[:]) <= 0 { return }
+    document := TextUntilNul(buffer[:])
+    if Space(document, ValueEnd(document, 0, 0)) != document.count { return }
+    friends: [16384]u8
+    stats: [16384]u8
+    levels: [16384]u8
+    if !NativeLeaderboardCachePart(document, "friends", "friends", friends[:]) ||
+    !NativeLeaderboardCachePart(document, "stats", "rows", stats[:]) ||
+    !NativeLeaderboardCachePart(document, "levels", "rows", levels[:]) { return }
+    native_leaderboard_friends = friends
+    native_leaderboard_stats = stats
+    native_leaderboard_levels = levels
 }

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import time
 import urllib.request
@@ -52,7 +53,7 @@ def build(name):
                     '-Wl,--gc-sections', f'-I{std_root / "include"}', f'-I{generated}', f'-I{monocypher / "src"}',
                     *map(str, generated.rglob('*.c')), str(monocypher / 'src/monocypher.c'),
                     str(monocypher / 'src/optional/monocypher-ed25519.c'),
-                    str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-o', str(executable)],
+                    str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-lz', '-o', str(executable)],
                    check=True, env=ENV)
     return executable
 
@@ -109,6 +110,10 @@ with (node_folder / 'node.log').open('w') as log:
             shutil.copy2(devices['first'] / name, devices['second'] / name)
         step('third', 'local')
         step('first', 'first')
+        with sqlite3.connect(node_folder / 'node.db') as database:
+            variants = database.execute("SELECT LENGTH(r.ciphertext),LENGTH(p.ciphertext) FROM server_encrypted_records r JOIN server_record_packing p USING(user_id_hash,collection,id) WHERE r.id='00000000000000000000000000000004'").fetchall()
+            assert len(variants) == 1 and variants[0][1] < variants[0][0] / 10, variants
+            print('Packed level record ciphertext bytes:', variants[0][0], '->', variants[0][1])
         step('second', 'second')
         for name in ('account.key', 'entity.json'):
             shutil.copy2(devices['first'] / name, devices['third'] / name)

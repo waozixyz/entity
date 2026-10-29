@@ -42,6 +42,7 @@
 #import "daochi_client/async_client"
 #import "daochi_client/async_sync"
 Auth :: #import "daochi_client/auth";
+RecordCodec :: #import "daochi_client/record_codec";
 #import "kryon/http_transfer"
 
 records_c :: #system_library "c";
@@ -841,9 +842,18 @@ RecordsUploadText :: (index: s32, out: *Vec(u8)) -> bool {
     sealed := SealEntityRecord(records_private[:], metadata, records_file[0:length], nonce[:], records_seal[:], records_sealed_text[:])
     if sealed < 0 { return false }
     nonce_bytes: [40]u8
-    BuilderPrint(out, "{\"collection\":\"%\",\"id\":\"%\",\"key_id\":\"entity-v1\",\"nonce\":\"%\",\"ciphertext\":\"%\",\"updated_at\":\"%\",\"schema_version\":1}",
+    BuilderPrint(out, "{\"collection\":\"%\",\"id\":\"%\",\"key_id\":\"entity-v1\",\"nonce\":\"%\",\"ciphertext\":\"%\",\"updated_at\":\"%\",\"schema_version\":1",
         collection, TextUntilNul(entry.id[:]), EntityRecordNonceText(nonce[:], nonce_bytes[:]),
         TextView(records_sealed_text[0:sealed]), time)
+    packed := RecordCodec.PackRecord(records_file[0:length], records_envelope[0:length])
+    if packed > 0 && SecureRandom(*nonce[0], nonce.count) != 0 {
+        packed_sealed := SealEntityRecord(records_private[:], metadata, records_envelope[0:packed], nonce[:], records_seal[:], records_sealed_text[:])
+        if packed_sealed > 0 {
+            BuilderPrint(out, ",\"packed_nonce\":\"%\",\"packed_ciphertext\":\"%\"",
+                EntityRecordNonceText(nonce[:], nonce_bytes[:]), TextView(records_sealed_text[0:packed_sealed]))
+        }
+    }
+    BuilderPrint(out, "}")
     return true
 }
 
@@ -855,7 +865,7 @@ RecordsBody :: () -> bool {
     if HexToBytes(TextUntilNul(account_recovery.keys.private_key_hex[:]), *records_private[0], records_private.count) != 1 { return false }
     defer { SecureWipe(*records_private[0], records_private.count) }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"protocol_version\":6,\"app_id\":\"entity\",\"user_id_hash\":\"%\",\"client_id\":\"%\",\"since_server_version\":%,\"encrypted_records_only\":true,\"record_limit\":16",
+    BuilderPrint(*out, "{\"protocol_version\":6,\"app_id\":\"entity\",\"user_id_hash\":\"%\",\"client_id\":\"%\",\"since_server_version\":%,\"encrypted_records_only\":true,\"record_encoding\":\"gzip-v1\",\"record_limit\":16",
         TextUntilNul(records_owner[:]), TextUntilNul(account_client_id[:]), records_since)
     if records_cursor[0] != cast(u8)0 { BuilderPrint(*out, ",\"record_cursor\":%", TextUntilNul(records_cursor[:])) }
     BuilderPrint(*out, ",\"encrypted_records\":[")
@@ -924,6 +934,13 @@ RecordsApply :: (text: string, at: s32) -> bool {
         SecureWipe(*records_private[0], records_private.count)
         if plain < 0 || !RecordsSchemaValid(TextUntilNul(entry.schema[:])) { return false }
         document := TextView(records_seal[0:plain])
+        if RecordCodec.RecordIsPacked(records_seal[0:plain]) {
+            size := RecordCodec.PackedRecordSize(records_seal[0:plain], ENTITY_RECORD_PLAIN_MAX)
+            if size < 0 || RecordCodec.UnpackRecord(records_seal[0:plain], records_envelope[:], ENTITY_RECORD_PLAIN_MAX) != size {
+                return false
+            }
+            document = TextView(records_envelope[0:size])
+        }
         stamp := ReadNumber(document, FieldAt(document, 0, "updated_at"))
         if stamp.valid && stamp.value > 0.0 { entry.updated_at = cast(s64)stamp.value }
         game_text: string

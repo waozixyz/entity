@@ -70,10 +70,11 @@ Draw :: (session: UI.Session) -> bool {
 #program_export
 main :: (argc: s32, argv: **u8) -> s32 {
     path := ifx argc > 1 then TextFromCString(argv[1]) else "build/entity.zx"
-    if !OpenEntity(path) { return 1 }
-    if !Desktop.OpenDesktopSized(480, 800) { return 1 }
+    if !OpenEntity(path) { print("Entity open failed: %\n", EntityHostProblem()); return 1 }
+    if !Desktop.OpenDesktopSized(480, 800) { print("Entity desktop failed\n"); return 1 }
     title: [16]u8
-    unused CopyCString("Entity", title[:])
+    avatar := path == "build/avatar.zx" || (path.count >= 10 && path[path.count - 10:] == "/avatar.zx")
+    unused CopyCString(ifx avatar then "Avatar" else "Entity", title[:])
     SetTitle(Desktop.window, *title[0])
     unused Desktop.WindowInterceptCloseHost(true)
     session := SessionOpen()

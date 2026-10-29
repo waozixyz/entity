@@ -1,0 +1,115 @@
+// Bot connection and authorization review live inside the shared Profile.
+#import "kryon/app_context"
+#import "kryon/button_props"
+#import "kryon/button_widget"
+#import "kryon/control_props"
+#import "kryon/scroll_props"
+#import "kryon/scroll_widget"
+#import "kryon/tree"
+#import "kryon/geometry"
+#import "achievement_view"
+#import "model"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/vec"
+telegram_open: bool;
+telegram_scroll: s32;
+telegram_page: [16385]u8;
+TelegramViewRoute :: (route: string) -> bool {
+    if route != "telegram" || !AppSupports("entity.telegram") { return false }
+    telegram_open = true
+    telegram_scroll = 0
+    return true
+}
+TelegramViewCommand :: (command: string) -> bool {
+    if command == "reload" { telegram_open = false; telegram_page = .{}; return false }
+    if command == "back" && telegram_open { telegram_open = false; AppReply("handled"); return true }
+    return false
+}
+TelegramViewAction :: (operation: string) {
+    page := TextUntilNul(telegram_page[:])
+    owner: [65]u8
+    request_id: [33]u8
+    unused ReadStringText(page, FieldAt(page, 0, "owner"), owner[:])
+    unused ReadStringText(page, FieldAt(page, 0, "request_id"), request_id[:])
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"operation\":\"%\",\"owner\":", operation)
+    EntityQuote(*out, TextUntilNul(owner[:]))
+    BuilderPrint(*out, ",\"request_id\":")
+    EntityQuote(*out, TextUntilNul(request_id[:]))
+    BuilderPrint(*out, "}")
+    query := BuilderFinish(out)
+    if AppService("entity.telegram", query) == "account" { AppReply("account") }
+    AchievementRelease(query)
+}
+TelegramViewFrame :: (navigation: bool) -> bool {
+    if !telegram_open { return false }
+    response := AppService("entity.telegram", "")
+    if response.count < 2 || response.count >= telegram_page.count { return true }
+    unused CopyCString(response, telegram_page[:])
+    document := TextUntilNul(telegram_page[:])
+    status: [4097]u8
+    primary: [256]u8
+    review: [8193]u8
+    authorization: [2049]u8
+    approve: [256]u8
+    cancel: [256]u8
+    disconnect: [256]u8
+    unused ReadStringText(document, FieldAt(document, 0, "status"), status[:])
+    unused ReadStringText(document, FieldAt(document, 0, "primary"), primary[:])
+    unused ReadStringText(document, FieldAt(document, 0, "review"), review[:])
+    unused ReadStringText(document, FieldAt(document, 0, "authorization"), authorization[:])
+    unused ReadStringText(document, FieldAt(document, 0, "approve"), approve[:])
+    unused ReadStringText(document, FieldAt(document, 0, "cancel"), cancel[:])
+    unused ReadStringText(document, FieldAt(document, 0, "disconnect"), disconnect[:])
+    busy := MatchLiteral(document, FieldAt(document, 0, "busy"), "true")
+    enabled := MatchLiteral(document, FieldAt(document, 0, "enabled"), "true")
+    session := AppSession()
+    scale := AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    area := AppBounds()
+    width := area.width - 40.0 * scale
+    if width > 680.0 * scale { width = 680.0 * scale }
+    font := cast(s32)(16.0 * scale)
+    status_height := AchievementWrappedHeight(TextUntilNul(status[:]), width, font, scale) + 16.0 * scale
+    review_height: float32 = ifx review[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(review[:]), width, font, scale) + 16.0 * scale
+    authorization_height: float32 = ifx authorization[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(authorization[:]), width, font, scale) + 16.0 * scale
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)77000, .bounds = area,
+            .content_height = cast(s32)(status_height + review_height + authorization_height + 380.0 * scale), .scroll_offset = telegram_scroll, .scale = scale})
+    telegram_scroll = scroll.scroll_offset
+    if !scroll.opened { return true }
+    x := scroll.content.x + (scroll.content.width - width) * 0.5
+    y := scroll.content.y + 16.0 * scale
+    if navigation {
+        back := AppLocale("entity.back")
+        if back == "" || back == "entity.back" { back = "Back" }
+        if Button(session, ButtonProps.{.id = 77001, .label = back, .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 { telegram_open = false }
+        y += 56.0 * scale
+    }
+    AchievementText(session, 77002, "Telegram", Rectangle.{x, y, width, 40.0 * scale}, cast(s32)(26.0 * scale))
+    y += 52.0 * scale
+    AchievementText(session, 77003, TextUntilNul(status[:]), Rectangle.{x, y, width, status_height}, font)
+    y += status_height
+    if Button(session, ButtonProps.{.id = 77004, .label = TextUntilNul(primary[:]),
+            .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = busy || !enabled, .loading = busy}) != 0 { TelegramViewAction("connect") }
+    y += 64.0 * scale
+    if authorization_height > 0.0 {
+        AchievementText(session, 77005, TextUntilNul(authorization[:]), Rectangle.{x, y, width, authorization_height}, font)
+        y += authorization_height
+    }
+    if review_height > 0.0 {
+        AchievementText(session, 77006, TextUntilNul(review[:]), Rectangle.{x, y, width, review_height}, font)
+        y += review_height
+    }
+    labels: [3]string = .[TextUntilNul(approve[:]), TextUntilNul(cancel[:]), TextUntilNul(disconnect[:])]
+    operations: [3]string = .["approve", "cancel", "disconnect"]
+    for index: cast(s32)0..2 {
+        if labels[index] == "" { continue }
+        if Button(session, ButtonProps.{.id = 77010 + index, .label = labels[index],
+                .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = busy || (index == 0 && review_height <= 0.0)}) != 0 { TelegramViewAction(operations[index]) }
+        y += 60.0 * scale
+    }
+    unused End(session)
+    return true
+}

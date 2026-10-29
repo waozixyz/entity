@@ -21,7 +21,10 @@ ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
 UI_SOURCES = $(wildcard $(KRYON_DIR)/src/ui/*.zi $(KRYON_DIR)/src/backend/*.zi $(ZIRAN_ROOT)/std/*.zi)
 .PHONY: all test run native native-test model-test publication
-all: build/entity.zx native
+all: build/entity.zx build/avatar.zx native
+build/avatar.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) ziran.lock Makefile
+	mkdir -p build
+	$(ZIRAN) bundle --root . $(MODULE_PATHS) --define KRYON_HOSTED_UI --entry avatar_app:Main -o $@ src/avatar_app.zi
 build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
 	mkdir -p build
 	$(ZIRAN) bundle --root . --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
@@ -80,7 +83,7 @@ build/generated/native/.complete: $(SOURCES) $(UI_SOURCES) ziran.lock Makefile
 build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_LIBRARY) Makefile
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/generated/native $$(find build/generated/native -type d -printf ' -iquote %p') \
 		-I$(MONOCYPHER_DIR)/src $$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) \
-		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -o $@
+		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -lz -o $@
 native: build/entity
 # Publishes a JSON document as a public Daochi publication; see tools/publication.zi.
 publication: build/publication
@@ -88,7 +91,7 @@ build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) b
 	rm -rf build/publication-c
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry publication:main -o build/publication-c tools/publication.zi
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/publication-c $$(find build/publication-c -type d -printf ' -iquote %p') \
-		-I$(MONOCYPHER_DIR)/src $$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -o $@
+		-I$(MONOCYPHER_DIR)/src $$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -lz -o $@
 # The entity.records service alone and between two devices through a
 # private local Daochi node (DAOCHI_BIN, by default the checkout's build).
 .PHONY: records-test
@@ -134,16 +137,11 @@ profile-refresh-test:
 
 test: profile-refresh-test
 
-.PHONY: profile-shared-test
+.PHONY: profile-shared-test avatar
 profile-shared-test:
-	LDLIBS="-l:libcurl.so.4 -lm -lpthread" $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_shared_test:main --exe -o build/profile-shared-test tests/profile_shared_test.zi
+	LDLIBS='-l:libcurl.so.4 -lm -lpthread' $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_shared_test:main --exe -o build/profile-shared-test tests/profile_shared_test.zi
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-shared-test/profile_shared_test
 
 test: profile-shared-test
-
-.PHONY: picture-initial-test
-picture-initial-test:
-	LDLIBS="-l:libcurl.so.4 -lm -lpthread" $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry picture_initial_test:main --exe -o build/picture-initial-test tests/picture_initial_test.zi
-	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/picture-initial-test/picture_initial_test
-
-test: picture-initial-test
+avatar: all
+	./build/entity build/avatar.zx

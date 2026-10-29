@@ -67,6 +67,15 @@ DewReset :: () {
     dew_active = false
     dew_queued = .{}
     dew_plan = .{}
+    if DewReady() {
+        path: [4096]u8
+        cached: [8192]u8
+        account: DewAccount
+        if NativeRead(DewCachePath(path[:]), cached[:]) > 0 &&
+        DewParseAccount(TextUntilNul(cached[:]), TextUntilNul(dew_owner[:]), *account) {
+            dew_plan = cached
+        }
+    }
     dew_address = .{}
     dew_deposits = .{}
     dew_attempt = .{}
@@ -80,6 +89,15 @@ DewAttemptPath :: (output: []u8) -> string {
     text := BuilderFinish(bytes)
     defer { EntityFree(text) }
     return AccountStorePath(text, output)
+}
+
+// Only a complete, node-confirmed answer is cached under its verified owner.
+DewCachePath :: (output: []u8) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "dew.%.account.json", TextUntilNul(dew_owner[:]))
+    name := BuilderFinish(out)
+    defer { EntityFree(name) }
+    return AccountStorePath(name, output)
 }
 
 DewSnapshot :: () -> string {
@@ -187,6 +205,8 @@ DewPump :: () {
                 account: DewAccount
                 if DewParseAccount(TextUntilNul(dew_response[:]), TextUntilNul(dew_owner[:]), *account) {
                     dew_plan = dew_response
+                    path: [4096]u8
+                    unused NativeWrite(DewCachePath(path[:]), TextUntilNul(dew_plan[:]))
                     dew_error = false
                     account_node_connected = true
                     account_node_used = account.used_bytes

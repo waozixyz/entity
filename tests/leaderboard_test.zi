@@ -107,6 +107,13 @@ Check :: () -> s32 {
     if page.rows[0].icon != 50 || page.rows[1].icon != 41 || page.rows[2].icon != 124 { return 31 }
     account_profile.picture = 7
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.rows[1].icon != 48 { return 32 }
+    // Reopening a board reads its last complete local ranking before refresh.
+    native_leaderboard_selected = .{}
+    native_leaderboard_stats = .{}
+    native_leaderboard_friends = .{}
+    native_leaderboard_rows_dirty = true
+    if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
+    TextUntilNul(page.rows[0].name[:]) != "@river" || !page.loading { return 30 }
     mock_status = 500
     unused EntityLeaderboardAnswer("refresh")
     for step: 0..3 { EntityLeaderboardPump() }

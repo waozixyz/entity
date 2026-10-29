@@ -41,7 +41,7 @@ subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-ffunction-secti
                 '-Wl,--gc-sections', f'-I{std_root / "include"}', f'-I{generated}', f'-I{monocypher / "src"}',
                 *map(str, generated.rglob('*.c')), str(monocypher / 'src/monocypher.c'),
                 str(monocypher / 'src/optional/monocypher-ed25519.c'),
-                str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-o', str(executable)], check=True, env=ENV)
+                str(liboqs), *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-lz', '-o', str(executable)], check=True, env=ENV)
 data = output / 'data'
 shutil.rmtree(data, ignore_errors=True)
 ENV['ENTITY_DATA'] = str(data)

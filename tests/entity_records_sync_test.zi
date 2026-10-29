@@ -83,6 +83,13 @@ Check :: () -> s32 {
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"110\",\"state\":\"advanced\"}}"), "status", "done") { return 22 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[]}}"), "status", "done") ||
         !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"fedcba9876543210fedcba9876543210\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"island\",\"title\":\"Shore\",\"levels\":[]}}"), "status", "done") { return 9 }
+        packed: Vec(u8)
+        BuilderPrint(*packed, "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"00000000000000000000000000000004\",\"document\":{\"title\":\"Compressed record\",\"note\":\"")
+        for index: 0..255 { BuilderPrint(*packed, "abcdefghijklmnopqrstuvwxyz012345") }
+        BuilderPrint(*packed, "\"}}")
+        packed_request := BuilderFinish(packed)
+        defer { EntityFree(packed_request) }
+        if !SyncField(EntityRecordsAnswer(packed_request), "status", "done") { return 27 }
         return ifx SyncSettle() then 0 else 10
     }
     if step == "second" {
@@ -91,6 +98,12 @@ Check :: () -> s32 {
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":5,\"completed\":\"001\",\"state\":\"fresh\"}}"), "status", "done") { return 23 }
         if !SyncSettle() { return 11 }
         if !SyncProgress() { return 24 }
+        packed_reply := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"00000000000000000000000000000004\"}")
+        packed_document := FieldAt(packed_reply, 0, "document")
+        packed_note: [8193]u8
+        if packed_document < 0 || ReadStringText(packed_reply, FieldAt(packed_reply, packed_document, "note"), packed_note[:]) != 8192 { return 28 }
+        pattern := "abcdefghijklmnopqrstuvwxyz012345"
+        for index: 0..8191 { if packed_note[index] != pattern[index % pattern.count] { return 29 } }
         if !SyncTitle(one, "Garden") || !SyncTitle(two, "Shore") { return 12 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden at night\",\"levels\":[]}}"), "status", "done") ||
         !SyncField(EntityRecordsAnswer("{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"fedcba9876543210fedcba9876543210\"}"), "status", "done") { return 13 }

@@ -2,6 +2,7 @@
 // interface; extension replies name only routes supplied by that host.
 #import "model"
 #import "achievement_view"
+#import "telegram_view"
 #import "avatar_view"
 #import "leaderboard_view"
 #import "leaderboard_model"
@@ -982,7 +983,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
                 dew_page = true
                 dew_refresh = true
             } else if route == "leaderboard" { unused ProfileLeaderboardCommand(route) }
-            else if !AchievementOpenRoute(route) { AppReply(route) }
+            else if !AchievementOpenRoute(route) && !TelegramViewRoute(route) { AppReply(route) }
         }
 
     }
@@ -1004,6 +1005,7 @@ Draw :: () {
         loaded = true
         dew_refresh = true
     }
+    if TelegramViewFrame(!state.host_navigation) { return }
     if ProfileLeaderboardFrame(!state.host_navigation) { return }
     if AchievementViewFrame(!state.host_navigation) { return }
     if dew_page { DrawDew(); return }
@@ -1108,6 +1110,7 @@ Main :: () -> s64 {
         AppReply("handled")
         return 0
     }
+    if mode == APP_COMMAND && TelegramViewCommand(AppCommand()) { return 0 }
     if mode == APP_COMMAND && ProfileLeaderboardCommand(AppCommand()) { return 0 }
     if mode == APP_COMMAND && AchievementCommand(AppCommand()) { return 0 }
     if mode == APP_FRAME { Draw() }
