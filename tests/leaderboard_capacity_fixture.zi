@@ -18,10 +18,12 @@
 
 page: ProfileLeaderboard;
 answer: string;
+leaderboard_reads: s32;
 FixtureServices :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     if TextFromCString(function) == "AppServiceHost" && count == 2 &&
     AppArgumentText(arguments[0]) == LEADERBOARD_SERVICE {
+        leaderboard_reads += 1
         result.* = EntityHostText(answer)
         return 1
     }
@@ -64,5 +66,22 @@ main :: () -> s32 {
         EntityFree(answer)
         print("PASS frame at % rows\n", count)
     }
+    // A profile that stops starts again on the page its host last opened,
+    // once until it draws again; after that it says why.
+    answer = ProfileLeaderboardEncode(*page)
+    defer { EntityFree(answer) }
+    reads := leaderboard_reads
+    if !EntityHostRecover() || EntityHostProblem() != "" { print("FAIL restart: %\n", EntityHostProblem()); return 1 }
+    PixmapBegin(cast(u32)PixmapBackground)
+    unused BeginFrame(session, cast(u64)1, bounds)
+    if !EntityHostFrame(session, bounds, 0, 0, .{}) || leaderboard_reads == reads { print("FAIL leaderboard after restart\n"); return 1 }
+    unused EndFrame(session)
+    entity_host_may_restart = false
+    if EntityHostRecover() || EntityHostProblem() != ENTITY_HOST_STOPPED { print("FAIL repeated stop\n"); return 1 }
+    PixmapBegin(cast(u32)PixmapBackground)
+    unused BeginFrame(session, cast(u64)1, bounds)
+    if !EntityHostFrame(session, bounds, 0, 0, .{}) || EntityHostProblem() != "" { print("FAIL frame after report\n"); return 1 }
+    unused EndFrame(session)
+    print("PASS restart returns to the leaderboard\n")
     return 0
 }

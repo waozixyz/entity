@@ -165,15 +165,42 @@ EntityHostClipboardLength :: (buffer: []u8) -> s64 {
     return SystemClipboardText(buffer).count
 }
 
-// Why EntityHostOpen failed, for a host to show instead of nothing.
+// Why the profile could not start or stopped, for a host to show instead of
+// nothing.
 entity_host_problem: string;
+ENTITY_HOST_STOPPED :: "The profile stopped working. Close it and open it again.";
 
 EntityHostProblem :: () -> string { return entity_host_problem }
+
+// A profile that stops mid-run would leave its host a blank page. It starts
+// again from its saved data, back on the page the host last opened, at most
+// once until it draws again or the host opens a page.
+entity_host_page: string;
+entity_host_may_restart: bool;
+EntityHostRecover :: () -> bool {
+    entity_host_problem = ENTITY_HOST_STOPPED
+    if !entity_host_may_restart { return false }
+    entity_host_may_restart = false
+    if !AppContextRestart(*portable) { return false }
+    entity_host_problem = ""
+    if entity_host_page == "" { return true }
+    portable.command = entity_host_page
+    if AppContextRun(*portable, APP_COMMAND) { return true }
+    entity_host_problem = ENTITY_HOST_STOPPED
+    return false
+}
+EntityHostCommand :: (command: string) -> bool {
+    portable.command = command
+    if AppContextRun(*portable, APP_COMMAND) { return true }
+    return EntityHostRecover()
+}
 
 EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigation: bool = false) -> bool {
     entity_host_navigation = host_navigation
     entity_host_game = client_id == "arcade"
     entity_host_problem = ""
+    entity_host_page = ""
+    entity_host_may_restart = true
     #if #defined(GOOGLE_PLAY) {
         EntityHostEdition(ENTITY_EDITION_GOOGLE_PLAY)
     }
@@ -204,27 +231,22 @@ EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigati
     return true
 }
 
-EntityHostReload :: () {
-    portable.command = "reload"
-    unused AppContextRun(*portable, APP_COMMAND)
-}
+EntityHostReload :: () { unused EntityHostCommand("reload") }
 
 EntityHostAccount :: () -> bool {
     portable.command = "account"
     return AppContextRun(*portable, APP_COMMAND)
 }
 
-EntityHostLeaderboard :: () -> bool {
-    portable.command = "root:leaderboard"
-    return AppContextRun(*portable, APP_COMMAND)
-}
+EntityHostLeaderboard :: () -> bool { return EntityHostPage("leaderboard") }
 EntityHostPage :: (page: string) -> bool {
-    if page == "profile" { portable.command = "root:profile" }
-    else if page == "dew" { portable.command = "root:dew" }
-    else if page == "appearance" { portable.command = "root:appearance" }
-    else if page == "leaderboard" { portable.command = "root:leaderboard" }
+    if page == "profile" { entity_host_page = "root:profile" }
+    else if page == "dew" { entity_host_page = "root:dew" }
+    else if page == "appearance" { entity_host_page = "root:appearance" }
+    else if page == "leaderboard" { entity_host_page = "root:leaderboard" }
     else { return false }
-    return AppContextRun(*portable, APP_COMMAND)
+    entity_host_may_restart = true
+    return EntityHostCommand(entity_host_page)
 }
 
 EntityHostDewAvailable :: () -> bool { return DewReady() }
@@ -336,6 +358,10 @@ EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s3
     ran := AppContextRun(*portable, APP_FRAME)
     WidgetHostEnd()
     portable.input = TextFieldInput.{}
+    if ran {
+        entity_host_may_restart = true
+        entity_host_problem = ""
+    } else { unused EntityHostRecover() }
     return ran
 }
 
