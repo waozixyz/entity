@@ -62,6 +62,47 @@ GameProgressWrite :: (value: *GameProgressRecord, output: *Vec(u8)) {
     BuilderPrint(output, ",\"updated_at\":%}", value.updated_at)
 }
 
+// The entity.records request that reads a game's account progress.
+GameProgressGetRequest :: (game: string, output: *Vec(u8)) {
+    BuilderPrint(output, "{\"operation\":\"get\",\"kind\":\"%\",\"game\":", GAME_PROGRESS_KIND)
+    EntityQuote(output, game)
+    BuilderPrint(output, "}")
+}
+
+// The entity.records request that stores a game's account progress.
+GameProgressPutRequest :: (value: *GameProgressRecord, output: *Vec(u8)) {
+    BuilderPrint(output, "{\"operation\":\"put\",\"kind\":\"%\",\"schema\":\"%\",\"document\":",
+        GAME_PROGRESS_KIND, GAME_PROGRESS_SCHEMA)
+    GameProgressWrite(value, output)
+    BuilderPrint(output, "}")
+}
+
+// The progress an entity.records reply holds, when it holds a valid record.
+GameProgressReply :: (reply: string, output: *GameProgressRecord) -> bool {
+    at := FieldAt(reply, 0, "document")
+    end := ValueEnd(reply, at, 0)
+    return at >= 0 && end > at && GameProgressRead(reply[at:end], output)
+}
+
+// Marks each completed level and ends the marks after the last of them.
+GameProgressSetLevels :: (value: *GameProgressRecord, completed: []bool) {
+    count: s32 = 0
+    for done, index: completed {
+        if index >= GAME_PROGRESS_LIMIT { break }
+        value.completed[index] = ifx done then #char "1" else #char "0"
+        if done { count = cast(s32)index + 1 }
+    }
+    value.completed[count] = 0
+}
+
+// Adds the record's completed levels to `completed`; it never clears one.
+GameProgressMarkLevels :: (value: *GameProgressRecord, completed: []bool) {
+    marks := TextUntilNul(value.completed[:])
+    for index: cast(s64)0..marks.count - 1 {
+        if index < completed.count && marks[index] == #char "1" { completed[index] = true }
+    }
+}
+
 // Even an older reply can carry earned progress this device has not seen.
 GameProgressMerge :: (current: *GameProgressRecord, incoming: *GameProgressRecord) -> bool {
     if TextUntilNul(current.game[:]) != TextUntilNul(incoming.game[:]) { return false }

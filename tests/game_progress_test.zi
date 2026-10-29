@@ -29,5 +29,25 @@ main :: () -> s32 {
     GameProgressRead("{\"game\":\"g\",\"unlocked\":2,\"completed\":\"2\",\"state\":\"\"}", *restored) { return 6 }
     restored.game[0] = #char "x"
     if GameProgressMerge(*left, *restored) || TextUntilNul(left.game[:]) != "shovey.classic" { return 7 }
+    levels: [6]bool = .[true, false, true, false, false, false]
+    marked: GameProgressRecord
+    GameProgressSetLevels(*marked, levels[:])
+    if TextUntilNul(marked.completed[:]) != "101" { return 12 }
+    seen: [6]bool
+    seen[4] = true
+    GameProgressMarkLevels(*marked, seen[:])
+    if !seen[0] || seen[1] || !seen[2] || seen[3] || !seen[4] { return 13 }
+    get: Vec(u8)
+    GameProgressGetRequest("wurm", *get)
+    expected := "{\"operation\":\"get\",\"kind\":\"game-progress\",\"game\":\"wurm\"}"
+    if TextView(VecSlice(get, 0, get.count)) != expected { return 14 }
+    VecFree(get)
+    put: Vec(u8)
+    GameProgressPutRequest(*left, *put)
+    request := TextView(VecSlice(put, 0, put.count))
+    stored: GameProgressRecord
+    if FieldAt(request, 0, "schema") < 0 || !GameProgressReply(request, *stored) || !GameProgressSame(*left, *stored) { return 15 }
+    VecFree(put)
+    if GameProgressReply("{\"status\":\"missing\"}", *stored) { return 16 }
     return 0
 }
