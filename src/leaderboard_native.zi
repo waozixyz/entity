@@ -187,7 +187,7 @@ EntityLeaderboardReport :: (app: string, app_title: string, game: string, title:
     if !LeaderboardNameValid(app, 96) || !LeaderboardNameValid(game, 31) { return false }
     cosmetic := request.count > 5 && request[:5] == "skin "
     appearance: s64
-    if cosmetic && (!ProfileScoreNumber(request[5:], *appearance) || appearance > 8 ||
+    if cosmetic && (!ProfileScoreNumber(request[5:], *appearance) || appearance > 12 ||
         (game != "xyz.waozi.wurm" && game != "wurm")) { return false }
     report: ProfileScore
     if !cosmetic && !ProfileScoreReport(request, *report) { return false }

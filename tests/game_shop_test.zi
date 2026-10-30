@@ -27,6 +27,19 @@ main :: () -> s32 {
     if ChristmasClaimWindow(1796083199) || !ChristmasClaimWindow(1796083200) ||
     !ChristmasClaimWindow(1798761599) || ChristmasClaimWindow(1798761600) { return 10 }
     if GameShopKey(1) == GameShopKey(2) || GameShopKey(1) == GameShopKey(3) || GameShopKey(2) == GameShopKey(3) { return 7 }
-    print("Game shop local tests: exact paid receipt, account isolation, amount validation and stable purchase keys.\n")
+    // Coin packs: each pack number is one key; the receipt's price names the coins.
+    key: [64]u8
+    other_key: [64]u8
+    if CoinPackKey(2, 5, key[:]) != "coins-wurm-2-5-v1" || CoinPackKey(2, 6, other_key[:]) == CoinPackKey(2, 5, key[:]) { return 11 }
+    for pack: cast(s32)1..COIN_PACKS {
+        ref: Vec(u8)
+        BuilderPrint(*ref, "%:%", COIN_PACK_ACTION, CoinPackKey(pack, 3, key[:]))
+        reference := BuilderFinish(ref)
+        if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack), reference), owner) != CoinPackCoins(pack) { return 12 }
+        if CoinPackReceipt(Receipt(1, other, -CoinPackPrice(pack), reference), owner) != 0 { return 13 }
+        if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack) + 1, reference), owner) != 0 { return 14 }
+    }
+    if CoinPackReceipt(Receipt(1, owner, -GameShopPrice(1)), owner) != 0 || GameShopReceipt(Receipt(1, owner, -CoinPackPrice(1), "wurm.coins:coins-wurm-1-1-v1"), owner) != 0 { return 15 }
+    print("Game shop local tests: exact paid receipt, account isolation, amount validation, stable purchase keys and coin packs.\n")
     return 0
 }

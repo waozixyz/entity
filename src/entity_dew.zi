@@ -6,6 +6,7 @@
 // connect one and claim again.
 //
 //     balance            {"connected":true,"units":1200000} (units -1 until known)
+//     refresh            asks the node for the balance again: {"status":"queued"}
 //     claim:REWARD       {"status":"pending"}, "signin" or "busy"
 //     claim-status       {"status":"pending"} or, once answered,
 //                        {"status":"done","reward":"…","credited":true,"units":…,"balance":…}
@@ -72,6 +73,13 @@ EntityDewAnswer :: (request: string) -> string {
             if !known && !dew_active && dew_queued[0] == cast(u8)0 { dew_queued = DewOperation("refresh") }
             BuilderPrint(*out, "{\"connected\":true,\"units\":%}", ifx known then account.balance else cast(s64)-1)
         }
+        return DewAnswerText(out)
+    }
+    // Apps ask again when their balance comes into view, so Dew spent or
+    // earned elsewhere shows without reopening Profile.
+    if request == "refresh" {
+        if DewReady() && !dew_active && dew_queued[0] == cast(u8)0 { dew_queued = DewOperation("refresh") }
+        BuilderPrint(*out, "{\"status\":\"queued\"}")
         return DewAnswerText(out)
     }
     if request.count > 6 && request[:6] == "claim:" {

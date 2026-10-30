@@ -10,7 +10,7 @@ FriendWurmSkin :: (document: string, id: string) -> s32 {
         unused ReadStringText(document, FieldAt(document, item, "user_id_hash"), owner[:])
         if TextUntilNul(owner[:]) != id { continue }
         icon := ReadNumber(document, FieldAt(document, item, "value"))
-        if icon.valid && icon.value >= 1 && icon.value <= 9 &&
+        if icon.valid && icon.value >= 1 && icon.value <= 13 &&
         icon.value == cast(float64)cast(s32)icon.value { return cast(s32)icon.value }
     }
     return 1

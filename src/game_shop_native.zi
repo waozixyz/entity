@@ -32,6 +32,11 @@ shop_answer: [512]u8;
 // Native hosts may supply their platform transport; bundles never see it.
 shop_transport: AsyncTransport;
 shop_visit: bool;
+// Coins bought with Dew, summed from the ledger, and the next pack's number.
+shop_coins: s32;
+shop_coin_receipts: s32;
+shop_pack: s32;
+shop_pack_key: [64]u8;
 
 ShopOwner :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
@@ -45,6 +50,9 @@ ShopOwner :: () {
     shop_requested = false
     shop_active = false
     shop_product = 0
+    shop_coins = 0
+    shop_coin_receipts = 0
+    shop_pack = 0
     shop_status = "idle"
 }
 ShopStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -71,7 +79,14 @@ EntityGameShopAnswer :: (request: string) -> string {
         unused ShopChristmasClaim(UnixNow())
     }
     if request == "visit" { shop_visit = true; return "queued" }
-    if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0 }
+    if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0; shop_pack = 0 }
+    if request.count == 7 && request[:6] == "coins:" && !shop_active && !shop_requested {
+        pack := cast(s32)(request[6] - #char "0")
+        if CoinPackPrice(pack) <= 0 { shop_status = "failed" }
+        else if !shop_loaded { shop_status = "failed"; shop_requested = true }
+        else if DewReady() { shop_pack = pack; shop_product = 0; shop_requested = true }
+        else { shop_status = "signin" }
+    }
     products: [5]s32 = .[1, 2, 3, 7, 9]
     for product: products {
         if request == GameShopProduct(cast(s32)product) && !shop_active && !shop_requested {
@@ -85,8 +100,8 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "status" && !shop_loaded && !shop_active && shop_status == "idle" { shop_requested = true }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
-        TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), shop_owned,
+    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
+        TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), shop_owned, shop_coins,
         ChristmasClaimWindow(UnixNow()),
         ifx shop_active || shop_requested then "pending" else shop_status)
     text := BuilderFinish(out)
@@ -112,7 +127,19 @@ EntityGameShopPump :: () {
         shop_status = "failed"
         if shop_request.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK { return }
         response := TextUntilNul(shop_response[:])
-        if shop_product > 0 {
+        if shop_pack > 0 {
+            at := FieldAt(response, 0, "receipt")
+            end := ValueEnd(response, at, 0)
+            coins := ifx at >= 0 && end > at then CoinPackReceipt(response[at:end], TextUntilNul(shop_owner[:])) else 0
+            shop_pack = 0
+            if shop_request.status == 409 { shop_status = "insufficient" }
+            if coins <= 0 { return }
+            // A confirmed receipt is the purchase; the next pack has a new number.
+            shop_coins += coins
+            shop_coin_receipts += 1
+            shop_status = "done"
+            if !dew_active && dew_queued[0] == cast(u8)0 { unused CopyCString("refresh", dew_queued[:]) }
+        } else if shop_product > 0 {
             at := FieldAt(response, 0, "receipt")
             end := ValueEnd(response, at, 0)
             product := ifx at >= 0 && end > at then GameShopReceipt(response[at:end], TextUntilNul(shop_owner[:])) else 0
@@ -131,6 +158,8 @@ EntityGameShopPump :: () {
             }
             if at < 0 || response[at] != #char "[" { return }
             index: s32 = 0
+            coins: s32 = 0
+            packs: s32 = 0
             while true {
                 item := ElementAt(response, at, index)
                 if item < 0 { break }
@@ -138,8 +167,13 @@ EntityGameShopPump :: () {
                 if end <= item { return }
                 product := GameShopReceipt(response[item:end], TextUntilNul(shop_owner[:]))
                 if product > 0 { shop_owned |= 1 << product }
+                bought := CoinPackReceipt(response[item:end], TextUntilNul(shop_owner[:]))
+                if bought > 0 { coins += bought; packs += 1 }
                 index += 1
             }
+            // The whole ledger was read, so its coin packs replace the count.
+            shop_coins = coins
+            shop_coin_receipts = packs
             shop_loaded = true
             shop_status = "done"
         }
@@ -149,8 +183,11 @@ EntityGameShopPump :: () {
     shop_requested = false
     client: Client
     body: Vec(u8)
-    purchase := shop_product > 0
-    if purchase {
+    purchase := shop_product > 0 || shop_pack > 0
+    if shop_pack > 0 {
+        BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
+            CoinPackPrice(shop_pack), COIN_PACK_ACTION, CoinPackKey(shop_pack, shop_coin_receipts + 1, shop_pack_key[:]))
+    } else if purchase {
         BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
             GameShopPrice(shop_product), GameShopProduct(shop_product), GameShopKey(shop_product))
     }

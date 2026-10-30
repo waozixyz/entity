@@ -1,0 +1,342 @@
+// The "publications" app service: collections of custom game levels that
+// apps publish for everyone, for their author's friends or for the author
+// alone, and that people find again by the author's alias or public id. It is
+// the same protocol as Inner Breeze's, so a game's editor shares levels the
+// same way in either host. A request answers at once with its number; the
+// node's answer arrives later and the app asks for it with
+// {"operation":"status","request":N}. The author is always the Entity
+// account connected on this device, signed as entity.records signs; an app
+// never names one. The host connects the account and the network through
+// publications_client and publications_transport. Requests:
+//   {"operation":"publish","format":F,"title":T,"visibility":"public|friends|private",
+//       "document":{…},"id":ID?} replaces ID when given
+//   {"operation":"unpublish","id":ID}, {"operation":"fetch","id":ID}
+//   {"operation":"find","format":F?,"query":"alias or public id"?}
+// each answer {"status":"pending","request":N} or {"status":"rejected","error":E}.
+//   {"operation":"status","request":N} answers {"status":"pending"},
+//       {"status":"failed","error":E} or {"status":"done",…} with the node's
+//       object, such as "publication", "publications", "document" or "deleted".
+#import "account_store"
+#import "model"
+#import "daochi_client/client"
+#import "daochi_client/async_client"
+#import "kryon/http_transfer"
+#import "std/net_http"
+#import "std/date_time_linux"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/vec"
+Auth :: #import "daochi_client/auth";
+
+PUBLICATIONS_SERVICE :: "publications"
+// A request body holds at most 256 KiB, the document and its description.
+PUBLICATION_DOCUMENT_MAX :: 245760
+PUBLICATION_SLOTS :: 16
+
+PUBLICATION_EMPTY :: 0
+PUBLICATION_QUEUED :: 1
+PUBLICATION_SENT :: 2
+PUBLICATION_DONE :: 3
+
+// The signed-in account as the node knows it; false without one.
+PublicationsClient :: #type (context: *void, output: *Client) -> bool;
+
+PublicationRequest :: struct {
+    number: s32
+    state: s32
+    method: [8]u8
+    path: [512]u8
+    body: string
+    // The finished answer, kept until the slot is needed again.
+    reply: string
+}
+
+publication_requests: [PUBLICATION_SLOTS]PublicationRequest;
+publication_number: s32;
+publication_sending: s32 = -1;
+publication_pending: PendingRequest;
+publication_session: Auth.Session;
+// The account the session belongs to; another account logs in afresh.
+publication_session_owner: [65]u8;
+publication_transfer: HttpTransfer;
+// Hosts set these through PublicationsConnect; tests answer in memory.
+// Nothing is sent without them.
+publications_client: PublicationsClient;
+publications_transport: AsyncTransport;
+publication_response: [524288]u8;
+// The latest immediate answer, which the host value borrows until the app
+// copies it.
+publication_reply: string;
+
+PublicationsCopy :: (text: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", text)
+    return BuilderFinish(out)
+}
+
+PublicationsReply :: (out: *Vec(u8)) -> string {
+    EntityFree(publication_reply)
+    publication_reply = BuilderFinish(out.*)
+    return publication_reply
+}
+
+PublicationsError :: (status: string, error: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"%\",\"error\":\"%\"}", status, error)
+    return PublicationsReply(*out)
+}
+
+PublicationsReady :: () -> bool {
+    return account_standalone_ready && account_profile.nodes[account_profile.preferred][0] != cast(u8)0
+}
+
+// Letters, digits and the given punctuation only, so the text needs no
+// escaping in a path or query.
+PublicationsPlain :: (text: string, maximum: s32, punctuation: string) -> bool {
+    if text.count == 0 || text.count > maximum { return false }
+    for byte: text {
+        plain := (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+        (byte >= #char "0" && byte <= #char "9")
+        for mark: punctuation { if byte == mark { plain = true } }
+        if !plain { return false }
+    }
+    return true
+}
+
+// The decoded text of a string member, or "" with valid false.
+PublicationsText :: (request: string, name: string, maximum: s32, valid: *bool) -> string {
+    valid.* = false
+    at := FieldAt(request, 0, name)
+    if at < 0 { return "" }
+    decoded := ReadStringValue(request, at, maximum)
+    if !decoded.valid { return "" }
+    valid.* = true
+    return BuilderFinish(decoded.value)
+}
+
+// The raw JSON of a member, quotes or braces included.
+PublicationsRaw :: (request: string, name: string) -> string {
+    at := FieldAt(request, 0, name)
+    if at < 0 { return "" }
+    end := ValueEnd(request, at, 0)
+    if end <= at { return "" }
+    return request[at:end]
+}
+
+PublicationsQueue :: (method: string, path: string, body: string) -> string {
+    slot: s32 = -1
+    oldest: s32 = -1
+    for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+        entry := *publication_requests[index]
+        if entry.state == PUBLICATION_EMPTY { slot = index; break }
+        if entry.state == PUBLICATION_DONE && (oldest < 0 || entry.number < publication_requests[oldest].number) { oldest = index }
+    }
+    if slot < 0 { slot = oldest }
+    if slot < 0 { return PublicationsError("rejected", "busy") }
+    entry := *publication_requests[slot]
+    EntityFree(entry.body)
+    EntityFree(entry.reply)
+    entry.* = .{}
+    publication_number += 1
+    if publication_number <= 0 { publication_number = 1 }
+    entry.number = publication_number
+    entry.state = PUBLICATION_QUEUED
+    if !CopyCString(method, entry.method[:]) || !CopyCString(path, entry.path[:]) {
+        entry.* = .{}
+        return PublicationsError("rejected", "invalid")
+    }
+    entry.body = PublicationsCopy(body)
+    number := entry.number
+    PublicationsPump()
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"pending\",\"request\":%}", number)
+    return PublicationsReply(*out)
+}
+
+PublicationsFinish :: (slot: s32, reply: string) {
+    entry := *publication_requests[slot]
+    EntityFree(entry.body)
+    entry.body = ""
+    EntityFree(entry.reply)
+    entry.reply = reply
+    entry.state = PUBLICATION_DONE
+}
+
+PublicationsFailed :: (slot: s32, error: string) {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"failed\",\"error\":\"%\"}", error)
+    PublicationsFinish(slot, BuilderFinish(out))
+}
+
+PublicationsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    return HttpTransferStart(*publication_transfer, request, output, 30000)
+}
+PublicationsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*publication_transfer, status) }
+PublicationsCancel :: (context: *void) { HttpTransferCancel(*publication_transfer) }
+
+// Signs as client's account over this device's own HTTP connection, as
+// native hosts do; a transport already set, such as a test's, stays.
+PublicationsConnect :: (client: PublicationsClient) {
+    publications_client = client
+    if publications_transport.start == null {
+        publications_transport = AsyncTransport.{.start = PublicationsStart, .poll = PublicationsPoll, .cancel = PublicationsCancel}
+    }
+}
+
+// Sends queued requests one at a time and collects the node's answers;
+// hosts call it once per frame.
+PublicationsPump :: () {
+    if publication_sending >= 0 {
+        if !PollRequest(*publication_pending) { return }
+        slot := publication_sending
+        publication_sending = -1
+        if publication_requests[slot].state != PUBLICATION_SENT { return }
+        if publication_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+            json := TextUntilNul(publication_response[:])
+            end := ValueEnd(json, 0, 0)
+            if end < 0 || Space(json, end) != cast(s32)json.count || Space(json, 0) != 0 || json[0] != #char "{" ||
+            FieldAt(json, 0, "status") >= 0 {
+                PublicationsFailed(slot, "offline")
+            } else {
+                // The node's object, with the answer's status in front.
+                first := Space(json, 1)
+                out: Vec(u8)
+                BuilderPrint(*out, "{\"status\":\"done\"% %", ifx json[first] == #char "}" then "" else ",", json[first:])
+                PublicationsFinish(slot, BuilderFinish(out))
+            }
+        } else {
+            status := publication_pending.status
+            error := "offline"
+            if publication_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_NO_ACCOUNT || status == 401 { error = "signed-out" }
+            else if status == 400 { error = "invalid" }
+            else if status == 403 { error = "forbidden" }
+            else if status == 404 { error = "not-found" }
+            else if status == 413 { error = "too-large" }
+            else if status == 429 { error = "busy" }
+            PublicationsFailed(slot, error)
+        }
+    }
+    next: s32 = -1
+    for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+        entry := *publication_requests[index]
+        if entry.state == PUBLICATION_QUEUED && (next < 0 || entry.number < publication_requests[next].number) { next = index }
+    }
+    if next < 0 { return }
+    entry := *publication_requests[next]
+    client: Client
+    if !PublicationsReady() || publications_client == null || !publications_client(null, *client) {
+        PublicationsFailed(next, "signed-out")
+        return
+    }
+    if client.identity.account_id != TextUntilNul(publication_session_owner[:]) {
+        publication_session = Auth.Session.{}
+        unused CopyCString(client.identity.account_id, publication_session_owner[:])
+    }
+    publication_response[0] = cast(u8)0
+    headers: [1]HttpHeader
+    if publications_transport.start == null || !BeginRequest(*publication_pending, client, *publication_session, UnixNow(), publications_transport,
+        TextUntilNul(entry.method[:]), TextUntilNul(entry.path[:]), entry.body, publication_response[:], headers[:0]) {
+        PublicationsFailed(next, "offline")
+        return
+    }
+    entry.state = PUBLICATION_SENT
+    publication_sending = next
+}
+
+PublicationsPublish :: (request: string) -> string {
+    valid: bool
+    format := PublicationsText(request, "format", 64, *valid)
+    defer { EntityFree(format) }
+    if !valid || !PublicationsPlain(format, 64, ".-") { return PublicationsError("rejected", "invalid") }
+    title := PublicationsText(request, "title", 80, *valid)
+    defer { EntityFree(title) }
+    if !valid || title.count == 0 { return PublicationsError("rejected", "invalid") }
+    visibility := PublicationsText(request, "visibility", 16, *valid)
+    defer { EntityFree(visibility) }
+    if !valid || (visibility != "public" && visibility != "friends" && visibility != "private") {
+        return PublicationsError("rejected", "invalid")
+    }
+    document := PublicationsRaw(request, "document")
+    if document.count == 0 || document[0] != #char "{" { return PublicationsError("rejected", "invalid") }
+    if document.count > PUBLICATION_DOCUMENT_MAX { return PublicationsError("rejected", "too-large") }
+    id := ""
+    if FieldAt(request, 0, "id") >= 0 {
+        id = PublicationsText(request, "id", 64, *valid)
+        if !valid || !PublicationsPlain(id, 64, "-_") {
+            EntityFree(id)
+            return PublicationsError("rejected", "invalid")
+        }
+    }
+    defer { EntityFree(id) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"format\":%,\"title\":%,\"visibility\":%,\"document\":%", PublicationsRaw(request, "format"),
+        PublicationsRaw(request, "title"), PublicationsRaw(request, "visibility"), document)
+    if id.count > 0 { BuilderPrint(*out, ",\"id\":\"%\"", id) }
+    BuilderPrint(*out, "}")
+    body := BuilderFinish(out)
+    defer { EntityFree(body) }
+    return PublicationsQueue("POST", "/api/v1/publications", body)
+}
+
+// The text a request answers, valid until the next request.
+PublicationsAnswer :: (request: string) -> string {
+    valid: bool
+    operation := PublicationsText(request, "operation", 16, *valid)
+    defer { EntityFree(operation) }
+    if !valid { return PublicationsError("rejected", "invalid") }
+    if operation == "status" {
+        PublicationsPump()
+        at := FieldAt(request, 0, "request")
+        if at < 0 { return PublicationsError("failed", "not-found") }
+        number := ReadNumber(request, at)
+        for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+            entry := *publication_requests[index]
+            if entry.state == PUBLICATION_EMPTY || !number.valid || cast(float64)entry.number != number.value { continue }
+            if entry.state == PUBLICATION_DONE { return entry.reply }
+            return "{\"status\":\"pending\"}"
+        }
+        return PublicationsError("failed", "not-found")
+    }
+    if !PublicationsReady() { return PublicationsError("rejected", "signed-out") }
+    if operation == "publish" { return PublicationsPublish(request) }
+    if operation == "unpublish" || operation == "fetch" {
+        id := PublicationsText(request, "id", 64, *valid)
+        defer { EntityFree(id) }
+        if !valid || !PublicationsPlain(id, 64, "-_") { return PublicationsError("rejected", "invalid") }
+        out: Vec(u8)
+        BuilderPrint(*out, "/api/v1/publications/%", id)
+        path := BuilderFinish(out)
+        defer { EntityFree(path) }
+        return PublicationsQueue(ifx operation == "fetch" then "GET" else "DELETE", path, "")
+    }
+    if operation == "find" {
+        out: Vec(u8)
+        BuilderPrint(*out, "/api/v1/publications")
+        separator := "?"
+        if FieldAt(request, 0, "format") >= 0 {
+            format := PublicationsText(request, "format", 64, *valid)
+            defer { EntityFree(format) }
+            if !valid || !PublicationsPlain(format, 64, ".-") {
+                EntityFree(BuilderFinish(out))
+                return PublicationsError("rejected", "invalid")
+            }
+            BuilderPrint(*out, "%format=%", separator, format)
+            separator = "&"
+        }
+        query := PublicationsText(request, "query", 80, *valid)
+        defer { EntityFree(query) }
+        if query.count > 0 {
+            if !PublicationsPlain(query, 80, "@_-") {
+                EntityFree(BuilderFinish(out))
+                return PublicationsError("rejected", "invalid")
+            }
+            BuilderPrint(*out, "%author=%", separator, query)
+        }
+        path := BuilderFinish(out)
+        defer { EntityFree(path) }
+        return PublicationsQueue("GET", path, "")
+    }
+    return PublicationsError("rejected", "invalid")
+}

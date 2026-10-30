@@ -1,0 +1,191 @@
+#import, file "../src/level_collections.zi";
+#import "std/text_buffer"
+#import "std/vec"
+
+ExpectText :: (failures: *s32, label: string, actual: string, expected: string) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %\n", label, actual)
+    }
+}
+
+ExpectInteger :: (failures: *s32, label: string, actual: s32, expected: s32) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %, expected %\n", label, actual, expected)
+    }
+}
+
+ExpectInteger64 :: (failures: *s32, label: string, actual: s64, expected: s64) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %, expected %\n", label, actual, expected)
+    }
+}
+
+ExpectBoolean :: (failures: *s32, label: string, actual: bool, expected: bool) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %, expected %\n", label, actual, expected)
+    }
+}
+
+JoinText :: (first: string, second: string, third: string = "") -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", first)
+    BuilderPrint(*out, "%", second)
+    BuilderPrint(*out, "%", third)
+    return BuilderFinish(out)
+}
+
+#program_export
+main :: () -> s32 {
+    failures: s32 = 0
+    format := "wurm-levels-1"
+    edition := "harvest"
+    title := "Waozi \"Natur\" — Río"
+    first_level := "{\"id\":1,\"map\":\"α\"}"
+    second_level := "{\"id\":2,\"map\":\"β\"}"
+
+    document: Vec(u8)
+    CollectionDocumentBegin(*document, format, edition, title)
+    CollectionDocumentLevel(*document, first_level, true)
+    CollectionDocumentLevel(*document, second_level, false)
+    CollectionDocumentEnd(*document)
+    document_text := BuilderFinish(document)
+    expected_document := "{\"format\": \"wurm-levels-1\", \"edition\": \"harvest\", \"title\": \"Waozi \\\"Natur\\\" — Río\", \"levels\": [\n {\"id\":1,\"map\":\"α\"},\n {\"id\":2,\"map\":\"β\"}]}"
+    ExpectText(*failures, "document", document_text, expected_document)
+    read: CollectionDocument
+    ExpectBoolean(*failures, "document read", CollectionDocumentRead(document_text, 0, format, *read), true)
+    ExpectText(*failures, "document format", TextUntilNul(read.format[:]), format)
+    ExpectText(*failures, "document edition", TextUntilNul(read.edition[:]), edition)
+    ExpectText(*failures, "document title", TextUntilNul(read.title[:]), title)
+    ExpectInteger(*failures, "document count", read.level_count, 2)
+    first_at := CollectionDocumentLevelAt(document_text, *read, 0)
+    second_at := CollectionDocumentLevelAt(document_text, *read, 1)
+    ExpectText(*failures, "first level", document_text[first_at:first_at + first_level.count], first_level)
+    ExpectText(*failures, "second level", document_text[second_at:second_at + second_level.count], second_level)
+    ExpectInteger(*failures, "level out of range", CollectionDocumentLevelAt(document_text, *read, 2), -1)
+    wrong: CollectionDocument
+    ExpectBoolean(*failures, "wrong document format", CollectionDocumentRead(document_text, 0, "shovey-levels-1", *wrong), false)
+    no_levels := "{\"format\":\"wurm-levels-1\",\"edition\":\"harvest\",\"title\":\"x\"}"
+    ExpectBoolean(*failures, "missing levels", CollectionDocumentRead(no_levels, 0, format, *wrong), false)
+
+    put: Vec(u8)
+    CollectionDraftPut(*put, "", document_text, 12)
+    put_text := BuilderFinish(put)
+    expected_put := "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"document\":{\"order\":12,\"format\": \"wurm-levels-1\", \"edition\": \"harvest\", \"title\": \"Waozi \\\"Natur\\\" — Río\", \"levels\": [\n {\"id\":1,\"map\":\"α\"},\n {\"id\":2,\"map\":\"β\"}]}}"
+    ExpectText(*failures, "new draft put", put_text, expected_put)
+    identified_put: Vec(u8)
+    CollectionDraftPut(*identified_put, "0123456789abcdef0123456789abcdef", document_text, -3)
+    identified_put_text := BuilderFinish(identified_put)
+    expected_identified_put := "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"order\":-3,\"format\": \"wurm-levels-1\", \"edition\": \"harvest\", \"title\": \"Waozi \\\"Natur\\\" — Río\", \"levels\": [\n {\"id\":1,\"map\":\"α\"},\n {\"id\":2,\"map\":\"β\"}]}}"
+    ExpectText(*failures, "identified draft put", identified_put_text, expected_identified_put)
+    record: [33]u8
+    ExpectBoolean(*failures, "draft put read", CollectionDraftPutRead("{\"status\":\"done\",\"id\":\"abcdef0123456789abcdef0123456789\"}", record[:]), true)
+    ExpectText(*failures, "draft put record", TextUntilNul(record[:]), "abcdef0123456789abcdef0123456789")
+    ExpectBoolean(*failures, "draft put read status", CollectionDraftPutRead("{\"status\":\"pending\"}", record[:]), false)
+
+    list_request: Vec(u8)
+    CollectionDraftListRequest(*list_request)
+    ExpectText(*failures, "draft list request", BuilderFinish(list_request), "{\"operation\":\"list\",\"kind\":\"levels\",\"fields\":[\"format\",\"edition\",\"title\",\"order\",\"campaign\",\"visibility\"]}")
+    get_request: Vec(u8)
+    CollectionDraftRecordRequest(*get_request, "get", "abcdef0123456789abcdef0123456789")
+    ExpectText(*failures, "draft get request", BuilderFinish(get_request), "{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"abcdef0123456789abcdef0123456789\"}")
+    delete_request: Vec(u8)
+    CollectionDraftRecordRequest(*delete_request, "delete", "0123456789abcdef0123456789abcdef")
+    ExpectText(*failures, "draft delete request", BuilderFinish(delete_request), "{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}")
+    ExpectBoolean(*failures, "record valid", CollectionDraftRecordValid("0123456789abcdef0123456789abcdef"), true)
+    ExpectBoolean(*failures, "record short", CollectionDraftRecordValid("0123456789abcdef"), false)
+    ExpectBoolean(*failures, "record uppercase", CollectionDraftRecordValid("0123456789ABCDEF0123456789ABCDEF"), false)
+
+    list_reply := "{\"status\":\"done\",\"records\":[{\"id\":\"11111111111111111111111111111111\",\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"other\",\"order\":9},{\"id\":\"22222222222222222222222222222222\",\"format\":\"wurm-levels-1\",\"edition\":\"campaign\",\"title\":\"campaign\",\"order\":0,\"campaign\":true},{\"id\":\"33333333333333333333333333333333\",\"format\":\"wurm-levels-1\",\"edition\":\"harvest\",\"title\":\"third\",\"order\":3,\"visibility\":\"friends\"},{\"id\":\"44444444444444444444444444444444\",\"format\":\"wurm-levels-1\",\"edition\":\"harvest\",\"title\":\"first\",\"order\":1,\"visibility\":\"public\"},{\"id\":\"55555555555555555555555555555555\",\"format\":\"wurm-levels-1\",\"edition\":\"harvest\",\"title\":\"missing order\"},{\"id\":\"66666666666666666666666666666666\",\"format\":\"wurm-levels-1\",\"edition\":\"harvest\",\"title\":\"older negative\",\"order\":-2,\"visibility\":\"private\"}]}"
+    drafts: [8]CollectionDraft
+    draft_count := CollectionDraftListRead(list_reply, format, drafts[:])
+    ExpectInteger(*failures, "draft count", draft_count, 4)
+    if draft_count == 4 {
+        ExpectText(*failures, "first draft record", TextUntilNul(drafts[0].record[:]), "44444444444444444444444444444444")
+        ExpectText(*failures, "first draft title", TextUntilNul(drafts[0].title[:]), "first")
+        ExpectInteger64(*failures, "first draft order", drafts[0].order, 1)
+        ExpectText(*failures, "second draft title", TextUntilNul(drafts[1].title[:]), "third")
+        ExpectText(*failures, "negative draft title", TextUntilNul(drafts[2].title[:]), "older negative")
+        ExpectText(*failures, "last negative draft title", TextUntilNul(drafts[3].title[:]), "missing order")
+        ExpectText(*failures, "draft edition", TextUntilNul(drafts[0].edition[:]), edition)
+        ExpectInteger(*failures, "public draft visibility", drafts[0].visibility, COLLECTION_PUBLIC)
+        ExpectInteger(*failures, "friends draft visibility", drafts[1].visibility, COLLECTION_FRIENDS)
+        ExpectInteger(*failures, "private draft visibility", drafts[2].visibility, COLLECTION_PRIVATE)
+        ExpectInteger(*failures, "missing draft visibility", drafts[3].visibility, COLLECTION_PRIVATE)
+    }
+    ExpectInteger(*failures, "malformed draft list", CollectionDraftListRead("{\"status\":\"done\"}", format, drafts[:]), -1)
+
+    publish: Vec(u8)
+    CollectionPublishRequest(*publish, format, title, COLLECTION_FRIENDS, document_text, "")
+    expected_publish := JoinText("{\"operation\":\"publish\",\"format\":\"wurm-levels-1\",\"title\":\"Waozi \\\"Natur\\\" — Río\",\"visibility\":\"friends\",\"document\":", document_text, "}")
+    ExpectText(*failures, "publish request", BuilderFinish(publish), expected_publish)
+    replace: Vec(u8)
+    CollectionPublishRequest(*replace, format, title, COLLECTION_PRIVATE, "{\"x\":1}", "publication-id")
+    ExpectText(*failures, "replace request", BuilderFinish(replace), "{\"operation\":\"publish\",\"format\":\"wurm-levels-1\",\"title\":\"Waozi \\\"Natur\\\" — Río\",\"visibility\":\"private\",\"id\":\"publication-id\",\"document\":{\"x\":1}}")
+    unpublish: Vec(u8)
+    CollectionUnpublishRequest(*unpublish, "publication-id")
+    ExpectText(*failures, "unpublish request", BuilderFinish(unpublish), "{\"operation\":\"unpublish\",\"id\":\"publication-id\"}")
+    find: Vec(u8)
+    CollectionFindRequest(*find, format, "  Alice \t")
+    ExpectText(*failures, "find request", BuilderFinish(find), "{\"operation\":\"find\",\"format\":\"wurm-levels-1\",\"query\":\"Alice\"}")
+    recent: Vec(u8)
+    CollectionFindRequest(*recent, format, " ")
+    ExpectText(*failures, "recent request", BuilderFinish(recent), "{\"operation\":\"find\",\"format\":\"wurm-levels-1\",\"query\":\"\"}")
+    fetch: Vec(u8)
+    CollectionFetchRequest(*fetch, "publication-id")
+    ExpectText(*failures, "fetch request", BuilderFinish(fetch), "{\"operation\":\"fetch\",\"id\":\"publication-id\"}")
+    status: Vec(u8)
+    CollectionStatusRequest(*status, 37)
+    ExpectText(*failures, "status request", BuilderFinish(status), "{\"operation\":\"status\",\"request\":37}")
+
+    replies: [6]string = .["{\"status\":\"pending\",\"request\":7}", "{\"status\":\"done\"}", "{\"status\":\"failed\",\"request\":8,\"error\":\"network\"}",
+    "{\"status\":\"rejected\",\"error\":\"bad title\"}", "{\"status\":\"unavailable\"}", "{\"status\":\"strange\"}"]
+    statuses: [6]s32 = .[COLLECTION_PENDING, COLLECTION_DONE, COLLECTION_FAILED, COLLECTION_REJECTED,
+    COLLECTION_UNAVAILABLE, COLLECTION_MALFORMED]
+    for index: cast(s32)0..5 {
+        answer := CollectionReplyRead(replies[index])
+        ExpectInteger(*failures, "reply status", answer.status, statuses[index])
+    }
+    pending_reply := CollectionReplyRead(replies[0])
+    ExpectInteger(*failures, "pending request", pending_reply.request, 7)
+    failed_reply := CollectionReplyRead(replies[2])
+    ExpectInteger(*failures, "failed request", failed_reply.request, 8)
+    ExpectText(*failures, "failed error", TextUntilNul(failed_reply.error[:]), "network")
+
+    meta_text := "{\"id\":\"publication-id\",\"author\":{\"alias\":\"Waozi\",\"public_id\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"},\"format\":\"wurm-levels-1\",\"title\":\"Waozi \\\"Natur\\\" — Río\",\"levels\":2,\"visibility\":\"friends\",\"updated_at\":1790000000,\"mine\":true}"
+    meta: CollectionMeta
+    ExpectBoolean(*failures, "meta read", CollectionMetaRead(meta_text, 0, format, *meta), true)
+    ExpectText(*failures, "meta id", TextUntilNul(meta.id[:]), "publication-id")
+    ExpectText(*failures, "meta alias", TextUntilNul(meta.alias[:]), "Waozi")
+    ExpectText(*failures, "meta public id", TextUntilNul(meta.public_id[:]), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    ExpectText(*failures, "meta title", TextUntilNul(meta.title[:]), title)
+    ExpectInteger(*failures, "meta levels", meta.levels, 2)
+    ExpectInteger(*failures, "meta visibility", meta.visibility, COLLECTION_FRIENDS)
+    ExpectInteger64(*failures, "meta updated", meta.updated_at, 1790000000)
+    ExpectBoolean(*failures, "meta mine", meta.mine, true)
+    ExpectBoolean(*failures, "wrong meta format", CollectionMetaRead(meta_text, 0, "shovey-levels-1", *meta), false)
+
+    find_reply := JoinText("{\"publications\":[", meta_text, ",{\"id\":\"other\",\"author\":{\"alias\":\"Shovey\"},\"format\":\"shovey-levels-1\",\"title\":\"other\",\"levels\":1,\"visibility\":\"public\",\"updated_at\":2,\"mine\":false}]}")
+    metas: [4]CollectionMeta
+    meta_count := CollectionFindRead(find_reply, format, metas[:])
+    ExpectInteger(*failures, "find count", meta_count, 1)
+    if meta_count == 1 { ExpectText(*failures, "find title", TextUntilNul(metas[0].title[:]), title) }
+    publication := JoinText("{\"publication\":", meta_text, "}")
+    fetched: CollectionMeta
+    ExpectBoolean(*failures, "publication read", CollectionPublicationRead(publication, format, *fetched), true)
+    ExpectText(*failures, "publication alias", TextUntilNul(fetched.alias[:]), "Waozi")
+
+    ExpectText(*failures, "public name", CollectionVisibilityName(COLLECTION_PUBLIC), "public")
+    ExpectText(*failures, "friends name", CollectionVisibilityName(COLLECTION_FRIENDS), "friends")
+    ExpectText(*failures, "private default name", CollectionVisibilityName(99), "private")
+    ExpectInteger(*failures, "visibility public", CollectionVisibilityRead("public"), COLLECTION_PUBLIC)
+    ExpectInteger(*failures, "visibility friends", CollectionVisibilityRead("friends"), COLLECTION_FRIENDS)
+    ExpectInteger(*failures, "visibility private", CollectionVisibilityRead("private"), COLLECTION_PRIVATE)
+    ExpectInteger(*failures, "visibility unknown", CollectionVisibilityRead("everybody"), COLLECTION_PRIVATE)
+
+    print("Level collections local test failures: %\n", failures)
+    return failures
+}

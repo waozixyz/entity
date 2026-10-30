@@ -1,0 +1,454 @@
+// The "publications" service against an in-memory node: no request can
+// leave this process, and the account and token are fixture text.
+#import "publications"
+#import "level_collections"
+#import "account_store"
+#import "model"
+#import "daochi_client/client"
+#import "daochi_client/async_client"
+#import "std/net_http"
+#import "std/date_time_linux"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/vec"
+Auth :: #import "daochi_client/auth";
+
+NODE :: "http://127.0.0.1:9"
+AUTHOR :: "abababababababababababababababababababababababababababababababab"
+FORMAT :: "shovey-levels-1"
+
+FakePublication :: struct {
+    id: [33]u8
+    format: [65]u8
+    title: [81]u8
+    visibility: [16]u8
+    document: [4096]u8
+    live: bool
+}
+
+fake_publications: [8]FakePublication;
+fake_count: s32;
+// A status the node answers instead of its usual one, when set.
+fake_forced: s32;
+fake_status: s32;
+fake_requests: s32;
+fake_method: [8]u8;
+fake_path: [512]u8;
+fake_body: [8192]u8;
+fake_signed: bool;
+
+ExpectText :: (failures: *s32, label: string, actual: string, expected: string) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %\n", label, actual)
+    }
+}
+
+ExpectInteger :: (failures: *s32, label: string, actual: s32, expected: s32) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %, expected %\n", label, actual, expected)
+    }
+}
+
+ExpectBoolean :: (failures: *s32, label: string, actual: bool, expected: bool) {
+    if actual != expected {
+        failures.* += 1
+        print("% failed: %, expected %\n", label, actual, expected)
+    }
+}
+
+FakeFind :: (id: string) -> s32 {
+    for index: cast(s32)0..fake_count - 1 {
+        if fake_publications[index].live && TextUntilNul(fake_publications[index].id[:]) == id { return index }
+    }
+    return -1
+}
+
+FakeMeta :: (out: *Vec(u8), index: s32) {
+    item := *fake_publications[index]
+    document := TextUntilNul(item.document[:])
+    levels := FieldAt(document, 0, "levels")
+    BuilderPrint(out, "{\"id\":\"%\",\"format\":\"%\",\"title\":\"%\",\"visibility\":\"%\",\"levels\":%,\"updated_at\":1793000000,\"author\":{\"alias\":\"river\",\"public_id\":\"%\"},\"mine\":true}",
+        TextUntilNul(item.id[:]), TextUntilNul(item.format[:]), TextUntilNul(item.title[:]), TextUntilNul(item.visibility[:]),
+        ifx levels < 0 then 0 else ArrayCount(document, levels), AUTHOR)
+}
+
+// The value of name in a query, or "".
+FakeQuery :: (path: string, name: string) -> string {
+    at: s64 = 0
+    while at < path.count && path[at] != #char "?" { at += 1 }
+    while at < path.count {
+        at += 1
+        start := at
+        while at < path.count && path[at] != #char "&" { at += 1 }
+        pair := path[start:at]
+        if pair.count > name.count && pair[0:name.count] == name && pair[name.count] == #char "=" { return pair[name.count + 1:] }
+    }
+    return ""
+}
+
+FakeAnswer :: (out: *Vec(u8), method: string, path: string, body: string) -> s32 {
+    collection := "/api/v1/publications"
+    if method == "POST" && path == collection {
+        at := FieldAt(body, 0, "document")
+        if at < 0 || ValueEnd(body, at, 0) - at >= 4096 { return 400 }
+        id: [33]u8
+        index: s32 = -1
+        if FieldAt(body, 0, "id") >= 0 {
+            unused ReadStringText(body, FieldAt(body, 0, "id"), id[:])
+            index = FakeFind(TextUntilNul(id[:]))
+            if index < 0 { return 404 }
+        } else {
+            if fake_count >= fake_publications.count { return 413 }
+            index = fake_count
+            fake_count += 1
+            unused CopyCString("0000000000000000000000000000000", fake_publications[index].id[:])
+            fake_publications[index].id[31] = cast(u8)(48 + index + 1)
+            fake_publications[index].id[32] = cast(u8)0
+        }
+        item := *fake_publications[index]
+        unused ReadStringText(body, FieldAt(body, 0, "format"), item.format[:])
+        unused ReadStringText(body, FieldAt(body, 0, "title"), item.title[:])
+        unused ReadStringText(body, FieldAt(body, 0, "visibility"), item.visibility[:])
+        unused CopyCString(body[at:ValueEnd(body, at, 0)], item.document[:])
+        item.live = true
+        BuilderPrint(out, "{\"publication\":")
+        FakeMeta(out, index)
+        BuilderPrint(out, ",\"account_storage\":{\"used_bytes\":64}}")
+        return 200
+    }
+    if path.count > collection.count + 1 && path[0:collection.count + 1] == "/api/v1/publications/" {
+        index := FakeFind(path[collection.count + 1:])
+        if index < 0 {
+            BuilderPrint(out, "{\"error\":\"publication not found\",\"code\":\"not_found\"}")
+            return 404
+        }
+        if method == "DELETE" {
+            fake_publications[index].live = false
+            BuilderPrint(out, "{\"deleted\":true}")
+            return 200
+        }
+        BuilderPrint(out, "{\"publication\":")
+        FakeMeta(out, index)
+        BuilderPrint(out, ",\"document\":%}", TextUntilNul(fake_publications[index].document[:]))
+        return 200
+    }
+    if method == "GET" && path.count >= collection.count && path[0:collection.count] == collection {
+        format := FakeQuery(path, "format")
+        author := FakeQuery(path, "author")
+        // The author sees all their own; anyone sees only public ones.
+        own := author == "river" || author == AUTHOR
+        if author != "" && !own { return 404 }
+        BuilderPrint(out, "{\"publications\":[")
+        first := true
+        for index: cast(s32)0..fake_count - 1 {
+            item := *fake_publications[index]
+            if !item.live || (format != "" && TextUntilNul(item.format[:]) != format) { continue }
+            if !own && TextUntilNul(item.visibility[:]) != "public" { continue }
+            if !first { BuilderPrint(out, ",") }
+            first = false
+            FakeMeta(out, index)
+        }
+        BuilderPrint(out, "]}")
+        return 200
+    }
+    return 404
+}
+
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    fake_requests += 1
+    if request.url.count < NODE.count || request.url[0:NODE.count] != NODE { return false }
+    path := request.url[NODE.count:]
+    unused CopyCString(request.method, fake_method[:])
+    unused CopyCString(path, fake_path[:])
+    unused CopyCString(request.body, fake_body[:])
+    fake_signed = request.token == "fixture-token"
+    user := ""
+    for header: request.headers { if header.name == "X-Daochi-User" { user = header.value } }
+    fake_signed = fake_signed && user == AUTHOR
+    out: Vec(u8)
+    if fake_forced != 0 {
+        BuilderPrint(*out, "{\"status\":\"forced\",\"error\":\"forced\"}")
+        fake_status = fake_forced
+    } else { fake_status = FakeAnswer(*out, request.method, path, request.body) }
+    answer := BuilderFinish(out)
+    defer { EntityFree(answer) }
+    return CopyCString(answer, output)
+}
+FakePoll :: (context: *void, status: *s32) -> s32 { status.* = fake_status; return 1 }
+// The account as Entity's account store gives it; its session is already
+// signed in, so the node only sees requests with the bearer token.
+FakeClient :: (context: *void, output: *Client) -> bool {
+    if !account_standalone_ready { return false }
+    output.server_url = TextUntilNul(account_profile.nodes[account_profile.preferred][:])
+    output.app_id = "arcade"
+    output.identity = Auth.Identity.{.account_id = AUTHOR, .client_id = "fixture-client"}
+    return true
+}
+FakeCancel :: (context: *void) {}
+
+// A copy of the service's answer, which stays valid across requests.
+Ask :: (request: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", PublicationsAnswer(request))
+    return BuilderFinish(out)
+}
+
+AskBuilt :: (request: *Vec(u8)) -> string {
+    text := BuilderFinish(request.*)
+    defer { EntityFree(text) }
+    return Ask(text)
+}
+
+// The request's final answer: the service is asked for its status until the
+// node has answered.
+Settle :: (reply: string) -> string {
+    queued := CollectionReplyRead(reply)
+    if queued.status != COLLECTION_PENDING || queued.request <= 0 { return CopyText(reply) }
+    for round: 0..20 {
+        status: Vec(u8)
+        CollectionStatusRequest(*status, queued.request)
+        answer := AskBuilt(*status)
+        if CollectionReplyRead(answer).status != COLLECTION_PENDING { return answer }
+        EntityFree(answer)
+    }
+    return Ask("{\"operation\":\"status\",\"request\":-1}")
+}
+
+Publish :: (title: string, visibility: s32, id: string) -> string {
+    document: Vec(u8)
+    CollectionDocumentBegin(*document, FORMAT, "classic", title)
+    CollectionDocumentLevel(*document, "{\"map\":\"#@$.#\"}", true)
+    CollectionDocumentLevel(*document, "{\"map\":\"#.$@#\"}", false)
+    CollectionDocumentEnd(*document)
+    document_text := BuilderFinish(document)
+    defer { EntityFree(document_text) }
+    request: Vec(u8)
+    CollectionPublishRequest(*request, FORMAT, title, visibility, document_text, id)
+    queued := AskBuilt(*request)
+    defer { EntityFree(queued) }
+    return Settle(queued)
+}
+
+Find :: (format: string, query: string) -> string {
+    request: Vec(u8)
+    CollectionFindRequest(*request, format, query)
+    queued := AskBuilt(*request)
+    defer { EntityFree(queued) }
+    return Settle(queued)
+}
+
+ById :: (operation: string, id: string) -> string {
+    request: Vec(u8)
+    if operation == "fetch" { CollectionFetchRequest(*request, id) } else { CollectionUnpublishRequest(*request, id) }
+    queued := AskBuilt(*request)
+    defer { EntityFree(queued) }
+    return Settle(queued)
+}
+
+ReplyStatus :: (text: string) -> s32 { return CollectionReplyRead(text).status }
+
+CopyText :: (text: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", text)
+    return BuilderFinish(out)
+}
+
+ExpectRejected :: (failures: *s32, label: string, request: string, error: string) {
+    reply := Ask(request)
+    defer { EntityFree(reply) }
+    expected := JoinText("{\"status\":\"rejected\",\"error\":\"", error, "\"}")
+    defer { EntityFree(expected) }
+    ExpectText(failures, label, reply, expected)
+}
+
+JoinText :: (first: string, second: string, third: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", first)
+    BuilderPrint(*out, "%", second)
+    BuilderPrint(*out, "%", third)
+    return BuilderFinish(out)
+}
+
+SignIn :: () {
+    account_standalone_ready = true
+    account_profile = EntityDefault()
+    unused CopyCString(NODE, account_profile.nodes[0][:])
+    account_profile.preferred = 0
+    unused CopyCString(AUTHOR, publication_session_owner[:])
+    unused CopyCString("fixture-token", publication_session.token[:])
+    publication_session.expires_at_local = UnixNow() + 3600
+}
+
+#program_export
+main :: () -> s32 {
+    failures: s32 = 0
+    publications_transport = AsyncTransport.{.start = FakeStart, .poll = FakePoll, .cancel = FakeCancel}
+    publications_client = FakeClient
+    ExpectText(*failures, "service name", PUBLICATIONS_SERVICE, "publications")
+
+    // Without an account nothing is sent, as in Inner Breeze.
+    account_standalone_ready = false
+    signed_out := Publish("Garden", COLLECTION_PRIVATE, "")
+    ExpectText(*failures, "signed-out publish", signed_out, "{\"status\":\"rejected\",\"error\":\"signed-out\"}")
+    EntityFree(signed_out)
+    signed_out_find := Find(FORMAT, "")
+    ExpectText(*failures, "signed-out find", signed_out_find, "{\"status\":\"rejected\",\"error\":\"signed-out\"}")
+    EntityFree(signed_out_find)
+    ExpectInteger(*failures, "signed-out sends nothing", fake_requests, 0)
+    unknown := Ask("{\"operation\":\"status\",\"request\":999}")
+    ExpectText(*failures, "unknown request", unknown, "{\"status\":\"failed\",\"error\":\"not-found\"}")
+    EntityFree(unknown)
+
+    SignIn()
+    // Private, the editor's default: the author alone sees it.
+    request: Vec(u8)
+    document := "{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[{}]}"
+    CollectionPublishRequest(*request, FORMAT, "Garden", COLLECTION_PRIVATE, document, "")
+    queued := AskBuilt(*request)
+    queued_reply := CollectionReplyRead(queued)
+    ExpectInteger(*failures, "publish queued", queued_reply.status, COLLECTION_PENDING)
+    ExpectBoolean(*failures, "publish number", queued_reply.request > 0, true)
+    ExpectText(*failures, "publish method", TextUntilNul(fake_method[:]), "POST")
+    ExpectText(*failures, "publish path", TextUntilNul(fake_path[:]), "/api/v1/publications")
+    ExpectText(*failures, "publish body", TextUntilNul(fake_body[:]),
+        "{\"format\":\"shovey-levels-1\",\"title\":\"Garden\",\"visibility\":\"private\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[{}]}}")
+    ExpectBoolean(*failures, "publish signed by the account", fake_signed, true)
+    private_reply := Settle(queued)
+    EntityFree(queued)
+    ExpectInteger(*failures, "private done", ReplyStatus(private_reply), COLLECTION_DONE)
+    private_meta: CollectionMeta
+    ExpectBoolean(*failures, "private publication", CollectionPublicationRead(private_reply, FORMAT, *private_meta), true)
+    ExpectText(*failures, "private id", TextUntilNul(private_meta.id[:]), "00000000000000000000000000000001")
+    ExpectInteger(*failures, "private visibility", private_meta.visibility, COLLECTION_PRIVATE)
+    ExpectBoolean(*failures, "private mine", private_meta.mine, true)
+    ExpectInteger(*failures, "private levels", private_meta.levels, 1)
+    // A finished answer stays until its slot is needed again.
+    again := Ask("{\"operation\":\"status\",\"request\":1}")
+    ExpectText(*failures, "status again", again, private_reply)
+    EntityFree(again)
+    EntityFree(private_reply)
+
+    friends_reply := Publish("Friends", COLLECTION_FRIENDS, "")
+    friends_meta: CollectionMeta
+    ExpectBoolean(*failures, "friends publication", CollectionPublicationRead(friends_reply, FORMAT, *friends_meta), true)
+    ExpectInteger(*failures, "friends visibility", friends_meta.visibility, COLLECTION_FRIENDS)
+    ExpectInteger(*failures, "friends levels", friends_meta.levels, 2)
+    EntityFree(friends_reply)
+    public_reply := Publish("Shore", COLLECTION_PUBLIC, "")
+    public_meta: CollectionMeta
+    ExpectBoolean(*failures, "public publication", CollectionPublicationRead(public_reply, FORMAT, *public_meta), true)
+    ExpectInteger(*failures, "public visibility", public_meta.visibility, COLLECTION_PUBLIC)
+    ExpectText(*failures, "public id", TextUntilNul(public_meta.id[:]), "00000000000000000000000000000003")
+    EntityFree(public_reply)
+    // Publishing with an id replaces that collection.
+    replaced := Publish("Shore at night", COLLECTION_PUBLIC, "00000000000000000000000000000003")
+    replaced_meta: CollectionMeta
+    ExpectBoolean(*failures, "replaced publication", CollectionPublicationRead(replaced, FORMAT, *replaced_meta), true)
+    ExpectText(*failures, "replaced id", TextUntilNul(replaced_meta.id[:]), "00000000000000000000000000000003")
+    ExpectText(*failures, "replaced title", TextUntilNul(replaced_meta.title[:]), "Shore at night")
+    EntityFree(replaced)
+
+    // Everyone's newest public ones of a format, or an author's by alias or id.
+    metas: [8]CollectionMeta
+    newest := Find(FORMAT, "")
+    ExpectText(*failures, "find path", TextUntilNul(fake_path[:]), "/api/v1/publications?format=shovey-levels-1")
+    ExpectInteger(*failures, "find public", CollectionFindRead(newest, FORMAT, metas[:]), 1)
+    ExpectText(*failures, "find public title", TextUntilNul(metas[0].title[:]), "Shore at night")
+    EntityFree(newest)
+    by_alias := Find(FORMAT, " @river ")
+    ExpectText(*failures, "find alias path", TextUntilNul(fake_path[:]), "/api/v1/publications?format=shovey-levels-1&author=@river")
+    EntityFree(by_alias)
+    river := Find(FORMAT, "river")
+    ExpectInteger(*failures, "find alias", CollectionFindRead(river, FORMAT, metas[:]), 3)
+    EntityFree(river)
+    by_id := Find(FORMAT, AUTHOR)
+    ExpectInteger(*failures, "find public id", CollectionFindRead(by_id, FORMAT, metas[:]), 3)
+    EntityFree(by_id)
+    other_format := Find("wurm-levels-1", "river")
+    ExpectInteger(*failures, "find other format", CollectionFindRead(other_format, "wurm-levels-1", metas[:]), 0)
+    EntityFree(other_format)
+    find_all := Ask("{\"operation\":\"find\"}")
+    any_format := Settle(find_all)
+    EntityFree(find_all)
+    ExpectText(*failures, "find all path", TextUntilNul(fake_path[:]), "/api/v1/publications")
+    ExpectInteger(*failures, "find all", ReplyStatus(any_format), COLLECTION_DONE)
+    EntityFree(any_format)
+
+    fetched := ById("fetch", "00000000000000000000000000000002")
+    ExpectText(*failures, "fetch method", TextUntilNul(fake_method[:]), "GET")
+    ExpectText(*failures, "fetch path", TextUntilNul(fake_path[:]), "/api/v1/publications/00000000000000000000000000000002")
+    fetched_meta: CollectionMeta
+    ExpectBoolean(*failures, "fetch publication", CollectionPublicationRead(fetched, FORMAT, *fetched_meta), true)
+    ExpectText(*failures, "fetch title", TextUntilNul(fetched_meta.title[:]), "Friends")
+    fetched_document: CollectionDocument
+    ExpectBoolean(*failures, "fetch document", CollectionDocumentRead(fetched, FieldAt(fetched, 0, "document"), FORMAT, *fetched_document), true)
+    EntityFree(fetched)
+
+    removed := ById("unpublish", "00000000000000000000000000000002")
+    ExpectText(*failures, "unpublish method", TextUntilNul(fake_method[:]), "DELETE")
+    ExpectText(*failures, "unpublish", removed, "{\"status\":\"done\", \"deleted\":true}")
+    EntityFree(removed)
+    missing := ById("fetch", "00000000000000000000000000000002")
+    ExpectText(*failures, "fetch removed", missing, "{\"status\":\"failed\",\"error\":\"not-found\"}")
+    EntityFree(missing)
+    gone := ById("unpublish", "00000000000000000000000000000002")
+    ExpectText(*failures, "unpublish removed", gone, "{\"status\":\"failed\",\"error\":\"not-found\"}")
+    EntityFree(gone)
+
+    // The node's refusals keep Inner Breeze's error words.
+    fake_forced = 429
+    busy := ById("fetch", "00000000000000000000000000000001")
+    ExpectText(*failures, "node busy", busy, "{\"status\":\"failed\",\"error\":\"busy\"}")
+    EntityFree(busy)
+    fake_forced = 403
+    forbidden := ById("unpublish", "00000000000000000000000000000001")
+    ExpectText(*failures, "node forbidden", forbidden, "{\"status\":\"failed\",\"error\":\"forbidden\"}")
+    EntityFree(forbidden)
+    fake_forced = 413
+    full := Publish("Full", COLLECTION_PUBLIC, "")
+    ExpectText(*failures, "node too large", full, "{\"status\":\"failed\",\"error\":\"too-large\"}")
+    EntityFree(full)
+    fake_forced = 200
+    odd := ById("fetch", "00000000000000000000000000000001")
+    ExpectText(*failures, "answer with status", odd, "{\"status\":\"failed\",\"error\":\"offline\"}")
+    EntityFree(odd)
+    fake_forced = 0
+
+    // Malformed requests never reach the node.
+    sent := fake_requests
+    ExpectRejected(*failures, "not json", "nonsense", "invalid")
+    ExpectRejected(*failures, "no operation", "{}", "invalid")
+    ExpectRejected(*failures, "unknown operation", "{\"operation\":\"share\"}", "invalid")
+    ExpectRejected(*failures, "no title", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"visibility\":\"public\",\"document\":{}}", "invalid")
+    ExpectRejected(*failures, "empty title", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"\",\"visibility\":\"public\",\"document\":{}}", "invalid")
+    ExpectRejected(*failures, "no visibility", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"A\",\"document\":{}}", "invalid")
+    ExpectRejected(*failures, "bad visibility", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"A\",\"visibility\":\"everyone\",\"document\":{}}", "invalid")
+    ExpectRejected(*failures, "bad format", "{\"operation\":\"publish\",\"format\":\"Shovey levels\",\"title\":\"A\",\"visibility\":\"public\",\"document\":{}}", "invalid")
+    ExpectRejected(*failures, "array document", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"A\",\"visibility\":\"public\",\"document\":[]}", "invalid")
+    ExpectRejected(*failures, "bad publish id", "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"A\",\"visibility\":\"public\",\"document\":{},\"id\":\"../x\"}", "invalid")
+    ExpectRejected(*failures, "bad fetch id", "{\"operation\":\"fetch\",\"id\":\"../accounts\"}", "invalid")
+    ExpectRejected(*failures, "no unpublish id", "{\"operation\":\"unpublish\"}", "invalid")
+    ExpectRejected(*failures, "bad query", "{\"operation\":\"find\",\"query\":\"river&format=x\"}", "invalid")
+    ExpectRejected(*failures, "bad find format", "{\"operation\":\"find\",\"format\":\"a b\"}", "invalid")
+    large: Vec(u8)
+    BuilderPrint(*large, "{\"operation\":\"publish\",\"format\":\"shovey-levels-1\",\"title\":\"A\",\"visibility\":\"public\",\"document\":{\"note\":\"")
+    for index: 0..PUBLICATION_DOCUMENT_MAX / 32 { BuilderPrint(*large, "abcdefghijklmnopqrstuvwxyz012345") }
+    BuilderPrint(*large, "\"}}")
+    large_text := BuilderFinish(large)
+    ExpectRejected(*failures, "large document", large_text, "too-large")
+    EntityFree(large_text)
+    ExpectInteger(*failures, "malformed sends nothing", fake_requests, sent)
+    no_number := Ask("{\"operation\":\"status\"}")
+    ExpectText(*failures, "status without number", no_number, "{\"status\":\"failed\",\"error\":\"not-found\"}")
+    EntityFree(no_number)
+    unknown_again := Ask("{\"operation\":\"status\",\"request\":424242}")
+    ExpectText(*failures, "status of unknown request", unknown_again, "{\"status\":\"failed\",\"error\":\"not-found\"}")
+    EntityFree(unknown_again)
+
+    print("Publications local test failures: %\n", failures)
+    return failures
+}

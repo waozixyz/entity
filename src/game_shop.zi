@@ -2,6 +2,8 @@
 // stable idempotency key makes retries and purchases on two devices one debit.
 #import "std/json_scan"
 #import "std/text_buffer"
+#import "std/c_string"
+#import "std/vec"
 
 GAME_SHOP_SERVICE :: "entity.game-shop"
 GameShopPrice :: (product: s32) -> s64 {
@@ -55,6 +57,49 @@ GameShopReceipt :: (text: string, owner: string) -> s32 {
         GameShopField(text, "source_ref", GameShopReference(cast(s32)product)) { return cast(s32)product }
         if product <= 3 && amount.valid && amount.value == -cast(float64)(GameShopPrice(cast(s32)product) / 10) &&
         GameShopField(text, "source_ref", GameShopLegacyReference(cast(s32)product)) { return cast(s32)product }
+    }
+    return 0
+}
+
+// Wurm's coin packs are bought again and again. Each purchase names the
+// account's next pack number, so a retry, or a second device asking for the
+// same pack at once, is one debit; the ledger's receipts are the coins.
+COIN_PACKS :: 3;
+COIN_PACK_ACTION :: "wurm.coins";
+CoinPackCoins :: (pack: s32) -> s32 {
+    if pack == 1 { return 150 }
+    if pack == 2 { return 400 }
+    if pack == 3 { return 900 }
+    return 0
+}
+CoinPackPrice :: (pack: s32) -> s64 {
+    if pack == 1 { return 2000000 }
+    if pack == 2 { return 5000000 }
+    if pack == 3 { return 10000000 }
+    return 0
+}
+CoinPackKey :: (pack: s32, number: s32, output: []u8) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "coins-wurm-%-%-v1", pack, number)
+    text := BuilderFinish(out)
+    unused CopyCString(text, output)
+    return TextUntilNul(output)
+}
+// The coins a debit receipt bought, or 0 when it is not a coin pack.
+CoinPackReceipt :: (text: string, owner: string) -> s32 {
+    if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
+    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
+    amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
+    reference: [128]u8
+    if ReadStringText(text, FieldAt(text, 0, "source_ref"), reference[:]) < 0 { return 0 }
+    ref := TextUntilNul(reference[:])
+    for pack: cast(s32)1..COIN_PACKS {
+        prefix: Vec(u8)
+        BuilderPrint(*prefix, "%:coins-wurm-%-", COIN_PACK_ACTION, pack)
+        start := BuilderFinish(prefix)
+        matched := ref.count > start.count && ref[:start.count] == start
+        if matched && amount.valid && amount.value == -cast(float64)CoinPackPrice(pack) { return CoinPackCoins(pack) }
     }
     return 0
 }

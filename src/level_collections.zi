@@ -1,0 +1,342 @@
+// Level collections shared by games through Entity. The game owns each level's
+// JSON; this module owns the collection envelope, drafts and publication wire
+// protocol. It performs no I/O and keeps no state.
+#import "std/json_scan"
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/vec"
+
+COLLECTIONS_DRAFTS_SERVICE :: "entity.records"
+COLLECTIONS_KIND :: "levels"
+COLLECTIONS_SCHEMA :: "entity.levels.v1"
+COLLECTIONS_PUBLISH_SERVICE :: "publications"
+
+COLLECTION_PUBLIC :: 0
+COLLECTION_FRIENDS :: 1
+COLLECTION_PRIVATE :: 2
+
+COLLECTION_MALFORMED :: 0
+COLLECTION_PENDING :: 1
+COLLECTION_DONE :: 2
+COLLECTION_FAILED :: 3
+COLLECTION_REJECTED :: 4
+COLLECTION_UNAVAILABLE :: 5
+
+CollectionVisibilityName :: (visibility: s32) -> string {
+    if visibility == COLLECTION_PUBLIC { return "public" }
+    if visibility == COLLECTION_FRIENDS { return "friends" }
+    return "private"
+}
+
+CollectionVisibilityRead :: (name: string) -> s32 {
+    if name == "public" { return COLLECTION_PUBLIC }
+    if name == "friends" { return COLLECTION_FRIENDS }
+    return COLLECTION_PRIVATE
+}
+
+CollectionDocumentBegin :: (out: *Vec(u8), format: string, edition: string, title: string) {
+    BuilderPrint(out, "{\"format\": ")
+    JsonQuoteInto(out, format, false)
+    BuilderPrint(out, ", \"edition\": ")
+    JsonQuoteInto(out, edition, false)
+    BuilderPrint(out, ", \"title\": ")
+    JsonQuoteInto(out, title, false)
+    BuilderPrint(out, ", \"levels\": [")
+}
+
+CollectionDocumentLevel :: (out: *Vec(u8), level_json: string, first: bool) {
+    if first { BuilderPrint(out, "\n {") }
+    else { BuilderPrint(out, ",\n {") }
+    BuilderPrint(out, "%", level_json[1:])
+}
+
+CollectionDocumentEnd :: (out: *Vec(u8)) {
+    BuilderPrint(out, "]}")
+}
+
+CollectionDocument :: struct {
+    format: [32]u8
+    edition: [24]u8
+    title: [160]u8
+    levels: s32
+    level_count: s32
+}
+
+CollectionDocumentRead :: (text: string, at: s32, format: string, document: *CollectionDocument) -> bool {
+    read: CollectionDocument
+    read.levels = -1
+    read.level_count = -1
+    if ReadStringText(text, FieldAt(text, at, "format"), read.format[:]) < 0 ||
+    TextUntilNul(read.format[:]) != format { return false }
+    if ReadStringText(text, FieldAt(text, at, "edition"), read.edition[:]) < 0 { return false }
+    if ReadStringText(text, FieldAt(text, at, "title"), read.title[:]) < 0 { return false }
+    list := FieldAt(text, at, "levels")
+    if list < 0 { return false }
+    first: [1]s32
+    read.levels = list
+    read.level_count = ArrayPositions(text, list, first[:])
+    document.* = read
+    return read.level_count >= 0
+}
+
+CollectionDocumentLevelAt :: (text: string, document: *CollectionDocument, index: s32) -> s32 {
+    if index < 0 || index >= document.level_count { return -1 }
+    return ElementAt(text, document.levels, index)
+}
+
+CollectionDraftPut :: (out: *Vec(u8), record: string, document: string, order: s64) {
+    BuilderPrint(out, "{\"operation\":\"put\",\"kind\":\"%\",\"schema\":\"%\"", COLLECTIONS_KIND, COLLECTIONS_SCHEMA)
+    if record.count > 0 {
+        BuilderPrint(out, ",\"id\":")
+        JsonQuoteInto(out, record, false)
+    }
+    BuilderPrint(out, ",\"document\":")
+    if document.count > 0 && document[0] == #char "{" {
+        BuilderPrint(out, "{\"order\":%,", order)
+        BuilderPrint(out, "%", document[1:])
+    } else {
+        BuilderPrint(out, "%", document)
+    }
+    BuilderPrint(out, "}")
+}
+
+CollectionDraftListRequest :: (out: *Vec(u8)) {
+    BuilderPrint(out, "{\"operation\":\"list\",\"kind\":\"%\",\"fields\":[\"format\",\"edition\",\"title\",\"order\",\"campaign\",\"visibility\"]}",
+        COLLECTIONS_KIND)
+}
+
+CollectionDraftRecordRequest :: (out: *Vec(u8), operation: string, record: string) {
+    BuilderPrint(out, "{\"operation\":")
+    JsonQuoteInto(out, operation, false)
+    BuilderPrint(out, ",\"kind\":\"%\",\"id\":", COLLECTIONS_KIND)
+    JsonQuoteInto(out, record, false)
+    BuilderPrint(out, "}")
+}
+
+CollectionDraftRecordValid :: (record: string) -> bool {
+    if record.count != 32 { return false }
+    for byte: record {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+CollectionDraftPutRead :: (text: string, record: []u8) -> bool {
+    status: [16]u8
+    if ReadStringText(text, FieldAt(text, 0, "status"), status[:]) != 4 ||
+    TextUntilNul(status[:]) != "done" { return false }
+    length := ReadStringText(text, FieldAt(text, 0, "id"), record)
+    return length == 32 && CollectionDraftRecordValid(TextUntilNul(record))
+}
+
+CollectionDraft :: struct {
+    record: [33]u8
+    title: [160]u8
+    edition: [24]u8
+    order: s64
+    visibility: s32
+}
+
+CollectionDraftListRead :: (text: string, format: string, drafts: []CollectionDraft) -> s32 {
+    status: [16]u8
+    if ReadStringText(text, FieldAt(text, 0, "status"), status[:]) != 4 ||
+    TextUntilNul(status[:]) != "done" { return -1 }
+    list := FieldAt(text, 0, "records")
+    if list < 0 { return -1 }
+    first: [1]s32
+    count := ArrayPositions(text, list, first[:])
+    if count < 0 { return -1 }
+    found: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if cast(s64)found >= drafts.count { break }
+        at := ElementAt(text, list, index)
+        entry_format: [32]u8
+        if ReadStringText(text, FieldAt(text, at, "format"), entry_format[:]) < 0 ||
+        TextUntilNul(entry_format[:]) != format || FieldAt(text, at, "campaign") >= 0 { continue }
+        record: [33]u8
+        if ReadStringText(text, FieldAt(text, at, "id"), record[:]) != 32 ||
+        !CollectionDraftRecordValid(TextUntilNul(record[:])) { continue }
+        entry: CollectionDraft
+        entry.order = cast(s64)CollectionNumber(text, at, "order")
+        ReadStringText(text, FieldAt(text, at, "title"), entry.title[:])
+        ReadStringText(text, FieldAt(text, at, "edition"), entry.edition[:])
+        visibility: [16]u8
+        ReadStringText(text, FieldAt(text, at, "visibility"), visibility[:])
+        entry.visibility = CollectionVisibilityRead(TextUntilNul(visibility[:]))
+        for byte, place: TextView(record[0:32]) { entry.record[place] = byte }
+        place := found
+        while place > 0 && CollectionDraftBefore(entry.order, drafts[place - 1].order) {
+            drafts[place] = drafts[place - 1]
+            place -= 1
+        }
+        drafts[place] = entry
+        found += 1
+    }
+    return found
+}
+
+CollectionPublishRequest :: (out: *Vec(u8), format: string, title: string, visibility: s32,
+    document: string, id: string) {
+    BuilderPrint(out, "{\"operation\":\"publish\",\"format\":")
+    JsonQuoteInto(out, format, false)
+    BuilderPrint(out, ",\"title\":")
+    JsonQuoteInto(out, title, false)
+    BuilderPrint(out, ",\"visibility\":")
+    JsonQuoteInto(out, CollectionVisibilityName(visibility), false)
+    if id.count > 0 {
+        BuilderPrint(out, ",\"id\":")
+        JsonQuoteInto(out, id, false)
+    }
+    BuilderPrint(out, ",\"document\":")
+    BuilderPrint(out, "%", document)
+    BuilderPrint(out, "}")
+}
+
+CollectionUnpublishRequest :: (out: *Vec(u8), id: string) {
+    BuilderPrint(out, "{\"operation\":\"unpublish\",\"id\":")
+    JsonQuoteInto(out, id, false)
+    BuilderPrint(out, "}")
+}
+
+CollectionFindRequest :: (out: *Vec(u8), format: string, query: string) {
+    BuilderPrint(out, "{\"operation\":\"find\",\"format\":")
+    JsonQuoteInto(out, format, false)
+    BuilderPrint(out, ",\"query\":")
+    JsonQuoteInto(out, CollectionTrim(query), false)
+    BuilderPrint(out, "}")
+}
+
+CollectionFetchRequest :: (out: *Vec(u8), id: string) {
+    BuilderPrint(out, "{\"operation\":\"fetch\",\"id\":")
+    JsonQuoteInto(out, id, false)
+    BuilderPrint(out, "}")
+}
+
+CollectionStatusRequest :: (out: *Vec(u8), request: s32) {
+    BuilderPrint(out, "{\"operation\":\"status\",\"request\":%}", request)
+}
+
+CollectionReply :: struct {
+    status: s32
+    request: s32
+    error: [48]u8
+}
+
+CollectionReplyRead :: (text: string) -> CollectionReply {
+    reply: CollectionReply
+    reply.request = -1
+    status: [16]u8
+    length := ReadStringText(text, FieldAt(text, 0, "status"), status[:])
+    if length < 0 { return reply }
+    word := TextUntilNul(status[:])
+    if word == "pending" { reply.status = COLLECTION_PENDING }
+    else if word == "done" { reply.status = COLLECTION_DONE }
+    else if word == "failed" { reply.status = COLLECTION_FAILED }
+    else if word == "rejected" { reply.status = COLLECTION_REJECTED }
+    else if word == "unavailable" { reply.status = COLLECTION_UNAVAILABLE }
+    else { return reply }
+    request := CollectionNumber(text, 0, "request")
+    reply.request = ifx request >= 0.0 && request < 2147483647.0 then cast(s32)request else -1
+    CollectionText(text, 0, "error", reply.error[:])
+    return reply
+}
+
+CollectionMeta :: struct {
+    id: [96]u8
+    alias: [64]u8
+    public_id: [72]u8
+    title: [160]u8
+    levels: s32
+    visibility: s32
+    updated_at: s64
+    mine: bool
+}
+
+CollectionMetaRead :: (text: string, at: s32, format: string, meta: *CollectionMeta) -> bool {
+    read: CollectionMeta
+    read.visibility = COLLECTION_PRIVATE
+    if ReadStringText(text, FieldAt(text, at, "id"), read.id[:]) <= 0 ||
+    ReadStringText(text, FieldAt(text, at, "title"), read.title[:]) < 0 { return false }
+    entry_format: [64]u8
+    if ReadStringText(text, FieldAt(text, at, "format"), entry_format[:]) < 0 ||
+    TextUntilNul(entry_format[:]) != format { return false }
+    author := FieldAt(text, at, "author")
+    if author >= 0 {
+        CollectionText(text, author, "alias", read.alias[:])
+        CollectionText(text, author, "public_id", read.public_id[:])
+    }
+    levels := CollectionNumber(text, at, "levels")
+    read.levels = ifx levels >= 0.0 && levels < 100000.0 then cast(s32)levels else 0
+    updated := CollectionNumber(text, at, "updated_at")
+    read.updated_at = ifx updated >= 0.0 then cast(s64)updated else 0
+    visibility: [16]u8
+    CollectionText(text, at, "visibility", visibility[:])
+    read.visibility = CollectionVisibilityRead(TextUntilNul(visibility[:]))
+    mine := FieldAt(text, at, "mine")
+    read.mine = mine >= 0 && MatchLiteral(text, mine, "true")
+    meta.* = read
+    return true
+}
+
+CollectionFindRead :: (text: string, format: string, metas: []CollectionMeta) -> s32 {
+    list := FieldAt(text, 0, "publications")
+    if list < 0 { return -1 }
+    first: [1]s32
+    count := ArrayPositions(text, list, first[:])
+    if count < 0 { return -1 }
+    found: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        if cast(s64)found >= metas.count { break }
+        at := ElementAt(text, list, index)
+        if CollectionMetaRead(text, at, format, *metas[found]) { found += 1 }
+    }
+    return found
+}
+
+CollectionPublicationRead :: (text: string, format: string, meta: *CollectionMeta) -> bool {
+    at := FieldAt(text, 0, "publication")
+    return at >= 0 && CollectionMetaRead(text, at, format, meta)
+}
+
+#scope_file
+CollectionDraftBefore :: (left: s64, right: s64) -> bool {
+    if left >= 0 && right < 0 { return true }
+    if left < 0 && right >= 0 { return false }
+    return left < right
+}
+
+#scope_file
+CollectionNumber :: (text: string, at: s32, name: string) -> float64 {
+    value := FieldAt(text, at, name)
+    if value < 0 { return -1.0 }
+    number := ReadNumber(text, value)
+    return ifx number.valid then number.value else -1.0
+}
+
+#scope_file
+CollectionText :: (text: string, at: s32, name: string, field: []u8) -> s32 {
+    field[0] = cast(u8)0
+    value := FieldAt(text, at, name)
+    if value < 0 { return -1 }
+    decoded := ReadStringValue(text, value, cast(s32)field.count * 4 + 16)
+    if !decoded.valid { return -1 }
+    bytes := decoded.value
+    view := TextView(VecSlice(bytes, 0, bytes.count))
+    length := cast(s32)bytes.count
+    if !CopyCString(view, field) {
+        field[0] = cast(u8)0
+        length = -1
+    }
+    VecFree(bytes)
+    return length
+}
+
+#scope_file
+CollectionTrim :: (text: string) -> string {
+    start: s64 = 0
+    end := text.count
+    while start < end && (text[start] == #char " " || text[start] == cast(u8)9) { start += 1 }
+    while end > start && (text[end - 1] == #char " " || text[end - 1] == cast(u8)9) { end -= 1 }
+    return text[start:end]
+}

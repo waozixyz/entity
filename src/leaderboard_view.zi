@@ -63,58 +63,37 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
     AchievementRelease(path)
 }
 
-// The released Apfelwurm skins, rendered with the game's own colours and
-// markings. Only its stable board ID may choose this trusted game badge.
+// The appearance number is the game skin ID plus one. Draw the current
+// packaged art rather than maintaining a second set of coloured badges.
 ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectangle) -> bool {
-    skin := ifx icon >= 1 && icon <= 9 then icon - 1 else 0
-    if skin >= 7 {
-        root := AppService("entity.assets", "")
-        out: Vec(u8)
-        if root != "" { BuilderPrint(*out, "%/", root) }
-        BuilderPrint(*out, "assets/entity/wurm-special-skins.png")
-        path := BuilderFinish(out)
-        column := ifx skin == 7 then 0 else 2
-        for segment: cast(s32)0..2 {
-            head := segment == 2
-            size := bounds.width * (ifx head then 0.72 else 0.5)
-            Image(session, ImageProps.{.key = key + cast(u64)segment,
-                .asset_path = path, .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.16,
-                    bounds.y + (ifx head then 0.0 else bounds.height * 0.34), size, size},
-                .source = Rectangle.{cast(float32)(column + (ifx head then 0 else 1)) * 543.0, 0.0, 543.0, 724.0},
-                .fit = ImageFit.ImageFitContain, .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
-        }
-        AchievementRelease(path)
-        return true
-    }
-    colours: [7]Color = .[Color.{236, 151, 67, 255}, Color.{94, 192, 151, 255},
-        Color.{154, 119, 207, 255}, Color.{221, 133, 151, 255}, Color.{107, 139, 199, 255},
-        Color.{227, 185, 80, 255}, Color.{135, 173, 91, 255}]
-    unit := bounds.width / 32.0
+    skin := ifx icon >= 1 && icon <= 13 then icon - 1 else 0
+    root := AppService("entity.assets", "")
+    asset := ifx skin == 0 then "assets/entity/wurm-base.png" else ifx skin <= 6 then "assets/entity/wurm-skins.png" else ifx skin <= 8 then "assets/entity/wurm-special-skins.png" else "assets/entity/wurm-reward-skins.png"
+    out: Vec(u8)
+    if root != "" { BuilderPrint(*out, "%/", root) }
+    Append(*out, asset)
+    path := BuilderFinish(out)
     for segment: cast(s32)0..2 {
-        size := (ifx segment == 2 then 20.0 else 14.0) * unit
-        left := bounds.x + cast(float32)segment * 6.0 * unit
-        top := bounds.y + (ifx segment == 2 then 3.0 else 16.0 - cast(float32)segment * 4.0) * unit
-        Box(session, BoxProps.{.key = key + cast(u64)segment,
-            .bounds = Rectangle.{left, top, size, size}, .fill = colours[skin],
-            .radius = size / 2.0, .border = Color.{30, 48, 35, 100}})
+        head := segment == 2
+        size := bounds.width * (ifx head then 0.65 else 0.37)
+        source := Rectangle.{ifx head then 64.0 else 128.0, 96.0, 32.0, 32.0}
+        if skin >= 1 && skin <= 6 {
+            source = Rectangle.{ifx head then 0.0 else 180.0, cast(float32)(skin - 1) * 180.0, 180.0, 180.0}
+        } else if skin >= 9 {
+            source = Rectangle.{ifx head then 0.0 else 256.0, cast(float32)(skin - 9) * 256.0, 256.0, 256.0}
+        } else if skin >= 7 {
+            column := (ifx skin == 7 then 0 else 2) + (ifx head then 0 else 1)
+            crops: [4]Rectangle = .[Rectangle.{79.0,87.0,464.0,491.0}, Rectangle.{543.0,155.0,497.0,429.0},
+                Rectangle.{1086.0,105.0,520.0,534.0}, Rectangle.{1696.0,182.0,410.0,405.0}]
+            source = crops[column]
+        }
+        unused Image(session, ImageProps.{.key = key + cast(u64)segment, .asset_path = path,
+            .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.18,
+                bounds.y + (ifx head then bounds.height * 0.08 else bounds.height * 0.45), size, size},
+            .source = source, .fit = ImageFit.ImageFitContain, .smooth = true,
+            .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     }
-    for eye: cast(s32)0..1 {
-        left := bounds.x + 25.0 * unit
-        top := bounds.y + (8.0 + cast(float32)eye * 8.0) * unit
-        Box(session, BoxProps.{.key = key + 3 + cast(u64)eye * 2,
-            .bounds = Rectangle.{left, top, 4.0 * unit, 4.0 * unit},
-            .fill = Color.{246, 244, 223, 255}, .radius = 2.0 * unit})
-        Box(session, BoxProps.{.key = key + 4 + cast(u64)eye * 2,
-            .bounds = Rectangle.{left + 1.0 * unit, top + 1.0 * unit, 2.0 * unit, 2.0 * unit},
-            .fill = Color.{28, 44, 35, 255}, .radius = 1.0 * unit})
-    }
-    if skin >= 4 {
-        shape := "S2rr:M3 19L9 5L15 15L18 10L22 19Z"
-        if skin == 4 { shape = "S1.6rr:M19 15C16.17 15.87 13.08 15.11 10.99 13.01C8.89 10.92 8.13 7.83 9 5C5.36 6.12 3.02 9.65 3.39 13.44C3.77 17.23 6.77 20.23 10.56 20.61C14.35 20.98 17.88 18.64 19 15Z" }
-        if skin == 5 { shape = "S1.6rr:M12 2L15 9L22 9L17 14L19 22L12 17L5 22L7 14L2 9L9 9Z" }
-        SvgIcon(session, SvgIconProps.{.bounds = Rectangle.{bounds.x + 16.0 * unit, bounds.y, 10.0 * unit, 10.0 * unit},
-            .shape = shape, .color = Color.{249, 229, 157, 255}})
-    }
+    AchievementRelease(path)
     return true
 }
 
@@ -209,23 +188,8 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         }
         y += 56.0 * scale
     }
-    if page.loading {
-        for dot: cast(s32)0..2 {
-            color := ThemeOr("text", 0xe5eef3ff, 0x203b4bff)
-            color.a = ifx (profile_leaderboard_ticks / 10) % 3 == dot then 255 else 64
-            Box(session, BoxProps.{.key = cast(u64)(55007 + dot),
-                .bounds = Rectangle.{x + cast(float32)dot * 7.0 * scale, y + 12.0 * scale, 4.0 * scale, 4.0 * scale},
-                .fill = color, .radius = 2.0 * scale})
-        }
-        AchievementText(session, 55006, LeaderboardLabel("profile_updating_status", "Updating…"),
-            Rectangle.{x + 28.0 * scale, y, width - 28.0 * scale, 32.0 * scale}, font)
-        y += 40.0 * scale
-    }
-    if !profile_leaderboard_ready || page.board_count == 0 {
-        AchievementText(session, 55002, LeaderboardLabel("profile_updating_status", "Updating…"),
-            Rectangle.{x, y, width, 80.0 * scale}, font)
-        return true
-    }
+    // A refresh stays silent: the last boards remain until new ones arrive.
+    if !profile_leaderboard_ready || page.board_count == 0 { return true }
     current := *page.boards[page.selected]
     apps: [LEADERBOARD_BOARDS]DropdownOption
     first: [LEADERBOARD_BOARDS]s32
@@ -316,8 +280,6 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     }
     y += 44.0 * scale
     if page.row_count == 0 {
-        AchievementText(session, 55204, LeaderboardLabel("profile_updating_status", "Updating…"),
-            Rectangle.{x, y, width, 64.0 * scale}, font)
         unused End(session)
         return true
     }

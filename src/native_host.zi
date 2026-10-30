@@ -5,6 +5,7 @@
 #import "dew_model"
 #import "recovery"
 #import "entity_records"
+#import "publications"
 #import "entity_dew"
 #import "leaderboard_native"
 #import "leaderboard_model"
@@ -68,13 +69,20 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
+    name == PUBLICATIONS_SERVICE
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
         if service == "entity.friends" { result.* = EntityHostText(EntityFriendsAnswer(AppArgumentText(arguments[1]))); return 1 }
+        if service == PUBLICATIONS_SERVICE {
+            // Publications sign as this device's Entity account.
+            PublicationsConnect(AccountStoreClient)
+            result.* = EntityHostText(PublicationsAnswer(AppArgumentText(arguments[1])))
+            return 1
+        }
         if service == LEADERBOARD_SERVICE {
             result.* = EntityHostText(EntityLeaderboardAnswer(AppArgumentText(arguments[1])))
             return 1
@@ -147,7 +155,7 @@ EntityHostAssetAllowed :: (path: string) -> bool {
     first: [4096]u8
     second: [4096]u8
     abstract: [4096]u8
-    names: [4]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png", "assets/entity/wurm-special-skins.png"]
+    names: [7]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png", "assets/entity/wurm-special-skins.png", "assets/entity/wurm-skins.png", "assets/entity/wurm-reward-skins.png", "assets/entity/wurm-base.png"]
     for name: names { if path == NativeJoin(abstract[:], TextUntilNul(asset_folder[:]), name) { return true } }
     return path == "" || path == NativeJoin(first[:], TextUntilNul(asset_folder[:]), "assets/entity/pfp.png") ||
     path == NativeJoin(second[:], TextUntilNul(asset_folder[:]), "assets/entity/flowers.png")
@@ -220,7 +228,7 @@ EntityHostOpen :: (bytes: string, root: string, client_id: string, host_navigati
         for index: cast(u64)0..asset_count - 1 {
             name := TextFromCString(BundleAssetPath(portable.app.bundle, index))
             if name != "assets/entity/pfp.png" && name != "assets/entity/flowers.png" &&
-            name != "assets/entity/abstract-jade.png" && name != "assets/entity/abstract-amber.png" && name != "assets/entity/abstract-violet.png" && name != "assets/entity/wurm-special-skins.png" { continue }
+            name != "assets/entity/abstract-jade.png" && name != "assets/entity/abstract-amber.png" && name != "assets/entity/abstract-violet.png" && name != "assets/entity/wurm-special-skins.png" && name != "assets/entity/wurm-skins.png" && name != "assets/entity/wurm-reward-skins.png" && name != "assets/entity/wurm-base.png" { continue }
             folder: [4096]u8
             path: [4096]u8
             if !NativeDirectory(NativeJoin(folder[:], root, "assets/entity")) { return false }
@@ -370,6 +378,8 @@ EntityHostPump :: () {
     DewPump()
     EntityDewPump()
     EntityRecordsPump()
+    PublicationsConnect(AccountStoreClient)
+    PublicationsPump()
     EntityLeaderboardPump()
     EntityFriendsPump()
 }
