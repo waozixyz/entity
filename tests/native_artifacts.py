@@ -41,6 +41,8 @@ def link_flags(*paths):
             kind, value = line.split('\t', 1)
             if kind == 'pkg-config':
                 flags += run(['pkg-config', '--libs', *value.split()]).split()
+            elif kind == 'archive':
+                flags.append(str(path.parent / value))
             elif kind in ('library', 'flag'):
                 flags.append(value)
     return flags
@@ -74,8 +76,7 @@ def consume(app, profile, crypto):
         'return b[0] != 0; }\n')
     flags = link_flags(profile / 'link.txt', crypto / 'link.txt')
     run(['cc', '-std=c11', '-O2', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-I', headers, '-I', headers / 'ziran',
-         app / 'consumer.c', profile / 'libentity.a', crypto / 'libmonocypher.a',
-         crypto / 'liboqs.a', crypto / 'libziran.a', *flags,
+         app / 'consumer.c', *flags,
          '-o', app / 'consumer'])
     run([app / 'consumer', profile / 'entity.zx'])
 

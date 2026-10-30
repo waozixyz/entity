@@ -420,8 +420,10 @@ account directory, service adapters and account isolation described above.
 
 `native-crypto` supplies `libmonocypher.a`, `liboqs.a` (ML-DSA-44 only),
 `libziran.a` and `link.txt`. Link the host archive before those support archives.
-`link.txt` is TSV: `pkg-config` rows name packages to query, `library` and `flag`
-rows supply individual linker arguments. Browser `js-library` and `embed` rows
+`link.txt` is TSV: `archive` rows give descriptor-relative archives in link
+order, `pkg-config` rows name packages to query, and `library` and `flag`
+rows supply individual linker arguments. Read these rows for the Profile, then
+its dependency descriptors; consumers keep no crypto archive or source lists. Browser `js-library` and `embed` rows
 name descriptor-relative support files and virtual asset destinations.
 These are compiler-version-specific C ABI artifacts, not a stable binary SDK.
 No application main, account keys or app-specific collection is packaged.

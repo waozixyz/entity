@@ -81,10 +81,16 @@ Archive :: (generated: string, output: string, include: string = "") -> bool {
     }
     return files.count > 0
 }
-LinkText :: (profile: bool) -> string {
+SystemLinkText :: (profile: bool) -> string {
     if web { return ifx profile then "js-library\tziran_web.js\nembed\tentity.zx@/entity.zx\nembed\tfont.ttf@/kryon-font.ttf\n" else "flag\t-sUSE_ZLIB=1\nflag\t-sASYNCIFY\nflag\t-sALLOW_MEMORY_GROWTH=1\nflag\t-sFORCE_FILESYSTEM=1\nflag\t-lidbfs.js\n" }
     if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\n" }
     return ifx profile then "pkg-config\tsdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0\nlibrary\t-lX11\n" else "library\t-l:libcurl.so.4\nlibrary\t-lm\nlibrary\t-lpthread\nlibrary\t-lz\nlibrary\t-ldl\n"
+}
+// Consumers append these rows in descriptor dependency order; all native
+// archive choices and ordering stay here, including cryptography libraries.
+LinkText :: (profile: bool) -> string {
+    archives := ifx profile then "archive\tlibentity.a\n" else "archive\tlibmonocypher.a\narchive\tliboqs.a\narchive\tlibziran.a\n"
+    return PkgJoin(archives, SystemLinkText(profile))
 }
 Crypto :: () -> bool {
     oqs := Package("liboqs"); mono := Package("monocypher")

@@ -43,8 +43,7 @@ def main():
             flags += ['--js-library', str(profile.parent / value)]
     run([cc, '-std=c11', '-O2', '-ffunction-sections', '-fdata-sections',
          '-Wl,--gc-sections', '-I', headers, '-I', headers / 'ziran', app / 'consumer.c',
-         profile.parent / 'libentity.a', crypto.parent / 'libmonocypher.a',
-         crypto.parent / 'liboqs.a', crypto.parent / 'libziran.a', *flags, '-o', output])
+         *flags, '-o', output])
     binary = output.with_suffix('.wasm') if output.suffix == '.js' else output
     with binary.open('rb') as stream:
         magic = stream.read(4)
