@@ -7,6 +7,7 @@
 #import "recovery"
 #import "pairing"
 #import "pairing_client"
+#import "picture_publish"
 #import "daochi_client/keys"
 #import "daochi_client/crypto"
 #import "daochi_client/client"
@@ -52,17 +53,12 @@ alias_next: s64;
 alias_sequence: s32;
 alias_picture_sequence: s32;
 alias_picture_restore: bool;
-picture_pending: PendingRequest;
-picture_session: Auth.Session;
-picture_transfer: HttpTransfer;
-picture_active: bool;
+picture_publisher: EntityPicturePublisher;
+// The person chose the profile's picture and the node has not accepted it.
 picture_dirty: bool;
+// Saves of a picture the person did not choose here are not published.
 picture_remote: bool;
 picture_sequence: s32;
-picture_sending: s32;
-picture_next: s64;
-picture_body: [256]u8;
-picture_response: [1024]u8;
 account_pairing_delivered: bool;
 account_standalone_ready: bool;
 account_root: [4096]u8;
@@ -203,7 +199,6 @@ AccountStoreSaveProfile :: (state: EntityState) -> bool {
         if !NativeWrite(AccountStorePicturePath(pending_path[:]), "pending") { return false }
         picture_dirty = true
         picture_sequence += 1
-        picture_next = 0
     }
     account_profile = state
     return true
@@ -243,7 +238,7 @@ AliasCancel :: (context: *void) { HttpTransferCancel(*alias_transfer) }
 AccountStoreAliasReadStarted :: () {
     alias_sequence = account_provider.queue.sequence
     alias_picture_sequence = picture_sequence
-    alias_picture_restore = !picture_dirty && !picture_active
+    alias_picture_restore = !picture_dirty && !picture_publisher.active
 }
 
 AccountStoreAliasPump :: () {
@@ -260,12 +255,9 @@ AccountStoreAliasPump :: () {
         unused CopyCString(node, alias_node[:])
         alias_active = false
         alias_next = 0
-        CancelRequest(*picture_pending)
-        HttpTransferCancel(*picture_transfer)
-        picture_active = false
+        EntityPicturePublishCancel(*picture_publisher)
         pending_path: [4096]u8
         picture_dirty = PathExists(AccountStorePicturePath(pending_path[:]))
-        picture_next = 0
     }
     if !account_standalone_ready { return }
     now := UnixNow()
@@ -287,7 +279,7 @@ AccountStoreAliasPump :: () {
         }
         if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known &&
         alias_picture_restore && alias_picture_sequence == picture_sequence &&
-        !picture_dirty && !picture_active {
+        !picture_dirty && !picture_publisher.active {
             icon := alias_session.profile_icon
             choice := EntityPictureFromPublicIcon(cast(s32)icon)
             abstract := EntityAbstractFromPublicIcon(cast(s32)icon)
@@ -313,40 +305,16 @@ AccountStoreAliasPump :: () {
     if !alias_active { alias_next = now + 60 }
 }
 
-PictureStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
-    return HttpTransferStart(*picture_transfer, request, output, 15000)
-}
-PicturePoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*picture_transfer, status) }
-PictureCancel :: (context: *void) { HttpTransferCancel(*picture_transfer) }
+// The pending marker keeps the choice across restarts until the node has it.
 AccountStorePicturePump :: () {
-    if !account_standalone_ready { return }
-    now := UnixNow()
-    if picture_active {
-        if !PollRequest(*picture_pending) { return }
-        picture_active = false
-        if picture_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && picture_pending.status == 200 && picture_sending == picture_sequence {
-            picture_dirty = false
-            pending_path: [4096]u8
-            unused RemoveFile(AccountStorePicturePath(pending_path[:]))
-            unused AccountStorePersist()
-        }
-        picture_next = now + 30
-        return
-    }
-    if !picture_dirty || alias_active || now < picture_next || account_provider.queue.pending { return }
-    client: Client
-    if !AccountStoreClient(null, *client) { return }
+    if !account_standalone_ready || !picture_publisher.active && alias_active { return }
     icon := EntityPublicIcon(account_profile)
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"user_id_hash\":\"%\",\"profile_icon\":%}", TextUntilNul(account_recovery.keys.public_id[:]), icon)
-    document := BuilderFinish(out)
-    unused CopyCString(document, picture_body[:])
-    EntityFree(document)
-    headers: [1]HttpHeader
-    transport := AsyncTransport.{.start = PictureStart, .poll = PicturePoll, .cancel = PictureCancel}
-    picture_sending = picture_sequence
-    picture_active = BeginRequest(*picture_pending, client, *picture_session, now, transport, "POST", "/api/v1/account/profile-icon", TextUntilNul(picture_body[:]), picture_response[:], headers[:0])
-    if !picture_active { picture_next = now + 30 }
+    accepted := EntityPicturePublishPump(*picture_publisher, *account_provider, ifx picture_dirty then icon else 0, 0, UnixNow())
+    if accepted == 0 || accepted != icon || !picture_dirty { return }
+    picture_dirty = false
+    pending_path: [4096]u8
+    unused RemoveFile(AccountStorePicturePath(pending_path[:]))
+    unused AccountStorePersist()
 }
 AccountStoreLoad :: (context: *void, output: *Recovery) -> bool {
     if !account_standalone_ready { return false }
@@ -401,11 +369,16 @@ AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
     if !same && local_data && choice == 0 { return 2 }
     previous := account_recovery
     defer { RecoveryClear(*previous) }
+    // A picture chosen here before signing in stays the person's choice.
+    pending_path: [4096]u8
+    chosen := picture_dirty || PathExists(AccountStorePicturePath(pending_path[:]))
     next := EntityDefault()
     if same || choice == 1 { next = account_profile }
+    else { chosen = false }
     if !same && TextUntilNul(account_provider.queue.request.operation[:]) == "create" {
         next.picture = EntityInitialPicture(id,next.pictures)
         next.picture_kind = 0
+        chosen = false
     }
     unused CopyCString(id, next.owner_id[:])
     unused SharedProfileLoad(id, *next)
@@ -418,11 +391,23 @@ AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
         return 0
     }
     account_recovery = candidate
-    if !AccountStoreSaveProfile(next) {
+    // Pictures given by sign-in are not choices to publish.
+    picture_remote = true
+    saved := AccountStoreSaveProfile(next)
+    picture_remote = false
+    if !saved {
         account_recovery = previous
         if previous.keys.public_id[0] != cast(u8)0 { unused AccountStoreSaveKey(*previous) }
         else { path: [4096]u8; unused RemoveFile(AccountStorePath("account.key", path[:])) }
         return 0
+    }
+    if chosen {
+        owner_path: [4096]u8
+        if NativeWrite(AccountStorePicturePath(owner_path[:]), "pending") {
+            picture_dirty = true
+            picture_sequence += 1
+            if TextUntilNul(owner_path[:]) != TextUntilNul(pending_path[:]) { unused RemoveFile(TextUntilNul(pending_path[:])) }
+        }
     }
     account_standalone_ready = true
     AccountStoreReadAlias()

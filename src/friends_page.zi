@@ -91,8 +91,7 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
             }
             unused ProfileLeaderboardWurm(session, cast(u64)(63000 + index * 10), FriendWurmSkin(document, TextUntilNul(id[:])), image_bounds)
         } else if abstract < 0 && picture < 0 {
-            fallback: s32 = 0
-            for byte: TextUntilNul(id[:]) { fallback = (fallback + cast(s32)byte) % 3 }
+            fallback := EntityAbstractFromPublicIcon(EntityFriendIcon(0, TextUntilNul(id[:])))
             Image(session, AbstractPicture(fallback, image_bounds))
         }
         TextLine(cast(u64)(60100 + index * 4), FriendName(document, item, "alias", "user_id_hash", name[:]), x + 52.0 * scale, y.*, width - 152.0 * scale, 16)

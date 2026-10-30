@@ -1,0 +1,26 @@
+// A node icon as Entity draws it, with paths inside Entity's assets. Hosts
+// that bundle those assets under assets/entity (Breeze, Werkzeug, the games)
+// show people's pictures the same way, abstract pictures included.
+#import "model"
+#import "kryon/geometry"
+#import "kryon/image_props"
+
+EntityIconImage :: (icon: s32, bounds: Rectangle, alt: string) -> ImageProps {
+    image := ImageProps.{.bounds = bounds, .alt_text = alt, .fit = ImageFit.ImageFitContain}
+    abstract := EntityAbstractFromPublicIcon(icon)
+    if abstract >= 0 {
+        image.asset_path = EntityAbstractPictureAsset(abstract)
+        image.radius = bounds.width * 0.5
+        return image
+    }
+    picture := EntityPictureFromPublicIcon(icon)
+    if picture < 0 { picture = 0 }
+    if picture == 9 {
+        // Flowers has its own detailed image.
+        image.asset_path = "assets/entity/flowers.png"
+        return image
+    }
+    image.asset_path = "assets/entity/pfp.png"
+    image.source = Rectangle.{cast(float32)(picture % 5) * 64.0, cast(float32)(picture / 5) * 64.0, 64.0, 64.0}
+    return image
+}

@@ -25,6 +25,20 @@ main :: () -> s32 {
         if EntityAbstractFromPublicIcon(EntityPublicIcon(state)) != picture { return 88 }
     }
     if EntityAbstractFromPublicIcon(126) != -1 || EntityAbstractFromPublicIcon(130) != -1 { return 89 }
+    // Kryon pictures publish as their Kryon icon numbers, abstract as 127-129.
+    if EntityPictureIcon(0, 0, 2) != 41 || EntityPictureIcon(0, 24, 0) != 65 || EntityPictureIcon(0, 27, 0) != 126 { return 90 }
+    if EntityPictureIcon(1, 5, 0) != 127 || EntityPictureIcon(1, 0, 2) != 129 { return 91 }
+    for icon: cast(s32)0..140 {
+        current := icon >= 41 && icon <= 65 || icon >= 124 && icon <= 129
+        if EntityPublicIconChosen(icon) != current { return 92 }
+    }
+    // Friends show their own picture in current numbers, older numbers mapped.
+    if EntityFriendIcon(55, "a") != 55 || EntityFriendIcon(125, "a") != 125 || EntityFriendIcon(128, "a") != 128 { return 93 }
+    if EntityFriendIcon(1, "a") != 42 || EntityFriendIcon(11, "a") != 65 { return 94 }
+    // Without a picture, the same person always gets the same abstract one.
+    without := EntityFriendIcon(0, "0123abcd")
+    if without < 127 || without > 129 || EntityFriendIcon(99, "0123abcd") != without { return 95 }
+    if EntityFriendIcon(0, "0") == EntityFriendIcon(0, "1") && EntityFriendIcon(0, "1") == EntityFriendIcon(0, "2") { return 96 }
     if !state.show_storage { return 85 }
     state.show_storage = false
     if state.host_navigation { return 8 }

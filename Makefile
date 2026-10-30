@@ -28,13 +28,21 @@ build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.loc
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
-test: build/entity.zx native-test records-test alias-test model-test dew-play-test achievement-view-test
+test: build/entity.zx native-test records-test alias-test model-test picture-publish-test dew-play-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry model_test:main -o build/model-test tests/model_test.zi
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/model-test $$(rg --files build/model-test -g '*.c') -o build/model-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/model-test/test
+
+# Profile pictures reach the node from every app through one publisher.
+.PHONY: picture-publish-test
+picture-publish-test:
+	rm -rf build/picture-publish-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry picture_publish_test:main -o build/picture-publish-test tests/picture_publish_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/picture-publish-test $$(rg --files build/picture-publish-test -g '*.c') -o build/picture-publish-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/picture-publish-test/test
 
 .PHONY: premium-alias-test
 premium-alias-test:

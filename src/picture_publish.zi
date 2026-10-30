@@ -1,0 +1,121 @@
+// The one path from a chosen profile picture to the account's node. Every
+// host with an account provider (Entity's own store, Breeze, Werkzeug) pumps
+// it, so friends see the same picture whichever app it was chosen in.
+// Only a picture the person chose is sent, once per choice; a failed attempt
+// waits and tries again, and nothing here ever holds up the app.
+#import "model"
+#import "native_management"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/net_http"
+#import "daochi_client/client"
+Auth :: #import "daochi_client/auth";
+#import "daochi_client/async_client"
+#import "kryon/http_transfer"
+
+ENTITY_PICTURE_RETRY :: 60
+// A node that refuses the picture is asked again much later.
+ENTITY_PICTURE_REFUSED_RETRY :: 3600
+
+EntityPicturePublisher :: struct {
+    pending: PendingRequest
+    session: Auth.Session
+    transfer: HttpTransfer
+    active: bool
+    sending: s32
+    owner: [65]u8
+    node: [512]u8
+    next: s64
+    body: [256]u8
+    response: [1024]u8
+}
+
+// chosen is the picture the person picked, or 0 before they pick one;
+// published is the last picture this node accepted from here.
+EntityPictureShouldPublish :: (chosen: s32, published: s32) -> bool {
+    return EntityPublicIconChosen(chosen) && chosen != published
+}
+
+// When to ask again after an attempt the node answered with status.
+EntityPictureRetryAt :: (status: s32, now: s64) -> s64 {
+    if status >= 400 && status < 500 && status != 401 && status != 429 { return now + ENTITY_PICTURE_REFUSED_RETRY }
+    return now + ENTITY_PICTURE_RETRY
+}
+
+EntityPictureStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    publisher := cast(*EntityPicturePublisher)context
+    return HttpTransferStart(*publisher.transfer, request, output, 15000)
+}
+EntityPicturePoll :: (context: *void, status: *s32) -> s32 {
+    publisher := cast(*EntityPicturePublisher)context
+    return HttpTransferPoll(*publisher.transfer, status)
+}
+EntityPictureCancel :: (context: *void) {
+    publisher := cast(*EntityPicturePublisher)context
+    HttpTransferCancel(*publisher.transfer)
+}
+
+// Stops a picture on its way, for example when the account signs out.
+EntityPicturePublishCancel :: (publisher: *EntityPicturePublisher) {
+    if publisher.active {
+        CancelRequest(*publisher.pending)
+        HttpTransferCancel(*publisher.transfer)
+    }
+    publisher.active = false
+    publisher.next = 0
+}
+
+// Returns the picture the node accepted for the provider's current account,
+// for the host to keep as published; 0 while nothing new was accepted.
+EntityPicturePublishPump :: (publisher: *EntityPicturePublisher, provider: *ManagementProvider,
+    chosen: s32, published: s32, now: s64) -> s32 {
+    if publisher.active {
+        if !PollRequest(*publisher.pending) { return 0 }
+        publisher.active = false
+        current: Client
+        same := provider.client != null && provider.client(provider.context, *current) &&
+        current.identity.account_id == TextUntilNul(publisher.owner[:]) && current.server_url == TextUntilNul(publisher.node[:])
+        if !same {
+            publisher.next = 0
+            return 0
+        }
+        if publisher.pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+            publisher.next = 0
+            return publisher.sending
+        }
+        publisher.next = EntityPictureRetryAt(publisher.pending.status, now)
+        return 0
+    }
+    if !EntityPictureShouldPublish(chosen, published) || now < publisher.next ||
+    provider.queue.pending || provider.asynchronous || provider.delegated { return 0 }
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) || client.server_url == "" {
+        // No account yet: the choice waits for one.
+        publisher.next = now + ENTITY_PICTURE_RETRY
+        return 0
+    }
+    if client.identity.account_id != TextUntilNul(publisher.owner[:]) || client.server_url != TextUntilNul(publisher.node[:]) {
+        publisher.session = .{}
+    }
+    if !CopyCString(client.server_url, publisher.node[:]) || !CopyCString(client.identity.account_id, publisher.owner[:]) {
+        publisher.next = now + ENTITY_PICTURE_RETRY
+        return 0
+    }
+    client.server_url = TextUntilNul(publisher.node[:])
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"user_id_hash\":\"%\",\"profile_icon\":%}", TextUntilNul(publisher.owner[:]), chosen)
+    document := BuilderFinish(out)
+    copied := CopyCString(document, publisher.body[:])
+    EntityFree(document)
+    if !copied { return 0 }
+    publisher.response = .{}
+    headers: [1]HttpHeader
+    transport := AsyncTransport.{.context = cast(*void)publisher, .start = EntityPictureStart,
+        .poll = EntityPicturePoll, .cancel = EntityPictureCancel}
+    publisher.sending = chosen
+    publisher.active = BeginRequest(*publisher.pending, client, *publisher.session, now, transport, "POST",
+        "/api/v1/account/profile-icon", TextUntilNul(publisher.body[:]), publisher.response[:], headers[:0])
+    if !publisher.active { publisher.next = now + ENTITY_PICTURE_RETRY }
+    return 0
+}

@@ -1,6 +1,7 @@
 // One profile UI. Hosts supply entity.json through the ordinary scoped store
 // interface; extension replies name only routes supplied by that host.
 #import "model"
+#import "picture_image"
 #import "achievement_view"
 #import "telegram_view"
 #import "leaderboard_view"
@@ -943,13 +944,7 @@ DrawAccount :: () {
 }
 
 Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
-    image := ImageProps.{.asset_path = "assets/entity/pfp.png", .alt_text = Label("entity.picture", "Profile picture"),
-        .bounds = bounds, .source = Rectangle.{cast(float32)(index % 5) * 64.0, cast(float32)(index / 5) * 64.0, 64.0, 64.0}}
-    if index == 9 {
-        image.asset_path = "assets/entity/flowers.png"
-        image.source = Rectangle.{}
-        image.fit = ImageFit.ImageFitContain
-    }
+    image := EntityIconImage(EntityPictureIcon(0, index, 0), bounds, Label("entity.picture", "Profile picture"))
     if asset_root[0] != cast(u8)0 {
         path: Vec(u8)
         BuilderPrint(*path, "%/%", TextUntilNul(asset_root[:]), image.asset_path)
@@ -1520,14 +1515,13 @@ OpenPicturePicker :: () {
 }
 
 AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
-    path := EntityAbstractPictureAsset(index)
+    image := EntityIconImage(EntityPictureIcon(1, 0, index), bounds, Label("entity.abstract", "Abstract"))
     if asset_root[0] != 0 {
         out: Vec(u8)
-        BuilderPrint(*out, "%/%", TextUntilNul(asset_root[:]), path)
-        path = BuilderFinish(out)
+        BuilderPrint(*out, "%/%", TextUntilNul(asset_root[:]), image.asset_path)
+        image.asset_path = BuilderFinish(out)
     }
-    return ImageProps.{.asset_path = path, .bounds = bounds, .fit = ImageFit.ImageFitContain,
-        .alt_text = Label("entity.abstract", "Abstract"), .radius = bounds.width * 0.5}
+    return image
 }
 
 ProfilePicture :: (id: s32, bounds: Rectangle) {

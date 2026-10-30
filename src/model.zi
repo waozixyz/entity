@@ -281,7 +281,29 @@ EntityAbstractPictureAsset :: (index: s32) -> string {
     return names[index]
 }
 
+// Kryon pictures keep their Kryon icon numbers (41-65, 124-126); the three
+// abstract pictures are 127-129.
+EntityPictureIcon :: (kind: s32, picture: s32, abstract: s32) -> s32 {
+    if kind == 1 { return 127 + abstract }
+    return ifx picture < 25 then picture + 41 else picture - 25 + 124
+}
+
 EntityPublicIcon :: (state: EntityState) -> s32 {
-    if state.picture_kind == 1 { return 127 + state.abstract_picture }
-    return ifx state.picture < 25 then state.picture + 41 else state.picture - 25 + 124
+    return EntityPictureIcon(state.picture_kind, state.picture, state.abstract_picture)
+}
+
+// A picture someone chose, in the numbers current clients publish.
+EntityPublicIconChosen :: (icon: s32) -> bool {
+    return icon >= 41 && icon <= 65 || icon >= 124 && icon <= 129
+}
+
+// How a person's node icon is shown, in current numbers. Someone without a
+// picture gets one of the abstract pictures, the same one in every app.
+EntityFriendIcon :: (icon: s32, id: string) -> s32 {
+    if EntityAbstractFromPublicIcon(icon) >= 0 { return icon }
+    picture := EntityPictureFromPublicIcon(icon)
+    if picture >= 0 { return EntityPictureIcon(0, picture, 0) }
+    fallback: s32 = 0
+    for byte: id { fallback = (fallback + cast(s32)byte) % 3 }
+    return 127 + fallback
 }

@@ -10,6 +10,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "model"
+#import "picture_image"
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/drawing_props"
@@ -51,15 +52,14 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
         return
     }
     root := AppService("entity.assets", "")
-    asset := ifx abstract >= 0 then EntityAbstractPictureAsset(abstract) else ifx picture == 9 then "assets/entity/flowers.png" else "assets/entity/pfp.png"
+    image := EntityIconImage(icon, bounds, LeaderboardLabel("entity.picture", "Profile picture"))
+    image.key = key
     out: Vec(u8)
-    if root == "" { BuilderPrint(*out, "%", asset) }
-    else { BuilderPrint(*out, "%/%", root, asset) }
+    if root == "" { BuilderPrint(*out, "%", image.asset_path) }
+    else { BuilderPrint(*out, "%/%", root, image.asset_path) }
     path := BuilderFinish(out)
-    Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
-        .source = ifx abstract >= 0 || picture == 9 then Rectangle.{} else Rectangle.{cast(float32)(picture % 5) * 64.0,
-            cast(float32)(picture / 5) * 64.0, 64.0, 64.0},
-        .fit = ImageFit.ImageFitContain, .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+    image.asset_path = path
+    Image(session, image)
     AchievementRelease(path)
 }
 

@@ -1,0 +1,27 @@
+// The shared picture publisher sends only chosen pictures, once per choice.
+#import, file "../src/picture_publish.zi";
+#import, file "../src/model.zi";
+
+#program_export
+main :: () -> s32 {
+    // Nothing chosen yet: an implicit default is never published.
+    if EntityPictureShouldPublish(0, 0) || EntityPictureShouldPublish(0, 55) { return 1 }
+    // A new choice is published; the one the node already has is not.
+    if !EntityPictureShouldPublish(55, 0) || !EntityPictureShouldPublish(128, 55) { return 2 }
+    if EntityPictureShouldPublish(55, 55) || EntityPictureShouldPublish(128, 128) { return 3 }
+    // Numbers that are not current pictures are never sent.
+    if EntityPictureShouldPublish(7, 0) || EntityPictureShouldPublish(130, 0) || EntityPictureShouldPublish(-1, 0) { return 4 }
+    for picture: cast(s32)0..27 {
+        if !EntityPictureShouldPublish(EntityPictureIcon(0, picture, 0), 0) { return 5 }
+    }
+    for abstract: cast(s32)0..2 {
+        if !EntityPictureShouldPublish(EntityPictureIcon(1, 0, abstract), 0) { return 6 }
+    }
+    // Offline or a busy node retries soon; a refusal much later.
+    if EntityPictureRetryAt(0, 1000) != 1000 + ENTITY_PICTURE_RETRY { return 7 }
+    if EntityPictureRetryAt(503, 1000) != 1000 + ENTITY_PICTURE_RETRY { return 8 }
+    if EntityPictureRetryAt(429, 1000) != 1000 + ENTITY_PICTURE_RETRY { return 9 }
+    if EntityPictureRetryAt(404, 1000) != 1000 + ENTITY_PICTURE_REFUSED_RETRY { return 10 }
+    if EntityPictureRetryAt(400, 1000) != 1000 + ENTITY_PICTURE_REFUSED_RETRY { return 11 }
+    return 0
+}

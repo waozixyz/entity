@@ -1,5 +1,6 @@
 // A completed profile read must not undo a picture selected after it began.
 #import "account_store"
+#import "picture_publish"
 #import "model"
 #import "native_files"
 #import "recovery"
@@ -38,7 +39,7 @@ main :: () -> s32 {
     if !AccountStoreSaveProfile(selected) { return 2 }
     // Its authenticated upload finished before the older read arrived.
     picture_dirty = false
-    picture_active = false
+    picture_publisher.active = false
     CompletedRead(old_icon)
     AccountStoreAliasPump()
     if account_profile.picture != 7 { return 3 }
@@ -49,7 +50,7 @@ main :: () -> s32 {
     if !AccountStoreSaveProfile(selected) { return 4 }
     AccountStoreAliasReadStarted()
     picture_dirty = false
-    picture_active = false
+    picture_publisher.active = false
     CompletedRead(old_icon)
     AccountStoreAliasPump()
     if account_profile.picture != 8 { return 5 }
