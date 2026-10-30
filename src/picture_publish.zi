@@ -119,3 +119,84 @@ EntityPicturePublishPump :: (publisher: *EntityPicturePublisher, provider: *Mana
     if !publisher.active { publisher.next = now + ENTITY_PICTURE_RETRY }
     return 0
 }
+
+// A picture chosen in another app reaches this one from the node: signing in
+// returns the account's picture, read on connecting and then now and then.
+ENTITY_PICTURE_READ_INTERVAL :: 600
+
+EntityPictureReader :: struct {
+    pending: PendingRequest
+    session: Auth.Session
+    transfer: HttpTransfer
+    active: bool
+    owner: [65]u8
+    node: [512]u8
+    next: s64
+    // The host's choice count when the read began; a choice made meanwhile wins.
+    sequence: s32
+}
+
+EntityPictureReadStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    reader := cast(*EntityPictureReader)context
+    return HttpTransferStart(*reader.transfer, request, output, 15000)
+}
+EntityPictureReadPoll :: (context: *void, status: *s32) -> s32 {
+    reader := cast(*EntityPictureReader)context
+    return HttpTransferPoll(*reader.transfer, status)
+}
+EntityPictureReadCancel :: (context: *void) {
+    reader := cast(*EntityPictureReader)context
+    HttpTransferCancel(*reader.transfer)
+}
+
+// Returns the node's picture for the provider's current account, in current
+// numbers, once a read completes with no choice made here meanwhile
+// (sequence counts the host's choices); 0 otherwise.
+EntityPictureReadPump :: (reader: *EntityPictureReader, provider: *ManagementProvider, sequence: s32, now: s64) -> s32 {
+    if reader.active {
+        if !PollRequest(*reader.pending) { return 0 }
+        reader.active = false
+        current: Client
+        same := provider.client != null && provider.client(provider.context, *current) &&
+        current.identity.account_id == TextUntilNul(reader.owner[:]) && current.server_url == TextUntilNul(reader.node[:])
+        if !same {
+            reader.next = 0
+            return 0
+        }
+        if reader.pending.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+            reader.next = now + ENTITY_PICTURE_RETRY
+            return 0
+        }
+        reader.next = now + ENTITY_PICTURE_READ_INTERVAL
+        if !reader.session.profile_icon_known || reader.sequence != sequence { return 0 }
+        return EntityPictureFromNode(reader.session.profile_icon)
+    }
+    if provider.queue.pending || provider.asynchronous || provider.delegated { return 0 }
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) || client.server_url == "" { return 0 }
+    // A newly connected account or node is read at once.
+    changed := client.identity.account_id != TextUntilNul(reader.owner[:]) || client.server_url != TextUntilNul(reader.node[:])
+    if !changed && now < reader.next { return 0 }
+    if !CopyCString(client.server_url, reader.node[:]) || !CopyCString(client.identity.account_id, reader.owner[:]) {
+        reader.next = now + ENTITY_PICTURE_RETRY
+        return 0
+    }
+    client.server_url = TextUntilNul(reader.node[:])
+    reader.session = .{}
+    reader.sequence = sequence
+    transport := AsyncTransport.{.context = cast(*void)reader, .start = EntityPictureReadStart,
+        .poll = EntityPictureReadPoll, .cancel = EntityPictureReadCancel}
+    reader.active = BeginSession(*reader.pending, client, *reader.session, now, transport)
+    if !reader.active { reader.next = now + ENTITY_PICTURE_RETRY }
+    return 0
+}
+
+// Stops a read on its way, for example when the account signs out.
+EntityPictureReadStop :: (reader: *EntityPictureReader) {
+    if reader.active {
+        CancelRequest(*reader.pending)
+        HttpTransferCancel(*reader.transfer)
+    }
+    reader.active = false
+    reader.next = 0
+}

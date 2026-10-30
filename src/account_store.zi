@@ -277,19 +277,13 @@ AccountStoreAliasPump :: () {
                 }
             }
         }
-        if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known &&
-        alias_picture_restore && alias_picture_sequence == picture_sequence &&
-        !picture_dirty && !picture_publisher.active {
-            icon := alias_session.profile_icon
-            choice := EntityPictureFromPublicIcon(cast(s32)icon)
-            abstract := EntityAbstractFromPublicIcon(cast(s32)icon)
-            if (choice >= 0 || abstract >= 0) && cast(s32)icon != EntityPublicIcon(account_profile) {
-                state := account_profile
-                state.picture_kind = ifx abstract >= 0 then 1 else 0
-                if abstract >= 0 { state.abstract_picture = abstract }
-                else { state.picture = choice }
+        if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known {
+            pending := !alias_picture_restore || alias_picture_sequence != picture_sequence ||
+            picture_dirty || picture_publisher.active
+            icon := EntityPictureAdopt(EntityPictureFromNode(alias_session.profile_icon), EntityPublicIcon(account_profile), pending)
+            if icon != 0 {
                 picture_remote = true
-                unused AccountStoreSaveProfile(state)
+                unused AccountStoreSaveProfile(EntityWithPublicIcon(account_profile, icon))
                 picture_remote = false
             }
         }

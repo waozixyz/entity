@@ -297,6 +297,39 @@ EntityPublicIconChosen :: (icon: s32) -> bool {
     return icon >= 41 && icon <= 65 || icon >= 124 && icon <= 129
 }
 
+// The picture a node holds for an account, in current numbers; 0 when the
+// node's icon is not a picture, so nothing is taken from it.
+EntityPictureFromNode :: (icon: s64) -> s32 {
+    if icon < 0 || icon > 1000 { return 0 }
+    if EntityAbstractFromPublicIcon(cast(s32)icon) >= 0 { return cast(s32)icon }
+    picture := EntityPictureFromPublicIcon(cast(s32)icon)
+    return ifx picture >= 0 then EntityPictureIcon(0, picture, 0) else 0
+}
+
+// The node's picture for this profile, or 0 to keep the current one. A
+// picture chosen here that the node has not accepted yet always stays.
+EntityPictureAdopt :: (node: s32, current: s32, choice_pending: bool) -> s32 {
+    if choice_pending || node == current || !EntityPublicIconChosen(node) { return 0 }
+    return node
+}
+
+// The profile showing a picture given in current public numbers.
+EntityWithPublicIcon :: (state: EntityState, icon: s32) -> EntityState {
+    result := state
+    abstract := EntityAbstractFromPublicIcon(icon)
+    if abstract >= 0 {
+        result.picture_kind = 1
+        result.abstract_picture = abstract
+        return result
+    }
+    picture := EntityPictureFromPublicIcon(icon)
+    if picture >= 0 {
+        result.picture_kind = 0
+        result.picture = picture
+    }
+    return result
+}
+
 // How a person's node icon is shown, in current numbers. Someone without a
 // picture gets one of the abstract pictures, the same one in every app.
 EntityFriendIcon :: (icon: s32, id: string) -> s32 {

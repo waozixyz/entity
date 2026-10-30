@@ -23,5 +23,15 @@ main :: () -> s32 {
     if EntityPictureRetryAt(429, 1000) != 1000 + ENTITY_PICTURE_RETRY { return 9 }
     if EntityPictureRetryAt(404, 1000) != 1000 + ENTITY_PICTURE_REFUSED_RETRY { return 10 }
     if EntityPictureRetryAt(400, 1000) != 1000 + ENTITY_PICTURE_REFUSED_RETRY { return 11 }
+    // A picture chosen in another app is taken from the node.
+    if EntityPictureAdopt(128, 55, false) != 128 || EntityPictureAdopt(60, 0, false) != 60 { return 12 }
+    // A choice here that the node has not accepted yet stays.
+    if EntityPictureAdopt(128, 55, true) != 0 { return 13 }
+    // The same picture, or a node without a chosen picture, changes nothing.
+    if EntityPictureAdopt(55, 55, false) != 0 || EntityPictureAdopt(0, 55, false) != 0 { return 14 }
+    // Node icons in older numbers arrive as current pictures.
+    if EntityPictureFromNode(7) != EntityPictureIcon(0, 21, 0) || EntityPictureFromNode(129) != 129 { return 15 }
+    if EntityPictureFromNode(0) != 0 || EntityPictureFromNode(130) != 0 || EntityPictureFromNode(-1) != 0 { return 16 }
+    if EntityPictureFromNode(5000000000) != 0 { return 17 }
     return 0
 }
