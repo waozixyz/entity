@@ -1,0 +1,61 @@
+#import, file "../src/dew_packs.zi";
+#import, file "../src/dew_play_pricing.zi";
+#import "std/text_buffer"
+#import "std/vec"
+
+PRICES :: #string JSON
+{"products":[{"id":"dew_10","price":"$0.72","micros":720000,"currency":"USD"},{"id":"dew_100","price":"$6.90","micros":6900000,"currency":"USD"},{"id":"dew_500","price":"$33.00","micros":33000000,"currency":"USD"},{"id":"dew_1000","price":"$63.00","micros":63000000,"currency":"USD"},{"id":"dew_5000","price":"$300.00","micros":300000000,"currency":"USD"}]}
+JSON;
+
+ADDRESS :: "48edfHu7V9Z84YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBGUicoD"
+
+#program_export
+main :: () -> s32 {
+    // The packs match the Google Play products.
+    for index: cast(s32)0..DewPackCount - 1 {
+        if DewPackIndex(DewPackSizes[index]) != index { return 1 }
+    }
+    if DewPackIndex(42) != -1 || DewPackIndex(0) != -1 { return 2 }
+    // 0.0001 XMR (100000000 piconero) buys one Dew (1000000 units).
+    if DewPackAtomic(500, 100000000, 1000000) != 50000000000 { return 3 }
+    // Rounded up, so the Dew is never short: 1 piconero buys 3 Dew.
+    if DewPackAtomic(1, 1, 3000000) != 1 || DewPackAtomic(4, 1, 3000000) != 2 { return 4 }
+    if DewPackAtomic(0, 1, 1) != -1 || DewPackAtomic(10000000, 1, 1) != -1 ||
+    DewPackAtomic(10, 0, 1) != -1 || DewPackAtomic(10, 1, 0) != -1 { return 5 }
+    if DewPackAtomic(9999999, 9223372036854775807, 1) != -1 { return 6 }
+    if DewPackAtLeast(10000000000, 100000000, 1000000) != 100 || DewPackAtLeast(10000000001, 100000000, 1000000) != 101 { return 7 }
+    if DewPackAtLeast(0, 1, 1) != -1 || DewPackAtLeast(1, 0, 1) != -1 { return 8 }
+    // Other coins need 0.01 XMR and at least 100 Dew.
+    if DewOtherCoinMinimum(100000000, 1000000) != 100 { return 9 }
+    // Cheap Dew: 0.01 XMR buys 10000 of them, so that is the least.
+    if DewOtherCoinMinimum(1000000, 1000000) != 10000 { return 10 }
+    // At 0.001 XMR a Dew, 0.01 XMR is only 10 Dew; the floor stays 100.
+    if DewOtherCoinMinimum(1000000000, 1000000) != 100 { return 11 }
+    if DewOtherCoinMinimum(50000000, 1000000) != 200 { return 12 }
+    if DewOtherCoinMinimum(0, 1) != -1 { return 13 }
+    if DewPackTyped("250") != 250 || DewPackTyped("") != 0 || DewPackTyped("12a") != 0 ||
+    DewPackTyped("12345678") != 0 || DewPackTyped("-5") != 0 { return 14 }
+    uri: [256]u8
+    wanted: Vec(u8)
+    BuilderPrint(*wanted, "monero:%?tx_amount=0.05&tx_description=Dew", ADDRESS)
+    if DewPackMoneroUri(ADDRESS, 50000000000, uri[:]) != BuilderFinish(wanted) { return 15 }
+    plain: Vec(u8)
+    BuilderPrint(*plain, "monero:%", ADDRESS)
+    if DewPackMoneroUri(ADDRESS, 0, uri[:]) != BuilderFinish(plain) { return 16 }
+    broken: Vec(u8)
+    BuilderPrint(*broken, "%&", ADDRESS[:94])
+    if DewPackMoneroUri("4short", 1, uri[:]) != "" || DewPackMoneroUri(BuilderFinish(broken), 1, uri[:]) != "" { return 17 }
+    small: [64]u8
+    if DewPackMoneroUri(ADDRESS, 1, small[:]) != "" { return 18 }
+    // The badge goes to the largest real saving, and to none without one.
+    if DewPlayBest(PRICES) != "dew_5000" { return 19 }
+    flat := #string JSON
+{"products":[{"id":"dew_10","price":"$1","micros":1000000,"currency":"USD"},{"id":"dew_100","price":"$10","micros":10000000,"currency":"USD"}]}
+JSON;
+    if DewPlayBest(flat) != "" || DewPlayBest("{}") != "" { return 20 }
+    tie := #string JSON
+{"products":[{"id":"dew_10","price":"$1","micros":1000000,"currency":"USD"},{"id":"dew_100","price":"$9","micros":9000000,"currency":"USD"},{"id":"dew_500","price":"$45","micros":45000000,"currency":"USD"}]}
+JSON;
+    if DewPlayBest(tie) != "dew_100" { return 21 }
+    return 0
+}

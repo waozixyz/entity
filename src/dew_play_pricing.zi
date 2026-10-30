@@ -77,3 +77,19 @@ DewPlaySavings :: (state: string, id: string) -> s32 {
     // Whole percentages round down so the label never promises extra savings.
     return cast(s32)((reference - selected_micros) * 100 / reference)
 }
+
+// The pack with the largest real saving per Dew, as its product ID, for the
+// shop's "Best value" badge; "" when no pack saves anything.
+DewPlayBest :: (state: string) -> string {
+    ids: [4]string = .["dew_100", "dew_500", "dew_1000", "dew_5000"]
+    best := ""
+    most: s32 = 0
+    for id: ids {
+        savings := DewPlaySavings(state, id)
+        if savings > most {
+            most = savings
+            best = id
+        }
+    }
+    return best
+}

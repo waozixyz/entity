@@ -127,7 +127,7 @@ the account's recent Monero deposits for `EntityHostDewDeposits`.
 `scripts/build-web.py` links such a host without `--bundle`.
 
 The Profile's Top up opens https://dew.waozi.xyz/?account=ID for the signed-in
-account when the host is a native Entity host; hosts that answer Dew actions
+account (the Dew shop's "Buy N Dew with another coin" adds `&dew=N`) when the host is a native Entity host; hosts that answer Dew actions
 themselves keep their own top-up. A host that is the top-up page passes an
 empty `EntityHostTopUpUrl` and reads `EntityHostTopUpRequested` instead.
 

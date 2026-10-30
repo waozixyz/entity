@@ -202,7 +202,8 @@ main :: () -> s32 {
         Expect((FindKey(46006) >= 0) == state.show_storage, "storage indicator follows host capability")
         Expect((Find("Storage plans") >= 0) == state.show_storage, "Profile storage plans follow host capability")
         Command("dew")
-        Expect(FindKey(45006) >= 0 && FindKey(45008) >= 0, "Dew balance and funding remain available")
+        // Monero packs and the custom amount; the rate arrives with the address.
+        Expect(FindKey(45006) >= 0 && FindKey(45106) >= 0 && FindKey(45256) >= 0, "Dew balance and Monero packs remain available")
         Expect((FindKey(45013) >= 0) == state.show_storage, "dedicated Dew page hides game storage plans")
         Command("back")
     }
@@ -237,10 +238,19 @@ main :: () -> s32 {
         #if #defined(ENTITY_DEW_CAPTURE) {
             CaptureDew(ifx size == 0 then "backup/account-ux/dew-desktop.argb" else "backup/account-ux/dew-narrow.argb")
         }
+        // 500 Dew is chosen first; at 0.0001 XMR a Dew it costs 0.05 XMR.
+        Expect(Find("500 Dew · 0.05 XMR") >= 0, "the chosen pack shows its Monero price")
         ClickKey(45010)
         Expect(TextUntilNul(clipboard[:]) == address, "copy keeps the complete unwrapped Monero address")
         Command("back")
     }
+    // A root page asked for next replaces an open Dew page.
+    Command("root:dew")
+    for frame: 0..3 { Frame() }
+    Expect(FindKey(45001) >= 0, "root Dew opens the Dew page")
+    Command("root:appearance")
+    for frame: 0..3 { Frame() }
+    Expect(FindKey(45001) < 0, "Appearance replaces an open Dew page")
     account.public_id[0] = #char "a"
     EntityFree(snapshot)
     snapshot = ManagementEncode(account)

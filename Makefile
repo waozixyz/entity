@@ -28,7 +28,7 @@ build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.loc
 		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 		--module-path qrcode=$(QRCODE_DIR)/src \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
-test: build/entity.zx native-test records-test alias-test model-test picture-publish-test dew-play-test achievement-view-test
+test: build/entity.zx native-test records-test alias-test model-test picture-publish-test dew-play-test dew-packs-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
 model-test:
 	rm -rf build/model-test
@@ -58,6 +58,14 @@ dew-play-test: dew-play-savings-test
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry dew_play_test:main -o build/dew-play-test tests/dew_play_test.zi
 	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/dew-play-test $$(rg --files build/dew-play-test -g '*.c') -o build/dew-play-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY build/dew-play-test/test
+
+# The Dew shop's packs, their Monero prices and the custom amount.
+.PHONY: dew-packs-test
+dew-packs-test:
+	rm -rf build/dew-packs-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry dew_packs_test:main -o build/dew-packs-test tests/dew_packs_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/dew-packs-test $$(rg --files build/dew-packs-test -g '*.c') -o build/dew-packs-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/dew-packs-test/test
 
 .PHONY: dew-play-savings-test
 dew-play-savings-test:

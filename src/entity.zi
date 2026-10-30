@@ -11,6 +11,7 @@
 #import "alias_model"
 #import "dew_model"
 #import "dew_play_pricing"
+#import "dew_packs"
 #import "dew_view"
 #import "std/json_scan"
 #import "std/number_text"
@@ -51,7 +52,7 @@
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: EntityState;
 loaded: bool;
-fields: [6]Field;
+fields: [7]Field;
 node_text: [256]u8;
 scroll_offset: s32;
 choosing_picture: bool;
@@ -1309,11 +1310,16 @@ ProfileActivity :: (x: float32, y: float32, width: float32, draw: bool) -> float
 }
 
 DewCommand :: (operation: string, sequence: s32, size: string = "", period: string = "") {
+    unused DewQueue(operation, sequence, size, period)
+}
+
+// Whether the host queued the request.
+DewQueue :: (operation: string, sequence: s32, size: string = "", period: string = "") -> bool {
     request: Vec(u8)
     BuilderPrint(*request, "{\"owner\":\"%\",\"sequence\":%,\"operation\":\"%\",\"size\":\"%\",\"period\":\"%\"}",
         TextUntilNul(management.public_id[:]), sequence + 1, operation, size, period)
     document := BuilderFinish(request)
-    unused AppService("entity.dew", document)
+    return AppService("entity.dew", document) == "queued"
 }
 
 DewDecimal :: (units: s64, divisor: s64, suffix: string) -> string {
@@ -1336,12 +1342,8 @@ DewDecimal :: (units: s64, divisor: s64, suffix: string) -> string {
     return BuilderFinish(text)
 }
 
-DewFundingCode :: (address: string, x: float32, y: *float32, width: float32) {
-    wallet: Vec(u8)
-    BuilderPrint(*wallet, "monero:%", address)
-    uri := BuilderFinish(wallet)
+DewFundingCode :: (address: string, uri: string, x: float32, y: *float32, width: float32) {
     side := DrawConnectionCode(uri, x, y.*, width)
-    AchievementRelease(uri)
     if side > 0.0 { y.* += side + 16.0 * scale }
 
     display: [256]u8
@@ -1370,12 +1372,113 @@ DewFundingCode :: (address: string, x: float32, y: *float32, width: float32) {
     y.* += 56.0 * scale
 }
 
+// The Dew shop: packs side by side like a game's store. The Google Play
+// edition prices them through Play; other editions price them in Monero at
+// the node's rate and add a custom amount.
+DewPackCustom :: -1
+dew_choice: s32 = 2;
+dew_custom: [16]u8;
+// Whether this visit already asked the node for the account's Monero address.
+dew_address_asked: bool;
+dew_height: float32;
+dew_panel_height: float32 = 400.0;
+DEW_DROP :: "S1.7rr:M12 3C10 6 5 11 5 15C5 24 19 24 19 15C19 11 14 6 12 3ZM8 15C8 18 10 19 12 19"
+DEW_CARD_HEIGHT :: 196.0
+
+// "Buy %1 Dew with another coin" with %1 filled in.
+DewFill :: (template: string, value: string) -> string {
+    out: Vec(u8)
+    index: s64 = 0
+    while index < template.count {
+        if index + 1 < template.count && template[index] == #char "%" && template[index + 1] == #char "1" {
+            BuilderPrint(*out, "%", value)
+            index += 2
+            continue
+        }
+        BuilderPrint(*out, "%", template[index:index + 1])
+        index += 1
+    }
+    return BuilderFinish(out)
+}
+
+DewDrops :: (key: s32, count: s32, x: float32, y: float32, width: float32) {
+    drop := 30.0 * scale
+    step := drop * 0.62
+    pile := step * cast(float32)(count - 1) + drop
+    left := x + (width - pile) * 0.5
+    accent := ThemeOr("accent", 0x49a68eff, 0x298a71ff)
+    for index: 0..count - 1 {
+        // Alternate drops sit lower, so bigger packs read as a pile.
+        top := y
+        if count == 1 { top = y + 3.0 * scale } else if index % 2 == 0 { top = y + 6.0 * scale }
+        cx := left + cast(float32)index * step
+        Box(session, BoxProps.{.key = cast(u64)(key + index * 2), .bounds = Rectangle.{cx, top, drop, drop},
+                .fill = accent, .border = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .radius = drop * 0.5})
+        SvgIcon(session, SvgIconProps.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
+                .bounds = Rectangle.{cx + drop * 0.22, top + drop * 0.2, drop * 0.56, drop * 0.6}})
+    }
+}
+
+// One pack card; returns true when its price button is pressed.
+DewPackCard :: (key: s32, title: string, subtitle: string, drops: s32, price: string, badge: string,
+    bounds: Rectangle, chosen: bool, enabled: bool) -> bool {
+    accent := ThemeOr("accent", 0x49a68eff, 0x298a71ff)
+    if chosen {
+        Box(session, BoxProps.{.key = cast(u64)key, .bounds = Rectangle.{bounds.x - 2.0 * scale, bounds.y - 2.0 * scale,
+                    bounds.width + 4.0 * scale, bounds.height + 4.0 * scale}, .fill = accent, .radius = 16.0 * scale})
+    }
+    Box(session, BoxProps.{.key = cast(u64)(key + 1), .bounds = bounds,
+            .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff),
+            .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 14.0 * scale})
+    // A card without drops, the custom amount, keeps its middle for the field.
+    title_y := ifx drops > 0 then 58.0 * scale else 18.0 * scale
+    if drops > 0 { DewDrops(key + 10, drops, bounds.x, bounds.y + 16.0 * scale, bounds.width) }
+    Text(session, TextProps.{.key = cast(u64)(key + 2), .text = title,
+            .bounds = Rectangle.{bounds.x + 6.0 * scale, bounds.y + title_y, bounds.width - 12.0 * scale, 36.0 * scale},
+            .font = cast(s32)(26.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+    Text(session, TextProps.{.key = cast(u64)(key + 3), .text = subtitle,
+            .bounds = Rectangle.{bounds.x + 6.0 * scale, bounds.y + 94.0 * scale, bounds.width - 12.0 * scale, 22.0 * scale},
+            .font = cast(s32)(13.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+    if badge != "" {
+        badge_width := cast(float32)TextWidth(session, TextProps.{.text = badge, .font = cast(s32)(12.0 * scale)}) + 16.0 * scale
+        if badge_width > bounds.width - 12.0 * scale { badge_width = bounds.width - 12.0 * scale }
+        badge_x := bounds.x + bounds.width - badge_width - 6.0 * scale
+        Box(session, BoxProps.{.key = cast(u64)(key + 4), .bounds = Rectangle.{badge_x, bounds.y - 9.0 * scale, badge_width, 22.0 * scale},
+                .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff), .border = accent, .radius = 11.0 * scale})
+        Text(session, TextProps.{.key = cast(u64)(key + 5), .text = badge,
+                .bounds = Rectangle.{badge_x, bounds.y - 7.0 * scale, badge_width, 18.0 * scale},
+                .font = cast(s32)(12.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+    }
+    return Button(session, ButtonProps.{.key = cast(u64)(key + 6), .id = key + 6, .label = price,
+            .bounds = Rectangle.{bounds.x + 10.0 * scale, bounds.y + bounds.height - 56.0 * scale, bounds.width - 20.0 * scale, 44.0 * scale},
+            .disabled = !enabled, .selected = chosen, .tone = ButtonTone.ButtonToneAccent,
+            .emphasis = ifx chosen then ButtonEmphasis.ButtonEmphasisFilled else ButtonEmphasis.ButtonEmphasisSoft}) != 0
+}
+
+// The bounds of card index in a grid that is two cards wide on phones and
+// three on wider screens.
+DewCardBounds :: (index: s32, x: float32, y: float32, width: float32) -> Rectangle {
+    columns: s32 = ifx width >= 520.0 * scale then 3 else 2
+    gap := 12.0 * scale
+    card := (width - gap * cast(float32)(columns - 1)) / cast(float32)columns
+    return Rectangle.{x + cast(float32)(index % columns) * (card + gap),
+        y + cast(float32)(index / columns) * (DEW_CARD_HEIGHT * scale + gap), card, DEW_CARD_HEIGHT * scale}
+}
+
+DewGridHeight :: (count: s32, width: float32) -> float32 {
+    columns: s32 = ifx width >= 520.0 * scale then 3 else 2
+    rows := (count + columns - 1) / columns
+    return cast(float32)rows * (DEW_CARD_HEIGHT * scale + 12.0 * scale) + 12.0 * scale
+}
+
 DrawDew :: () {
     session = AppSession()
     scale = AppScale()
     if scale <= 0.0 { scale = 1.0 }
     dew_view_tick += 1
-    if dew_view_tick % 15 == 1 || dew_refresh { unused CopyCString(AppService("entity.dew", ""), dew_view_json[:]) }
+    fresh := dew_view_tick % 15 == 1 || dew_refresh
+    if fresh { unused CopyCString(AppService("entity.dew", ""), dew_view_json[:]) }
+    if dew_refresh { dew_address_asked = false }
     json := TextUntilNul(dew_view_json[:])
     owner: [65]u8
     unused ReadStringText(json, FieldAt(json, 0, "owner"), owner[:])
@@ -1385,12 +1488,13 @@ DrawDew :: () {
     if dew_refresh && available && !busy { DewCommand("refresh", sequence); dew_refresh = false }
     area := AppBounds()
     Box(session, BoxProps.{.key = cast(u64)45000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)45001, .bounds = area, .content_height = cast(s32)(1180.0 * scale), .scroll_offset = management_scroll})
+    content := ifx dew_height > 0.0 then dew_height else 1180.0 * scale
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)45001, .bounds = area, .content_height = cast(s32)content, .scroll_offset = management_scroll})
     management_scroll = scroll.scroll_offset
     if !scroll.opened { return }
     defer { End(session) }
     y := scroll.content.y + 16.0 * scale
-    width := scroll.content.width - 48.0 * scale
+    width := scroll.content.width - 32.0 * scale
     if width > 600.0 * scale { width = 600.0 * scale }
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     if !state.host_navigation {
@@ -1399,46 +1503,49 @@ DrawDew :: () {
         TextLine(45003, "Dew", x, y, width, 28)
         y += 48.0 * scale
     }
-    if !available { Paragraph(45004, Label("entity.dew_connect", "Sign in to use Dew"), x, y, width, 70.0); return }
-    if busy { Paragraph(45005, Label("entity.working", "Working…"), x, y, width, 36.0); y += 42.0 * scale }
+    if !available {
+        Paragraph(45004, Label("entity.dew_connect", "Sign in to use Dew"), x, y, width, 70.0)
+        dew_height = y - scroll.content.y + 100.0 * scale
+        return
+    }
     account: DewAccount
     at := FieldAt(json, 0, "account")
     account_end := ValueEnd(json, at, 0)
     known := at >= 0 && account_end > at && DewParseAccount(json[at:account_end], TextUntilNul(owner[:]), *account)
-    balance_row := known && width >= 300.0 * scale
-    if known {
-        amount := DewDecimal(account.balance, DewUnits, "Dew")
-        TextLine(45006, amount, x, y, ifx balance_row then width - 128.0 * scale else width, 24)
-        if !balance_row { y += 48.0 * scale }
+
+    // The wallet: the balance in a pill, like a game's coin counter.
+    refresh_width := 112.0 * scale
+    pill_width := width - refresh_width - 12.0 * scale
+    Box(session, BoxProps.{.key = cast(u64)45060, .bounds = Rectangle.{x, y, pill_width, 52.0 * scale},
+            .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 26.0 * scale})
+    Box(session, BoxProps.{.key = cast(u64)45061, .bounds = Rectangle.{x + 8.0 * scale, y + 8.0 * scale, 36.0 * scale, 36.0 * scale},
+            .fill = ThemeOr("accent", 0x49a68eff, 0x298a71ff), .radius = 18.0 * scale})
+    SvgIcon(session, SvgIconProps.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
+            .bounds = Rectangle.{x + 16.0 * scale, y + 15.0 * scale, 20.0 * scale, 22.0 * scale}})
+    balance := ifx known then DewDecimal(account.balance, DewUnits, "Dew") else ifx busy then Label("entity.working", "Working…") else "… Dew"
+    TextLine(45006, balance, x + 54.0 * scale, y + 8.0 * scale, pill_width - 62.0 * scale, 22)
+    if !busy && Button(session, ButtonProps.{.key = cast(u64)45007, .id = 45007, .label = Label("entity.refresh", "Refresh"),
+            .bounds = Rectangle.{x + width - refresh_width, y + 4.0 * scale, refresh_width, 44.0 * scale},
+            .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
+        DewCommand("refresh", sequence)
+        dew_address_asked = false
     }
-    refresh_width := ifx balance_row then 112.0 * scale else width
-    if !busy && Action(45007, Label("entity.refresh", "Refresh"), Rectangle.{x + width - refresh_width, y, refresh_width, 44.0 * scale}) { DewCommand("refresh", sequence) }
-    y += 56.0 * scale
+    y += 68.0 * scale
+
     funding_allowed := !MatchLiteral(json, FieldAt(json, 0, "funding_allowed"), "false")
-    if funding_allowed {
-        if !busy && Action(45008, Label("entity.dew_fund", "Add Dew with Monero"), Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("address", sequence) }
-        y += 56.0 * scale
-    }
-    funding: DewFunding
-    at = FieldAt(json, 0, "funding")
-    funding_end := ValueEnd(json, at, 0)
-    if funding_allowed && at >= 0 && funding_end > at && DewParseFunding(json[at:funding_end], TextUntilNul(owner[:]), *funding) {
-        minimum := DewDecimal(funding.minimum, 1000000000000, "XMR")
-        explanation: Vec(u8)
-        BuilderPrint(*explanation, "%: % · %: %", Label("entity.dew_minimum", "Minimum"), minimum,
-            Label("entity.dew_confirmations", "Confirmations"), funding.confirmations)
-        Paragraph(45014, BuilderFinish(explanation), x, y, width, 64.0)
-        y += 72.0 * scale
-        DewFundingCode(TextUntilNul(funding.address[:]), x, *y, width)
-    }
-    // The Google Play edition sells Dew packs through Play, priced in the buyer's currency.
     play_at := FieldAt(json, 0, "play")
     play_end := ValueEnd(json, play_at, 0)
-    if play_at >= 0 && play_end > play_at && json[play_at] == #char "{" {
+    play_edition := play_at >= 0 && play_end > play_at && json[play_at] == #char "{"
+    if play_edition || funding_allowed {
+        TextLine(45050, Label("entity.dew_buy", "Buy Dew"), x, y, width, 22)
+        y += 44.0 * scale
+    }
+
+    // The Google Play edition sells Dew packs through Play, priced in the buyer's currency.
+    if play_edition {
         play := json[play_at:play_end]
-        TextLine(45050, Label("entity.dew_buy", "Buy Dew"), x, y, width, 20)
-        y += 40.0 * scale
         products := FieldAt(play, 0, "products")
+        best := DewPlayBest(play)
         shown: s32 = 0
         savings_shown := false
         for index: cast(s32)0..4 {
@@ -1450,19 +1557,29 @@ DrawDew :: () {
             id: [32]u8
             price: [64]u8
             if ReadStringText(product, FieldAt(product, 0, "id"), id[:]) <= 4 || ReadStringText(product, FieldAt(product, 0, "price"), price[:]) <= 0 { continue }
-            title: Vec(u8)
-            BuilderPrint(*title, "% Dew · %", TextUntilNul(id[:])[4:], TextUntilNul(price[:]))
+            size := DewPlayPackSize(TextUntilNul(id[:]))
+            if size <= 0 { continue }
+            badge := ""
             savings := DewPlaySavings(play, TextUntilNul(id[:]))
             if savings > 0 {
-                BuilderPrint(*title, " · −%", savings)
-                BuilderPrint(*title, "%%")
+                text: Vec(u8)
+                if TextUntilNul(id[:]) == best { BuilderPrint(*text, "% · ", Label("entity.dew_best_value", "Best value")) }
+                BuilderPrint(*text, "−%", savings)
+                BuilderPrint(*text, "%%")
+                badge = BuilderFinish(text)
                 savings_shown = true
             }
-            label := BuilderFinish(title)
-            if !busy && Action(45051 + index, label, Rectangle.{x, y, width, 44.0 * scale}) { DewCommand("play", sequence, TextUntilNul(id[:])) }
-            y += 56.0 * scale
+            digits: Vec(u8)
+            BuilderPrint(*digits, "%", size)
+            title := BuilderFinish(digits)
+            bounds := DewCardBounds(shown, x, y + 10.0 * scale, width)
+            if DewPackCard(45100 + shown * 30, title, "Dew", DewPackIndex(cast(s64)size) + 1, TextUntilNul(price[:]), badge,
+                bounds, false, !busy) {
+                DewCommand("play", sequence, TextUntilNul(id[:]))
+            }
             shown += 1
         }
+        if shown > 0 { y += DewGridHeight(shown, width) + 10.0 * scale }
         if savings_shown {
             Paragraph(45057, Label("profile_dew_play_comparison", "Savings per Dew compared with the 10 Dew pack."), x, y, width, 48.0)
             y += 56.0 * scale
@@ -1481,7 +1598,104 @@ DrawDew :: () {
             Paragraph(45056, message, x, y, width, 64.0)
             y += 72.0 * scale
         }
+    } else if funding_allowed {
+        funding: DewFunding
+        at = FieldAt(json, 0, "funding")
+        funding_end := ValueEnd(json, at, 0)
+        funded := at >= 0 && funding_end > at && DewParseFunding(json[at:funding_end], TextUntilNul(owner[:]), *funding)
+        // The rate comes with the account's address, so the shop asks for it once a visit.
+        if !funded && !dew_address_asked && fresh && known && !busy && !MatchLiteral(json, FieldAt(json, 0, "error"), "true") {
+            dew_address_asked = DewQueue("address", sequence)
+        }
+        for index: cast(s32)0..DewPackCount - 1 {
+            dew := DewPackSizes[index]
+            atomic := ifx funded then DewPackAtomic(dew, funding.atomic, funding.units) else cast(s64)-1
+            price := ifx atomic > 0 then DewDecimal(atomic, DewPiconero, "XMR") else "… XMR"
+            digits: Vec(u8)
+            BuilderPrint(*digits, "%", dew)
+            if DewPackCard(45100 + index * 30, BuilderFinish(digits), "Dew", index + 1, price, "",
+                DewCardBounds(index, x, y + 10.0 * scale, width), dew_choice == index,
+                atomic >= funding.minimum && atomic > 0) {
+                dew_choice = index
+                fields[6].focused = false
+            }
+        }
+        // Any whole amount, typed into the last card.
+        custom_bounds := DewCardBounds(DewPackCount, x, y + 10.0 * scale, width)
+        custom := DewPackTyped(TextUntilNul(dew_custom[:]))
+        custom_atomic := ifx funded && custom > 0 then DewPackAtomic(custom, funding.atomic, funding.units) else cast(s64)-1
+        custom_price := ifx custom_atomic > 0 then DewDecimal(custom_atomic, DewPiconero, "XMR") else Label("entity.dew_choose", "Choose")
+        if DewPackCard(45100 + DewPackCount * 30, Label("entity.dew_custom", "Custom"), "", 0, custom_price, "",
+            custom_bounds, dew_choice == DewPackCustom, custom_atomic >= funding.minimum && custom_atomic > 0) {
+            dew_choice = DewPackCustom
+        }
+        unused EditField(6, dew_custom[:], Label("entity.dew_amount", "Dew amount"),
+            Rectangle.{custom_bounds.x + 10.0 * scale, custom_bounds.y + 72.0 * scale, custom_bounds.width - 20.0 * scale, 44.0 * scale}, 7)
+        if fields[6].focused { dew_choice = DewPackCustom }
+        y += DewGridHeight(DewPackCount + 1, width) + 10.0 * scale
+
+        // The chosen pack's payment: the account's own Monero address with the amount filled in.
+        chosen := ifx dew_choice == DewPackCustom then custom else ifx dew_choice >= 0 && dew_choice < DewPackCount then DewPackSizes[dew_choice] else cast(s64)0
+        chosen_atomic := ifx funded && chosen > 0 then DewPackAtomic(chosen, funding.atomic, funding.units) else cast(s64)-1
+        if !funded {
+            failed := dew_address_asked && !busy && MatchLiteral(json, FieldAt(json, 0, "error"), "true")
+            Paragraph(45070, ifx failed then Label("entity.dew_rate_retry", "Could not load the Monero rate. Refresh to try again.")
+                else Label("entity.dew_loading_rate", "Loading the Monero rate…"), x, y, width, 48.0)
+            y += 56.0 * scale
+        } else if chosen_atomic <= 0 || chosen_atomic < funding.minimum {
+            minimum := DewDecimal(funding.minimum, DewPiconero, "XMR")
+            line: Vec(u8)
+            BuilderPrint(*line, "%: %", Label("entity.dew_minimum", "Minimum"), minimum)
+            Paragraph(45071, ifx chosen > 0 then BuilderFinish(line) else Label("entity.dew_type_amount", "Type how much Dew you want."), x, y, width, 48.0)
+            y += 56.0 * scale
+        } else {
+            panel_y := y
+            Box(session, BoxProps.{.key = cast(u64)45072, .bounds = Rectangle.{x, y, width, dew_panel_height},
+                    .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 14.0 * scale})
+            inner_x := x + 16.0 * scale
+            inner := width - 32.0 * scale
+            y += 16.0 * scale
+            amount := DewDecimal(chosen_atomic, DewPiconero, "XMR")
+            heading: Vec(u8)
+            BuilderPrint(*heading, "% Dew · %", chosen, amount)
+            TextLine(45073, BuilderFinish(heading), inner_x, y, inner, 20)
+            y += 36.0 * scale
+            Paragraph(45074, Label("entity.dew_send_monero", "Send this amount of Monero to your Dew address. Any Monero that arrives becomes Dew at the node's rate."), inner_x, y, inner, 48.0)
+            y += 56.0 * scale
+            uri: [256]u8
+            address := TextUntilNul(funding.address[:])
+            DewFundingCode(address, DewPackMoneroUri(address, chosen_atomic, uri[:]), inner_x, *y, inner)
+            explanation: Vec(u8)
+            BuilderPrint(*explanation, "%: % · %: %", Label("entity.dew_minimum", "Minimum"), DewDecimal(funding.minimum, DewPiconero, "XMR"),
+                Label("entity.dew_confirmations", "Confirmations"), funding.confirmations)
+            Paragraph(45014, BuilderFinish(explanation), inner_x, y, inner, 40.0)
+            y += 48.0 * scale
+            // Other coins go through dew.waozi.xyz, whose swap starts at 100 Dew.
+            least := DewOtherCoinMinimum(funding.atomic, funding.units)
+            if least > 0 && chosen >= least {
+                count: Vec(u8)
+                BuilderPrint(*count, "%", chosen)
+                label := DewFill(Label("entity.dew_other_coin", "Buy %1 Dew with another coin"), BuilderFinish(count))
+                if Button(session, ButtonProps.{.key = cast(u64)45075, .id = 45075, .label = label,
+                        .bounds = Rectangle.{inner_x, y, inner, 44.0 * scale}, .tone = ButtonTone.ButtonToneAccent,
+                        .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
+                    request: Vec(u8)
+                    BuilderPrint(*request, "open-topup:%", chosen)
+                    if AppService("entity.dew", BuilderFinish(request)) != "opened" { unused AppService("entity.dew", "open-topup") }
+                }
+                y += 56.0 * scale
+            } else if least > 0 {
+                line: Vec(u8)
+                BuilderPrint(*line, "%: % Dew", Label("entity.dew_other_coin_minimum", "Other coins from"), least)
+                Paragraph(45076, BuilderFinish(line), inner_x, y, inner, 40.0)
+                y += 48.0 * scale
+            }
+            y += 4.0 * scale
+            dew_panel_height = y - panel_y
+            y += 16.0 * scale
+        }
     }
+    AppKeyboard(fields[6].focused)
     if state.show_storage && MatchLiteral(json, FieldAt(json, 0, "pending"), "true") {
         Paragraph(45011, Label("entity.dew_pending", "A purchase is awaiting confirmation. Retry checks the same purchase."), x, y, width, 60.0)
         y += 68.0 * scale
@@ -1511,7 +1725,11 @@ DrawDew :: () {
             }
         }
     }
-    if MatchLiteral(json, FieldAt(json, 0, "error"), "true") { Paragraph(45040, Label("entity.dew_error", "Could not confirm the node's response. Refresh or retry."), x, y, width, 64.0) }
+    if MatchLiteral(json, FieldAt(json, 0, "error"), "true") {
+        Paragraph(45040, Label("entity.dew_error", "Could not confirm the node's response. Refresh or retry."), x, y, width, 64.0)
+        y += 72.0 * scale
+    }
+    dew_height = y - scroll.content.y + 32.0 * scale
 }
 
 OpenPicturePicker :: () {

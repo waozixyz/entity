@@ -2,6 +2,7 @@
 // account keys remain in this provider and never enter a game bundle.
 #import "account_store"
 #import "dew_native"
+#import "dew_packs"
 #import "dew_model"
 #import "recovery"
 #import "entity_records"
@@ -89,8 +90,11 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         }
         if service == "entity.dew" {
             request := AppArgumentText(arguments[1])
-            if request == "open-topup" {
-                result.* = EntityHostText(ifx EntityHostOpenTopUp() then "opened" else "rejected")
+            if request == "open-topup" || (request.count > 11 && request[:11] == "open-topup:") {
+                // "open-topup:500" names the Dew the shop chose.
+                dew := ifx request.count > 11 then DewPackTyped(request[11:]) else cast(s64)0
+                opened := (request.count == 10 || dew > 0) && EntityHostOpenTopUp(dew)
+                result.* = EntityHostText(ifx opened then "opened" else "rejected")
                 return 1
             }
             result.* = EntityHostText(ifx request == "" then DewSnapshot() else ifx DewEnqueue(request) then "queued" else "rejected")
@@ -328,7 +332,7 @@ EntityHostTopUpRequested :: () -> bool {
     return requested
 }
 
-EntityHostOpenTopUp :: () -> bool {
+EntityHostOpenTopUp :: (dew: s64 = 0) -> bool {
     if !DewReady() || !dew_funding_allowed { return false }
     base := ifx entity_topup_custom then TextUntilNul(entity_topup_url[:]) else ENTITY_TOPUP_URL
     if base == "" {
@@ -337,6 +341,7 @@ EntityHostOpenTopUp :: () -> bool {
     }
     link: Vec(u8)
     BuilderPrint(*link, "%?account=%", base, TextUntilNul(account_recovery.keys.public_id[:]))
+    if dew > 0 { BuilderPrint(*link, "&dew=%", dew) }
     text := BuilderFinish(link)
     defer { EntityFree(text) }
     return OpenUri(text)

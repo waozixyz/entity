@@ -1,0 +1,105 @@
+// The Dew shop's packs and their Monero prices. The node sets the rate and
+// credits whatever reaches the account's address; nothing here grants Dew.
+#import "std/c_string"
+#import "std/text_buffer"
+#import "dew_model"
+
+// The same sizes the Google Play edition sells as dew_10 … dew_5000.
+DewPackCount :: 5
+DewPackSizes: [5]s64 = .[10, 100, 500, 1000, 5000];
+DewPiconero :: 1000000000000
+// Trocador swaps no less than 0.01 XMR, and the owner sells no less than
+// 100 Dew through it.
+DewOtherCoinAtomic :: 10000000000
+DewOtherCoinDew :: 100
+// Seven digits keep every amount far from overflowing.
+DewPackMaximum :: 9999999
+DewPackS64 :: 9223372036854775807
+
+// 0, 1, 2 … for the packs, or -1 for a size the shop does not sell.
+DewPackIndex :: (dew: s64) -> s32 {
+    for index: cast(s32)0..DewPackCount - 1 {
+        if DewPackSizes[index] == dew { return index }
+    }
+    return -1
+}
+
+DewPackDivisor :: (first: s64, second: s64) -> s64 {
+    a := first
+    b := second
+    while b != 0 {
+        rest := a % b
+        a = b
+        b = rest
+    }
+    return a
+}
+
+// The piconero that buy whole Dew at the node's rate (atomic piconero buy
+// units token units), rounded up so the Dew is never short; -1 when the
+// amount or rate cannot be priced.
+DewPackAtomic :: (dew: s64, atomic: s64, units: s64) -> s64 {
+    if dew <= 0 || dew > DewPackMaximum || atomic <= 0 || units <= 0 { return -1 }
+    divisor := DewPackDivisor(atomic, units)
+    reduced_atomic := atomic / divisor
+    reduced_units := units / divisor
+    if reduced_atomic > DewPackS64 / DewUnits { return -1 }
+    per_dew := DewUnits * reduced_atomic
+    if dew > (DewPackS64 - reduced_units) / per_dew { return -1 }
+    return (dew * per_dew + reduced_units - 1) / reduced_units
+}
+
+// The fewest whole Dew that cost at least minimum piconero; -1 when unknown.
+DewPackAtLeast :: (minimum: s64, atomic: s64, units: s64) -> s64 {
+    if minimum <= 0 || atomic <= 0 || units <= 0 { return -1 }
+    divisor := DewPackDivisor(atomic, units)
+    reduced_atomic := atomic / divisor
+    reduced_units := units / divisor
+    if reduced_atomic > DewPackS64 / DewUnits || reduced_units > DewPackS64 / minimum { return -1 }
+    per_dew := DewUnits * reduced_atomic
+    return (minimum * reduced_units + per_dew - 1) / per_dew
+}
+
+// The least Dew "Buy N Dew with another coin" sells; -1 without a rate.
+DewOtherCoinMinimum :: (atomic: s64, units: s64) -> s64 {
+    least := DewPackAtLeast(DewOtherCoinAtomic, atomic, units)
+    if least < 0 { return -1 }
+    return ifx least > DewOtherCoinDew then least else DewOtherCoinDew
+}
+
+// Whole Dew typed into the custom amount; 0 when it holds none or too many.
+DewPackTyped :: (text: string) -> s64 {
+    if text.count == 0 || text.count > 7 { return 0 }
+    value: s64 = 0
+    for byte: text {
+        if byte < #char "0" || byte > #char "9" { return 0 }
+        value = value * 10 + cast(s64)(byte - #char "0")
+    }
+    return value
+}
+
+// The wallet link a Monero app opens with the address and amount filled in;
+// "" for an address that is not plain base58 or an output that is too small.
+DewPackMoneroUri :: (address: string, atomic: s64, output: []u8) -> string {
+    if address.count < 95 || address.count > 106 || output.count < 2 { return "" }
+    for byte: address {
+        digit := byte >= #char "0" && byte <= #char "9"
+        letter := (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "a" && byte <= #char "z")
+        if !digit && !letter { return "" }
+    }
+    amount: [48]u8
+    if atomic > 0 && !DewFormat(atomic, DewPiconero, amount[:]) { return "" }
+    at: s64 = 0
+    parts: [4]string = .["monero:", address, ifx atomic > 0 then "?tx_amount=" else "", ifx atomic > 0 then TextUntilNul(amount[:]) else ""]
+    for part: parts {
+        if at + part.count >= output.count { output[0] = cast(u8)0; return "" }
+        for byte: part { output[at] = byte; at += 1 }
+    }
+    if atomic > 0 {
+        tail := "&tx_description=Dew"
+        if at + tail.count >= output.count { output[0] = cast(u8)0; return "" }
+        for byte: tail { output[at] = byte; at += 1 }
+    }
+    output[at] = cast(u8)0
+    return TextUntilNul(output)
+}
