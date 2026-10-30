@@ -34,11 +34,13 @@ def hash_file(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def link_flags(*paths):
+def link_flags(*paths, ordinary_imports=False):
     flags = []
     for path in paths:
         for line in path.read_text().splitlines():
             kind, value = line.split('\t', 1)
+            if ordinary_imports and kind == 'archive' and value == 'libentity.a':
+                continue
             if kind == 'pkg-config':
                 flags += run(['pkg-config', '--libs', *value.split()]).split()
             elif kind == 'archive':
@@ -84,7 +86,7 @@ def consume(app, profile, crypto):
 def main():
     run(['git', 'check-ignore', 'work/recipe-provider/probe'])
     WORK.mkdir(parents=True, exist_ok=True)
-    compiler = Path(run([ZIRAN, 'pkg', 'path', 'ziran']))
+    compiler = None
     # These are synthetic consumer manifests, never source copies/checkouts.
     dirty = argparse.ArgumentParser()
     dirty.add_argument('--dirty', action='store_true', help='assert dirty graph isolation before commit; default requires clean reuse')
@@ -99,7 +101,10 @@ def main():
             '[toolchain]\ngit="https://github.com/ziranlang/ziran.git"\nref="' + tool_ref + '"\n'
             '[dependencies.entity]\ngit="https://github.com/waozixyz/entity.git"\nref="master"\n')
         (app / 'ziran.local.toml').write_text(f'[overrides]\nentity="{ROOT}"\n')
-        run([compiler / 'build/bin/ziran', 'lock'], app)
+        run(['ziran', 'lock'], app)
+        selected = Path(run(['ziran', 'pkg', 'path', 'ziran'], app))
+        assert compiler is None or compiler == selected
+        compiler = selected
         apps.append(app)
     def build(app, recipe='native-profile', target='linux-x86_64-gnu', ok=True):
         return run([compiler / 'build/bin/ziran', 'pkg', 'artifact', 'entity:' + recipe,
@@ -120,7 +125,7 @@ def main():
     (apps[1] / 'ziran.toml').write_text((apps[1] / 'ziran.toml').read_text() + '[tool.entity]\nedition="fdroid"\n')
     different = descriptor(build(apps[1]))
     assert different != first
-    build(apps[0], target='windows-x86_64-mingw', ok=False)
+    build(apps[0], target='freebsd-x86_64-gnu', ok=False)
     assert descriptor(first) == first
     (apps[1] / 'ziran.toml').write_text((apps[1] / 'ziran.toml').read_text().replace('fdroid', 'invalid'))
     build(apps[1], ok=False)

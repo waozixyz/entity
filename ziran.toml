@@ -67,12 +67,23 @@ project = "build/bin/artifacts"
 [options]
 edition = "string=direct"
 ndk = "string"
+android_api = "string=24"
 
 [artifacts.native-crypto]
 inputs = ["tools/artifacts.zi", "Makefile", "ziran.toml", "ziran.lock"]
-outputs = ["libmonocypher.a", "liboqs.a", "libziran.a", "link.txt"]
+outputs = ["libmonocypher.a", "liboqs.a", "libziran.a", "libplatform.a", "link.txt"]
 
 [artifacts.native-profile]
 inputs = ["tools/artifacts.zi", "Makefile", "ziran.toml", "ziran.lock", "assets/entity/abstract-amber.png", "assets/entity/abstract-jade.png", "assets/entity/abstract-violet.png", "assets/entity/flowers.png", "assets/entity/pfp.png", "assets/entity/wurm-base.png", "assets/entity/wurm-reward-skins.png", "assets/entity/wurm-skins.png", "assets/entity/wurm-special-skins.png", "src/account_store.zi", "src/achievement_toast.zi", "src/achievement_view.zi", "src/alias_model.zi", "src/alias_view.zi", "src/browser_host.zi", "src/collection_client.zi", "src/desktop.zi", "src/dew_model.zi", "src/dew_native.zi", "src/dew_packs.zi", "src/dew_play.zi", "src/dew_play_pricing.zi", "src/dew_view.zi", "src/entity.zi", "src/entity_dew.zi", "src/entity_records.zi", "src/friends_model.zi", "src/friends_native.zi", "src/friends_page.zi", "src/game_completion.zi", "src/game_progress.zi", "src/game_progress_client.zi", "src/game_progress_id.zi", "src/game_progress_laws.zi", "src/game_progress_rules.zi", "src/game_shop.zi", "src/game_shop_native.zi", "src/leaderboard_model.zi", "src/leaderboard_native.zi", "src/leaderboard_view.zi", "src/level_collections.zi", "src/management.zi", "src/model.zi", "src/native_files.zi", "src/native_host.zi", "src/native_management.zi", "src/node_url.zi", "src/pairing.zi", "src/pairing_client.zi", "src/picture_image.zi", "src/picture_publish.zi", "src/profile_appearance.zi", "src/profile_theme.zi", "src/profile_web.zi", "src/publications.zi", "src/publications_read.zi", "src/recovery.zi", "src/reward_migration.zi", "src/telegram_connection.zi", "src/telegram_view.zi"]
 outputs = ["libentity.a", "headers.tar", "entity.zx", "link.txt", "font.ttf", "ziran_web.js"]
 requires = ["self:native-crypto"]
+
+[dependencies.curl]
+git = "https://github.com/curl/curl.git"
+ref = "19b299005fbe2d895f4ad525cfdae62a2220c3ea"
+source = true
+
+[dependencies.zlib]
+git = "https://github.com/madler/zlib.git"
+ref = "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"
+source = true

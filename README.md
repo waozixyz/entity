@@ -419,7 +419,11 @@ Entity's picture assets. Hosts retain the current bundle lifecycle, private
 account directory, service adapters and account isolation described above.
 
 `native-crypto` supplies `libmonocypher.a`, `liboqs.a` (ML-DSA-44 only),
-`libziran.a` and `link.txt`. Link the host archive before those support archives.
+`libziran.a`, `libplatform.a` and `link.txt`. Link the host archive before those support archives.
+The platform archive contains Windows Schannel curl and zlib objects. It is a
+valid empty archive on targets that use system libraries or host capabilities.
+Windows transport retains curl with Schannel, without OpenSSL, SSH, LDAP/LDAPS
+or SMB, and uses the same platform trust/security behavior as the existing host.
 `link.txt` is TSV: `archive` rows give descriptor-relative archives in link
 order, `pkg-config` rows name packages to query, and `library` and `flag`
 rows supply individual linker arguments. Read these rows for the Profile, then
@@ -427,21 +431,36 @@ its dependency descriptors; consumers keep no crypto archive or source lists. Br
 name descriptor-relative support files and virtual asset destinations.
 These are compiler-version-specific C ABI artifacts, not a stable binary SDK.
 No application main, account keys or app-specific collection is packaged.
+An ordinary Ziran program importing Entity already owns its generated graph:
+link `native-crypto` and the Profile system/resource rows, omitting the Profile
+`libentity.a` archive. A foreign C host links `libentity.a` once, then support
+archives in the declared order. Do not combine both generated graphs.
 
 Consumer variation belongs in the package options, for example:
 
 ```toml
 [tool.entity]
 edition = "fdroid" # direct (default), fdroid, play
+# Android only; retain the app’s actual minimum API:
+# ndk = "/absolute/android-ndk"
+# android_api = "21" # default "24"; also supports "23"
 ```
 
 The native target is independent of `--target=c`, the language backend. Cross
 builds require an absolute `CC` executable and matching `AR` (or the sibling
 `emar`/`llvm-ar`). Supported cross targets are
-`emscripten-wasm32-emscripten`, `android-aarch64-bionic` and
-`android-armv7-bionic`. Android requires API 24 compiler drivers and a keyed
-`ndk` option pointing at the NDK root. Unsupported targets, mismatched compiler
-ABIs and unknown editions fail before compiling. These recipes produce support
+`emscripten-wasm32-emscripten`, `windows-x86_64-mingw`,
+`android-aarch64-bionic` and `android-armv7-bionic`. Windows uses an absolute
+`x86_64-w64-mingw32-gcc` driver and its matching `ar`, `windres`, `ranlib` and
+`objcopy` siblings. Entity builds its locked curl/zlib sources; consumers need
+no curl source paths, archive inventory or extra target zlib installation.
+Android takes a keyed absolute `ndk` root and `android_api` string: `"21"`,
+`"23"` or `"24"` (default). Select the matching NDK compiler driver and sibling
+`llvm-ar`, for example `aarch64-linux-android21-clang` with `android_api="21"`.
+The API option is inherited by the crypto prerequisite and changes artifact
+identity. It does not raise an application’s minimum SDK. Unsupported targets,
+API values, mismatched compiler/archive drivers and unknown editions fail
+before artifact compilation. These recipes produce support
 archives and assets; packaging an APK or a web application remains the host's job.
 
 The driver keys the resolved dependency graph, explicit recipe files, compiler,
@@ -452,3 +471,10 @@ C consumers without accounts or a display. For development,
 `python3 tests/native_artifacts.py --dirty` explicitly tests isolation instead;
 it does not certify clean reuse. Later game migrations consume these outputs;
 this change does not alter any game's build or account policy.
+
+The focused cross fixture `tests/native_artifacts_cross.py TARGET` accepts
+`--ndk`, `--android-api`, `--edition` and explicit `--dirty` isolation mode. It
+validates descriptor hashes and actual C-host compile/link output. Windows also
+links an ordinary Ziran import graph against descriptor-only support metadata,
+retaining curl and checking platform archive member uniqueness. Cross binaries
+are never executed; compile/link success does not establish runtime behavior.

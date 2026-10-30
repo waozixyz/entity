@@ -18,6 +18,9 @@ edition: string;
 platform: string;
 web: bool;
 android: bool;
+windows: bool;
+android_api: string;
+mingw: string;
 ndk: string;
 abi: string;
 graph: *PkgLock;
@@ -61,6 +64,12 @@ Option :: (name: string, fallback: string) -> string {
     for lines { if TextHasPrefix(it, PkgJoin(name, "=")) { return PkgJoin(it[name.count + 1:it.count], "") } }
     return fallback
 }
+Executable :: (name: string) -> string {
+    locate: [2]string = .["which", name]
+    located := PkgCapture(locate[:], project)
+    if located.code != 0 || !TextHasPrefix(located.text, "/") { return "" }
+    return PkgJoin(PkgTrim(located.text), "")
+}
 Walk :: (folder: string, suffix: string, files: *Vec(string)) {
     names: Vec(string)
     if !ListDirectory(folder, *names) { return }
@@ -83,27 +92,75 @@ Archive :: (generated: string, output: string, include: string = "") -> bool {
 }
 SystemLinkText :: (profile: bool) -> string {
     if web { return ifx profile then "js-library\tziran_web.js\nembed\tentity.zx@/entity.zx\nembed\tfont.ttf@/kryon-font.ttf\n" else "flag\t-sUSE_ZLIB=1\nflag\t-sASYNCIFY\nflag\t-sALLOW_MEMORY_GROWTH=1\nflag\t-sFORCE_FILESYSTEM=1\nflag\t-lidbfs.js\n" }
+    if windows { return ifx profile then "library\t-luser32\nlibrary\t-lshell32\nlibrary\t-lole32\nlibrary\t-lcomdlg32\n" else "library\t-lws2_32\nlibrary\t-liphlpapi\nlibrary\t-lcrypt32\nlibrary\t-lsecur32\nlibrary\t-lbcrypt\nlibrary\t-ladvapi32\nlibrary\t-lm\n" }
     if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\n" }
     return ifx profile then "pkg-config\tsdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0\nlibrary\t-lX11\n" else "library\t-l:libcurl.so.4\nlibrary\t-lm\nlibrary\t-lpthread\nlibrary\t-lz\nlibrary\t-ldl\n"
 }
 // Consumers append these rows in descriptor dependency order; all native
 // archive choices and ordering stay here, including cryptography libraries.
 LinkText :: (profile: bool) -> string {
-    archives := ifx profile then "archive\tlibentity.a\n" else "archive\tlibmonocypher.a\narchive\tliboqs.a\narchive\tlibziran.a\n"
+    archives := ifx profile then "archive\tlibentity.a\n" else "archive\tlibmonocypher.a\narchive\tliboqs.a\narchive\tlibziran.a\narchive\tlibplatform.a\n"
     return PkgJoin(archives, SystemLinkText(profile))
+}
+// Isolate CMake cross discovery: never accept a host TLS or compression library.
+Configure :: (source: string, build: string, options: []string) -> bool {
+    args: Vec(string)
+    initial: [8]string = .["cmake", "-S", source, "-B", build, "-DBUILD_SHARED_LIBS=OFF", Flag("-DCMAKE_C_COMPILER=", cc), Flag("-DCMAKE_AR=", ar)]
+    for initial { VecPush(args, it) }
+    if windows {
+        VecPush(args, "-DCMAKE_SYSTEM_NAME=Windows")
+        VecPush(args, "-DCMAKE_SYSTEM_PROCESSOR=x86_64")
+        VecPush(args, Flag("-DCMAKE_RC_COMPILER=", PkgJoin(mingw, "windres")))
+        VecPush(args, Flag("-DCMAKE_RANLIB=", PkgJoin(mingw, "ranlib")))
+        VecPush(args, "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER")
+        VecPush(args, "-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY")
+        VecPush(args, "-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY")
+        VecPush(args, "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY")
+    } else if android {
+        VecPush(args, Flag("-DCMAKE_TOOLCHAIN_FILE=", JoinPath(ndk, "build/cmake/android.toolchain.cmake")))
+        VecPush(args, Flag("-DANDROID_ABI=", abi))
+        VecPush(args, Flag("-DANDROID_PLATFORM=android-", android_api))
+    } else if web { VecPush(args, Flag("-DCMAKE_TOOLCHAIN_FILE=", JoinPath(PathParent(cc), "cmake/Modules/Platform/Emscripten.cmake"))) }
+    for options { VecPush(args, it) }
+    return PkgRunToStderr(VecSlice(args, 0, args.count), project) == 0
+}
+// Windows needs Schannel curl and zlib. The platform archive is valid and empty
+// on other targets, whose transport/compression are system or host capabilities.
+PlatformSupport :: () -> bool {
+    if !windows { return Step(ar, "rcs", Out("libplatform.a")) }
+    zlib := Package("zlib"); curl := Package("curl")
+    if zlib.count == 0 || curl.count == 0 { return false }
+    // Build the locked unmodified source out of tree; upstream zlib's CMake
+    // renames its source zconf.h, so do not run that mutating configure step.
+    sources: [15]string = .["adler32.c", "crc32.c", "deflate.c", "infback.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c", "zutil.c", "compress.c", "uncompr.c", "gzclose.c", "gzlib.c", "gzread.c", "gzwrite.c"]
+    for sources {
+        object := Out(PkgJoin(it, ".o"))
+        if !Step(cc, "-O2", "-ffunction-sections", "-fdata-sections", Flag("-I", zlib), "-c", JoinPath(zlib, it), "-o", object) || !Step(ar, "rcs", Out("libz.a"), object) || !RemoveFile(object) { return false }
+    }
+    options: [26]string = .["-DCMAKE_BUILD_TYPE=Release", "-DBUILD_STATIC_LIBS=ON", "-DBUILD_CURL_EXE=OFF", "-DCURL_STATICLIB=ON", "-DCURL_USE_SCHANNEL=ON", "-DCURL_USE_OPENSSL=OFF", "-DCURL_USE_LIBPSL=OFF", "-DCURL_USE_LIBSSH2=OFF", "-DCURL_USE_GSSAPI=OFF", "-DUSE_NGHTTP2=OFF", "-DUSE_LIBIDN2=OFF", "-DCURL_ZSTD=OFF", "-DCURL_BROTLI=OFF", "-DCURL_DISABLE_LDAP=ON", "-DCURL_DISABLE_LDAPS=ON", "-DCURL_DISABLE_SMB=ON", "-DENABLE_CURL_MANUAL=OFF", "-DBUILD_EXAMPLES=OFF", "-DBUILD_LIBCURL_DOCS=OFF", "-DBUILD_MISC_DOCS=OFF", "-DBUILD_TESTING=OFF", "-DCURL_USE_LIBSSH=OFF", "-DUSE_NGTCP2=OFF", "-DCURL_ZLIB=ON", Flag("-DZLIB_LIBRARY=", Out("libz.a")), Flag("-DZLIB_INCLUDE_DIR=", zlib)]
+    build := Out("curl")
+    if !Configure(curl, build, options[:]) || !Step("cmake", "--build", build, "--target", "libcurl_static", "-j1") { return false }
+    mri := PkgJoin("CREATE ", Out("libplatform.a"))
+    mri = PkgJoin(mri, PkgJoin("\nADDLIB ", JoinPath(build, "lib/libcurl.a")))
+    mri = PkgJoin(mri, PkgJoin("\nADDLIB ", Out("libz.a")))
+    if !PkgWrite(Out("platform.mri"), PkgJoin(mri, "\nSAVE\nEND\n")) { return false }
+    // Static shell text; tool/path values are positional argv, never code.
+    if !Step("sh", "-c", "exec \"$1\" -D -M < \"$2\"", "entity-archive", ar, Out("platform.mri")) { return false }
+    return RemoveFile(Out("platform.mri")) && RemoveFile(Out("libz.a"))
 }
 Crypto :: () -> bool {
     oqs := Package("liboqs"); mono := Package("monocypher")
     if oqs.count == 0 || mono.count == 0 { return false }
     build := Out("oqs")
-    toolchain := ifx web then JoinPath(PathParent(cc), "cmake/Modules/Platform/Emscripten.cmake") else ifx android then JoinPath(ndk, "build/cmake/android.toolchain.cmake") else ""
-    if !Step("cmake", "-S", oqs, "-B", build, "-DCMAKE_BUILD_TYPE=MinSizeRel", "-DBUILD_SHARED_LIBS=OFF", "-DOQS_BUILD_ONLY_LIB=ON", "-DOQS_USE_OPENSSL=OFF", "-DOQS_DIST_BUILD=OFF", "-DOQS_OPT_TARGET=generic", "-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44", Flag("-DCMAKE_C_COMPILER=", cc), "-DCMAKE_POSITION_INDEPENDENT_CODE=ON", ifx toolchain.count > 0 then Flag("-DCMAKE_TOOLCHAIN_FILE=", toolchain) else "", ifx android then Flag("-DANDROID_ABI=", abi) else "", ifx android then "-DANDROID_PLATFORM=android-24" else "") { return false }
+    options: [7]string = .["-DCMAKE_BUILD_TYPE=MinSizeRel", "-DOQS_BUILD_ONLY_LIB=ON", "-DOQS_USE_OPENSSL=OFF", "-DOQS_DIST_BUILD=OFF", "-DOQS_OPT_TARGET=generic", "-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"]
+    if !Configure(oqs, build, options[:]) { return false }
     if !Step("cmake", "--build", build, "--target", "oqs", "-j1") || !CopyFile(JoinPath(build, "lib/liboqs.a"), Out("liboqs.a")) { return false }
     generated := Out("mono")
     if !CreateDirectories(generated) || !CopyFile(JoinPath(mono, "src/monocypher.c"), JoinPath(generated, "monocypher.c")) || !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.c"), JoinPath(generated, "ed25519.c")) { return false }
     if !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.h"), JoinPath(generated, "monocypher-ed25519.h")) || !Archive(generated, Out("libmonocypher.a"), Flag("-I", JoinPath(mono, "src"))) { return false }
+    if !PlatformSupport() { return false }
     runtime := Out("runtime")
-    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "BOOTSTRAP=1", Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
+    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "BOOTSTRAP=1", Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
     return CopyFile(JoinPath(runtime, "libziran.a"), Out("libziran.a")) && PkgWrite(Out("link.txt"), LinkText(false))
 }
 Profile :: () -> bool {
@@ -118,6 +175,7 @@ Profile :: () -> bool {
     native: Vec(string)
     start: [10]string = .["env", "-u", "ZIRAN_PACKAGE_MAP", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2c"), "--root", root, "--define", ifx web then "PLATFORM_WEB" else ifx android then "PLATFORM_ANDROID" else "PLATFORM_DESKTOP", "--define", define]
     for start { VecPush(native, it) }
+    if windows { VecPush(native, "--define"); VecPush(native, "_WIN32"); VecPush(native, "--define"); VecPush(native, "__x86_64__") }
     kryon_root := Package("kryon"); daochi := Package("daochi_client")
     modules: [11]string = .[JoinPath(root, "src"), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "std"), Flag("kryon=", JoinPath(kryon_root, "src/backend")), JoinPath(kryon_root, "src/backend"), Flag("kryon=", JoinPath(kryon_root, "src/ui")), JoinPath(kryon_root, "src/ui"), Flag("daochi_client=", daochi), daochi, Flag("crypto=", JoinPath(Package("crypto"), "src")), Flag("oqs=", JoinPath(Package("oqs"), "src")), Flag("qrcode=", JoinPath(Package("qrcode"), "src"))]
     for modules { VecPush(native, "--module-path"); VecPush(native, it) }
@@ -147,10 +205,11 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if argc != 7 || TextFromCString(argv[1]) != "artifact" || TextFromCString(argv[3]) != "--platform" || TextFromCString(argv[5]) != "--output" { return PkgFail("expected artifact NAME --platform OS-ARCH-ABI --output STAGE") }
     target := TextFromCString(argv[4])
     web = target == "emscripten-wasm32-emscripten"
+    windows = target == "windows-x86_64-mingw"
     android = target == "android-aarch64-bionic" || target == "android-armv7-bionic"
     platform = target
     abi = ifx target == "android-aarch64-bionic" then "arm64-v8a" else "armeabi-v7a"
-    if target != "linux-x86_64-gnu" && !web && !android { return PkgFail("unsupported Entity native platform") }
+    if target != "linux-x86_64-gnu" && !web && !android && !windows { return PkgFail("unsupported Entity native platform") }
     root = PkgGetenv("ZIRAN_PACKAGE_ROOT"); project = PkgGetenv("ZIRAN_PROJECT_ROOT"); if project.count == 0 { project = root }; stage = TextFromCString(argv[6])
     compiler = JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/ziran")
     graph = PkgNewLock()
@@ -159,20 +218,31 @@ main :: (argc: s32, argv: **u8) -> s32 {
     provider = PkgFindById(graph, PkgGetenv("ZIRAN_PACKAGE_ID"))
     if provider < 0 { return PkgFail("provider is absent from the resolved consumer package graph") }
     cc = PkgGetenv("CC"); if cc.count == 0 { cc = "cc" }
-    ar = PkgGetenv("AR"); if ar.count == 0 { ar = ifx web then JoinPath(PathParent(cc), "emar") else ifx android then JoinPath(PathParent(cc), "llvm-ar") else "ar" }
+    if (web || android || windows) && !TextHasPrefix(cc, "/") { return PkgFail("cross builds require an absolute CC toolchain executable") }
+    if windows && !TextHasSuffix(cc, "x86_64-w64-mingw32-gcc") { return PkgFail("Windows requires the absolute x86_64-w64-mingw32-gcc driver") }
+    ar = PkgGetenv("AR"); if ar.count == 0 { ar = ifx web then JoinPath(PathParent(cc), "emar") else ifx android then JoinPath(PathParent(cc), "llvm-ar") else ifx windows then PkgJoin(cc[0:cc.count - 3], "ar") else "ar" }
+    ar = Executable(ar)
+    if ar.count == 0 { return PkgFail("AR must resolve to an absolute archive driver") }
     ndk = Option("ndk", "")
-    if android && ndk.count == 0 { return PkgFail("Android requires the keyed ndk package option and CC for API 24") }
-    if (web || android) && !TextHasPrefix(cc, "/") { return PkgFail("cross builds require an absolute CC toolchain executable") }
+    android_api = Option("android_api", "24")
+    if android_api != "21" && android_api != "23" && android_api != "24" { return PkgFail("android_api must be 21, 23 or 24") }
+    if windows {
+        mingw = cc[0:cc.count - 3]
+        if ar != PkgJoin(mingw, "ar") { return PkgFail("AR must match the Windows CC toolchain") }
+    }
+    if android && !TextHasPrefix(ndk, "/") { return PkgFail("Android requires the keyed absolute ndk option and CC matching android_api") }
+    if android && !TextHasPrefix(cc, JoinPath(ndk, "toolchains/llvm/prebuilt/")) { return PkgFail("CC must belong to the keyed Android ndk") }
+    if android && ar != JoinPath(PathParent(cc), "llvm-ar") { return PkgFail("AR must match the Android CC toolchain") }
     edition = Option("edition", "direct")
     if edition != "direct" && edition != "fdroid" && edition != "play" { return PkgFail("edition must be direct, fdroid or play") }
     args: [2]string = .[cc, "-dumpmachine"]
     machine := PkgCapture(args[:], project)
-    expected := ifx web then "wasm32-unknown-emscripten" else ifx android then ifx abi == "arm64-v8a" then "aarch64-unknown-linux-android24" else "armv7a-unknown-linux-android24" else "x86_64-linux-gnu"
-    if machine.code != 0 || (PkgTrim(machine.text) != expected && (web || android || !TextHasPrefix(machine.text, "x86_64-") || TextFind(machine.text, "linux-gnu") < 0)) { return PkgFail("CC target does not match the requested native ABI (Android requires API 24)") }
+    expected := ifx web then "wasm32-unknown-emscripten" else ifx android then ifx abi == "arm64-v8a" then PkgJoin("aarch64-unknown-linux-android", android_api) else PkgJoin("armv7a-unknown-linux-android", android_api) else ifx windows then "x86_64-w64-mingw32" else "x86_64-linux-gnu"
+    if machine.code != 0 || (PkgTrim(machine.text) != expected && (web || android || windows || !TextHasPrefix(machine.text, "x86_64-") || TextFind(machine.text, "linux-gnu") < 0)) { return PkgFail("CC target does not match the requested native ABI/android_api") }
     name := TextFromCString(argv[2])
     ok := ifx name == "native-crypto" then Crypto() else ifx name == "native-profile" then Profile() else false
     if ok {
-        folders: [4]string = .["oqs", "mono", "runtime", "generated"]
+        folders: [5]string = .["oqs", "mono", "runtime", "generated", "curl"]
         for folders { unused RemoveTree(Out(it)) }
     }
     return ifx ok then 0 else PkgFail("Entity artifact recipe failed")
