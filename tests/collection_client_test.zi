@@ -1,0 +1,264 @@
+#import, file "../src/collection_client.zi";
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+
+Fake :: struct {
+    owner: string
+    reply: string
+    calls: s32
+    mutations: s32
+    last_request: [256]u8
+    wrong_service: bool
+    switch_owner: bool
+    reset: *CollectionClient
+    reuse_scratch: bool
+}
+
+// Both callbacks borrow host-owned scratch, shared across adapter instances.
+owner_reply: [129]u8;
+service_reply: [COLLECTION_CLIENT_REPLY_MAX + 2]u8;
+Owner :: (context: *void) -> string {
+    if (cast(*Fake)context).reuse_scratch {
+        unused CopyCString((cast(*Fake)context).owner, service_reply[:])
+        return TextUntilNul(service_reply[:])
+    }
+    unused CopyCString((cast(*Fake)context).owner, owner_reply[:])
+    return TextUntilNul(owner_reply[:])
+}
+
+Service :: (context: *void, service: string, request: string) -> string {
+    fake := cast(*Fake)context
+    fake.calls += 1
+    if service != "publications" { fake.wrong_service = true }
+    unused CopyCString(request, fake.last_request[:])
+    if request == "{\"operation\":\"find\"}" { fake.mutations += 1 }
+    if fake.switch_owner { fake.owner = "bob" }
+    if fake.reset != null { CollectionClientReset(fake.reset) }
+    unused CopyCString(fake.reply, service_reply[:])
+    return TextUntilNul(service_reply[:])
+}
+
+Configure :: (client: *CollectionClient, fake: *Fake) {
+    client.context = cast(*void)fake
+    client.service = Service
+    client.owner = Owner
+    fake.owner = "alice"
+    fake.reply = "{\"status\":\"pending\",\"request\":37}"
+}
+
+Expect :: (failures: *s32, label: string, value: bool) {
+    if !value { failures.* += 1; print("FAIL %\n", label) }
+}
+
+ReplyText :: (client: *CollectionClient) -> string {
+    out: Vec(u8)
+    CollectionClientReadReply(client, *out)
+    return BuilderFinish(out)
+}
+
+Find :: "{\"operation\":\"find\"}"
+Found :: "{\"status\":\"done\",\"publications\":[]}"
+
+#program_export
+main :: () -> s32 {
+    failures: s32
+    fake: Fake
+    client: CollectionClient
+    Configure(*client, *fake)
+    result := CollectionClientStart(*client, .Find, Find)
+    Expect(*failures, "queued without service call", result.state == .Pending && fake.calls == 0)
+    result = CollectionClientStart(*client, .Fetch, "{\"operation\":\"fetch\",\"id\":\"x\"}")
+    Expect(*failures, "busy preserves original", result.error == .Busy && client.result.operation == .Find && fake.calls == 0)
+    result = CollectionClientPump(*client, 100)
+    Expect(*failures, "pending retains exact provider number", result.state == .Pending && result.request == 37 && fake.mutations == 1)
+    result = CollectionClientStart(*client, .Find, Find)
+    Expect(*failures, "busy never resends mutation", result.error == .Busy && fake.calls == 1)
+    unused CollectionClientPump(*client, 1099)
+    Expect(*failures, "poll delay", fake.calls == 1)
+    fake.reply = "{\"status\":\"pending\"}"
+    result = CollectionClientPump(*client, 1100)
+    Expect(*failures, "poll only exact status request", TextUntilNul(fake.last_request[:]) == "{\"operation\":\"status\",\"request\":37}" && result.request == 37)
+    fake.reply = Found
+    result = CollectionClientPump(*client, 2100)
+    Expect(*failures, "completion", result.state == .Done && result.error == .None && result.operation == .Find)
+    fake.reply = "overwritten host buffer"
+    Expect(*failures, "retains owned completion", ReplyText(*client) == Found)
+    unused CollectionClientPump(*client, 9000)
+    Expect(*failures, "terminal result never resends", fake.calls == 3 && fake.mutations == 1 && !fake.wrong_service)
+    fake.owner = "bob"
+    result = CollectionClientPump(*client, 9001)
+    Expect(*failures, "completed reply cannot cross owners", result.state == .Cancelled && result.error == .OwnerChanged && ReplyText(*client) == "")
+
+    // Independent clients do not share an owner, request, deadline or reply.
+    other: CollectionClient
+    other_fake: Fake
+    Configure(*other, *other_fake)
+    unused CollectionClientStart(*client, .Find, Find)
+    unused CollectionClientStart(*other, .Find, Find)
+    fake.reply = "{\"status\":\"pending\",\"request\":91}"
+    other_fake.reply = "{\"status\":\"pending\",\"request\":17}"
+    unused CollectionClientPump(*client, 0)
+    unused CollectionClientPump(*other, 0)
+    Expect(*failures, "independent request numbers", client.result.request == 91 && other.result.request == 17)
+    other_fake.owner = "carol"
+    result = CollectionClientPump(*other, 1000)
+    Expect(*failures, "owner switch before poll", result.state == .Cancelled && other_fake.calls == 1 && client.result.state == .Pending)
+    CollectionClientCancel(*client)
+    Expect(*failures, "explicit cancel", client.result.state == .Cancelled && ReplyText(*client) == "")
+    unused CollectionClientPump(*client, 100000)
+    Expect(*failures, "cancel stops polling", fake.calls == 4)
+
+    // A changed owner or explicit reset during the service callback discards
+    // its late reply, including when that reply otherwise looks successful.
+    fake.reply = Found
+    unused CollectionClientStart(*client, .Find, Find)
+    fake.owner = "alice"
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "owner switch after queue before send", result.error == .OwnerChanged && fake.calls == 4)
+    unused CollectionClientStart(*client, .Find, Find)
+    fake.switch_owner = true
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "owner switch during call", result.error == .OwnerChanged && ReplyText(*client) == "")
+    fake.switch_owner = false
+    unused CollectionClientStart(*client, .Find, Find)
+    fake.reset = *client
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "late reply after reset ignored", result.state == .Cancelled && client.result.state == .Idle && ReplyText(*client) == "")
+    fake.reset = null
+
+    // Pending responses repeat only status, including after transient waiting.
+    fake.reply = "{\"status\":\"pending\",\"request\":0}"
+    client.poll_delay = 25
+    unused CollectionClientStart(*client, .Find, Find)
+    unused CollectionClientPump(*client, 0)
+    fake.reply = "{\"status\":\"pending\",\"request\":0}"
+    unused CollectionClientPump(*client, 25)
+    unused CollectionClientPump(*client, 50)
+    Expect(*failures, "zero provider ID and repeated polls", client.result.request == 0 && TextUntilNul(fake.last_request[:]) == "{\"operation\":\"status\",\"request\":0}")
+    fake.reply = "{\"status\":\"done\",\"request\":37,\"publications\":[]}"
+    result = CollectionClientPump(*client, 75)
+    Expect(*failures, "late different request rejected", result.error == .Malformed && ReplyText(*client) == "")
+
+    malformed: [15]string = .[
+    "", "{\"status\":\"pending\"}", "{\"status\":\"pending\",\"request\":-1}",
+    "{\"status\":\"pending\",\"request\":1.5}", "{\"status\":\"pending\",\"request\":2147483647}",
+    "{\"status\":\"pending\",\"request\":\"7\"}", "{\"status\":\"done\"}",
+    "{\"status\":\"done\",\"publications\":{}}", "{\"status\":\"wat\"}",
+    "{\"status\":\"done\",\"publications\":[]} trailing", "{\"status\":\"done\",\"publications\":[}",
+    "{\"status\":\"pending\",\"status\":\"done\",\"request\":7}",
+    "{\"status\":\"failed\",\"error\":7}",
+    "{\"status\":\"done\",\"operation\":\"fetch\",\"publications\":[]}", "[]"]
+    for reply: malformed {
+        fake.reply = reply
+        unused CollectionClientStart(*client, .Find, Find)
+        result = CollectionClientPump(*client, 0)
+        Expect(*failures, "malformed reply", result.state == .Failed && result.error == .Malformed && ReplyText(*client) == "")
+    }
+    errors: [8]string = .["busy", "signed-out", "offline", "not-found", "forbidden", "too-large", "invalid", "future-error"]
+    kinds: [8]CollectionClientError = .[.Busy, .SignedOut, .Offline, .NotFound, .Forbidden, .TooLarge, .Invalid, .Remote]
+    for error, index: errors {
+        wire: Vec(u8)
+        BuilderPrint(*wire, "{\"status\":\"failed\",\"error\":\"%\"}", error)
+        fake.reply = BuilderFinish(wire)
+        unused CollectionClientStart(*client, .Find, Find)
+        result = CollectionClientPump(*client, 0)
+        Expect(*failures, "typed remote error", result.state == .Failed && result.error == kinds[index] && TextUntilNul(result.detail[:]) == error)
+        Expect(*failures, "retained remote error", ReplyText(*client) == fake.reply)
+    }
+    fake.reply = "{\"status\":\"rejected\",\"error\":\"busy\"}"
+    unused CollectionClientStart(*client, .Find, Find)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "rejected busy is terminal", result.state == .Rejected && result.error == .Busy)
+    fake.reply = "{\"status\":\"unavailable\"}"
+    unused CollectionClientStart(*client, .Find, Find)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "unavailable", result.state == .Unavailable)
+    client.reply_limit = 32
+    fake.reply = Found
+    unused CollectionClientStart(*client, .Find, Find)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "oversized reply never truncated", result.error == .TooLarge && ReplyText(*client) == "")
+    client.reply_limit = cast(s64)Found.count
+    unused CollectionClientStart(*client, .Find, Find)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "exact reply bound", result.state == .Done && ReplyText(*client) == Found)
+    client.reply_limit = 0
+
+    // The configured limit cannot raise the protocol's absolute bound.
+    huge_reply: Vec(u8)
+    for index: cast(s32)0..COLLECTION_CLIENT_REPLY_MAX { VecPush(huge_reply, cast(u8)32) }
+    fake.reply = BuilderFinish(huge_reply)
+    client.reply_limit = COLLECTION_CLIENT_REPLY_MAX + 100
+    unused CollectionClientStart(*client, .Find, Find)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "hard reply bound", result.error == .TooLarge && ReplyText(*client) == "")
+    client.reply_limit = 0
+
+    // A negative interval polls each pump; a huge deadline saturates.
+    fake.reply = "{\"status\":\"pending\",\"request\":37}"
+    client.poll_delay = -1
+    unused CollectionClientStart(*client, .Find, Find)
+    unused CollectionClientPump(*client, 0)
+    calls_before_poll := fake.calls
+    unused CollectionClientPump(*client, 0)
+    Expect(*failures, "zero-delay polling", fake.calls == calls_before_poll + 1)
+    CollectionClientReset(*client)
+    client.poll_delay = 1000
+    unused CollectionClientStart(*client, .Find, Find)
+    unused CollectionClientPump(*client, 9223372036854775800)
+    calls_before_poll = fake.calls
+    unused CollectionClientPump(*client, 9223372036854775806)
+    Expect(*failures, "deadline saturates", fake.calls == calls_before_poll)
+    CollectionClientReset(*client)
+
+    invalid_requests: [4]string = .["{}", "{\"operation\":\"fetch\"}", "{\"operation\":\"find\"}x", "{\"operation\":\"find\",\"operation\":\"find\"}"]
+    calls := fake.calls
+    for request: invalid_requests {
+        result = CollectionClientStart(*client, .Find, request)
+        Expect(*failures, "operation validation", result.error == .Invalid && fake.calls == calls)
+    }
+    huge: Vec(u8)
+    for index: cast(s32)0..COLLECTION_CLIENT_REQUEST_MAX { VecPush(huge, cast(u8)32) }
+    result = CollectionClientStart(*client, .Find, TextView(VecSlice(huge, 0, huge.count)))
+    Expect(*failures, "request bound before sending", result.error == .TooLarge && fake.calls == calls)
+    fake.owner = ""
+    result = CollectionClientStart(*client, .Find, Find)
+    Expect(*failures, "signed-out owner", result.error == .SignedOut)
+    fake.owner = "alice"
+    unavailable: CollectionClient
+    result = CollectionClientStart(*unavailable, .Find, Find)
+    Expect(*failures, "missing transport", result.state == .Unavailable)
+    client.service = Service
+
+    // Owner, service reply and even Start's request can borrow the same host
+    // buffer. A later owner callback must not destroy the queued request or
+    // the reply being interpreted. Consumers only read once on completion.
+    fake.reuse_scratch = true
+    fake.reply = Found
+    unused CopyCString(Find, service_reply[:])
+    result = CollectionClientStart(*client, .Find, TextUntilNul(service_reply[:]))
+    Expect(*failures, "borrowed request queues", result.state == .Pending)
+    result = CollectionClientPump(*client, 0)
+    Expect(*failures, "owner callback cannot overwrite queued request", TextUntilNul(fake.last_request[:]) == Find)
+    Expect(*failures, "owner callback cannot overwrite response", result.state == .Done && ReplyText(*client) == Found)
+    unused CopyCString("reused by another host call", service_reply[:])
+    Expect(*failures, "terminal reply independent of scratch", ReplyText(*client) == Found)
+    fake.owner = "bob"
+    Expect(*failures, "reply read itself enforces owner", ReplyText(*client) == "" && client.result.error == .OwnerChanged)
+    fake.reuse_scratch = false
+
+    operations: [3]CollectionClientOperation = .[.Publish, .Unpublish, .Fetch]
+    requests: [3]string = .["{\"operation\":\"publish\"}", "{\"operation\":\"unpublish\"}", "{\"operation\":\"fetch\"}"]
+    replies: [3]string = .["{\"status\":\"done\",\"publication\":{}}", "{\"status\":\"done\",\"deleted\":true}", "{\"status\":\"done\",\"publication\":{},\"document\":{}}"]
+    for operation, index: operations {
+        fake.reply = replies[index]
+        unused CollectionClientStart(*client, operation, requests[index])
+        result = CollectionClientPump(*client, 0)
+        Expect(*failures, "operation completion shape", result.state == .Done && result.operation == operation)
+    }
+    CollectionClientReset(*client)
+    CollectionClientReset(*other)
+    print("Collection client local test failures: %\n", failures)
+    return failures
+}

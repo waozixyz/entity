@@ -1,0 +1,44 @@
+// Host-style callbacks use globals; the native fake additionally tests opaque
+// context pointers, whose casts are outside the portable VM subset.
+#import, file "../src/collection_client.zi";
+#import "std/text_buffer"
+#import "std/vec"
+
+calls: s32;
+owner_changed: bool;
+CurrentOwner :: (context: *void) -> string { return ifx owner_changed then "bob" else "alice" }
+Service :: (context: *void, service: string, request: string) -> string {
+    calls += 1
+    if service != "publications" { return "" }
+    if calls == 1 && request == "{\"operation\":\"find\"}" { return "{\"status\":\"pending\",\"request\":42}" }
+    if calls == 2 && request == "{\"operation\":\"status\",\"request\":42}" { return "{\"status\":\"pending\"}" }
+    if calls == 3 && request == "{\"operation\":\"status\",\"request\":42}" { return "{\"status\":\"done\",\"publications\":[]}" }
+    return ""
+}
+
+#program_export
+main :: () -> s32 {
+    client: CollectionClient
+    client.service = Service
+    client.owner = CurrentOwner
+    unused CollectionClientStart(*client, .Find, "{\"operation\":\"find\"}")
+    result := CollectionClientPump(*client, 0)
+    if result.state != .Pending || result.request != 42 { return 1 }
+    result = CollectionClientPump(*client, 999)
+    if result.state != .Pending || calls != 1 { return 2 }
+    result = CollectionClientPump(*client, 1000)
+    if result.state != .Pending || calls != 2 { return 3 }
+    result = CollectionClientPump(*client, 2000)
+    if result.state != .Done || calls != 3 { return 4 }
+    reply: Vec(u8)
+    CollectionClientReadReply(*client, *reply)
+    if TextView(VecSlice(reply, 0, reply.count)) != "{\"status\":\"done\",\"publications\":[]}" { return 5 }
+    owner_changed = true
+    result = CollectionClientPump(*client, 2001)
+    if result.state != .Cancelled || result.error != .OwnerChanged { return 6 }
+    CollectionClientReadReply(*client, *reply)
+    if reply.count != 0 { return 7 }
+    CollectionClientReset(*client)
+    print("Collection client portable local test passed\n")
+    return 0
+}

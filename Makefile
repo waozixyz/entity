@@ -156,3 +156,18 @@ profile-shared-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-shared-test/profile_shared_test
 
 test: profile-shared-test
+
+# Portable collection protocol and owner-bound service lifecycle, no accounts.
+.PHONY: collection-client-test
+collection-client-test:
+	mkdir -p build/collection-client-test build/level-collections-test
+	$(ZIRAN) build --root . --module-path src --target=c --entry collection_client_test:main -o build/collection-client-test tests/collection_client_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/collection-client-test $$(rg --files build/collection-client-test -g '*.c') -o build/collection-client-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/collection-client-test/test
+	$(ZIRAN) build --root . --module-path src --target=c --entry level_collections_test:main -o build/level-collections-test tests/level_collections_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/level-collections-test $$(rg --files build/level-collections-test -g '*.c') -o build/level-collections-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/level-collections-test/test
+	$(ZIRAN) bundle --root . --module-path src --entry collection_client_portable_test:main -o build/collection-client-test/test.zx tests/collection_client_portable_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) run build/collection-client-test/test.zx
+
+test: collection-client-test

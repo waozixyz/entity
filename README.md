@@ -107,6 +107,61 @@ most 140 KiB. Native hosts route the service and call `EntityHostPump` each
 frame. `make records-test` checks one device and two devices of a throwaway
 account through a private local Daochi node.
 
+## Collection sharing client
+
+`entity/collection_client` owns one publications request per `CollectionClient`
+instance. It uses the existing `entity/level_collections` wire builders and
+does not change the service or node protocol. Configure `service` with a
+`CollectionClientService(context: *void, service: string, request: string) -> string`
+adapter to the host's current public app service, and `owner` with a
+`CollectionClientOwner(context: *void) -> string` callback returning the current
+verified public owner ID or a stable local-profile identity. An empty owner
+means signed out. Callbacks run synchronously on the frame thread; do not
+reenter the client, except to Reset/Cancel from the service callback. Keep the
+callbacks and context stable until Reset. Neither callback receives keys.
+
+Build a request with `CollectionPublishRequest`, `CollectionUnpublishRequest`,
+`CollectionFindRequest` or `CollectionFetchRequest`, then call
+`CollectionClientStart(client: *CollectionClient, operation: CollectionClientOperation,
+request: string) -> CollectionClientResult`. The operation enum is `Publish`,
+`Unpublish`, `Find` or `Fetch` and must match the request exactly. Start copies
+the request and queues it; it returns `Pending` without calling the service.
+Starting while pending returns `Busy` in that call's result and preserves the
+active request. Free the caller's request builder normally after Start.
+
+Call `CollectionClientPump(client: *CollectionClient, now: s64) -> CollectionClientResult`
+with monotonic milliseconds. Pump sends at most one service request: first the
+original operation, then only `status` with the same provider request number.
+`poll_delay` defaults to 1000 ms; a positive value changes the interval and a
+negative value allows a poll on every Pump. No mutation is automatically
+retried. A pending status may omit its number; a supplied number must match.
+States are `Idle`, `Pending`, `Done`, `Failed`, `Rejected`, `Unavailable` and
+`Cancelled`. Results carry the operation, request number, typed error and up to
+47 bytes of the provider's error code in `detail`. Remote errors map to
+`SignedOut`, `Offline`, `NotFound`, `Forbidden`, `TooLarge`, `Invalid`, `Busy`
+or `Remote`; local failures also include `Malformed` and `OwnerChanged`.
+
+`CollectionClientReadReply(client: *CollectionClient, output: *Vec(u8))` clears
+and copies the retained terminal wire reply into caller-owned output. Replies
+are fully parsed as JSON, checked for their operation's completion envelope,
+and retained within 512 KiB; `reply_limit` can lower this bound. Requests are
+limited to 256 KiB and owner identities to 128 bytes. There is no partial reply
+on overflow or malformed input. Apps still validate publication metadata,
+collection documents and game rules, and choose all translated UI messages.
+
+Pump checks ownership before sending, after calling the service, and before
+returning a retained completion. Owner changes discard old results. Call
+`CollectionClientReset(client: *CollectionClient)` on logout/relogin, even if
+the public owner ID stays the same, and before disposing or reconfiguring an
+instance. `CollectionClientCancel(client: *CollectionClient)` clears local
+interest with a `Cancelled` result. Reset/Cancel release owned buffers and
+invalidate a reply arriving during the service callback. An accepted provider
+operation may still finish; these functions do not undo publications.
+
+`env -u DISPLAY -u WAYLAND_DISPLAY make -j1 collection-client-test` runs the
+fake-transport lifecycle tests, existing wire helper tests and a portable VM
+smoke test without accounts or network access.
+
 ## Standalone hosts and Dew
 
 The `entity/native_host` export opens the same profile bundle for native hosts.

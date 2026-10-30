@@ -1,0 +1,251 @@
+// Portable, single-owner publications service client. Callbacks are synchronous
+// service adapters; the provider owns network work and its request numbers.
+#import "level_collections"
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/vec"
+
+COLLECTION_CLIENT_REQUEST_MAX :: 262144
+COLLECTION_CLIENT_REPLY_MAX :: 524288
+COLLECTION_CLIENT_OWNER_MAX :: 128
+
+CollectionClientOperation :: enum { None; Publish; Unpublish; Find; Fetch; }
+CollectionClientState :: enum { Idle; Pending; Done; Failed; Rejected; Unavailable; Cancelled; }
+CollectionClientError :: enum {
+    None; Busy; Invalid; Malformed; TooLarge; OwnerChanged; SignedOut;
+    Offline; NotFound; Forbidden; Remote;
+}
+
+CollectionClientResult :: struct {
+    state: CollectionClientState
+    operation: CollectionClientOperation
+    error: CollectionClientError
+    // The provider's number, retained even after failure. Never a new retry ID.
+    request: s32
+    detail: [48]u8
+}
+
+// Reply text may be borrowed until the next callback. The client copies it.
+CollectionClientService :: #type (context: *void, service: string, request: string) -> string;
+// Return the current verified public owner, or a stable local-profile identity.
+// Empty means signed out. Never supply keys. Notify logout/relogin with Reset
+// even when the same public owner signs in again.
+CollectionClientOwner :: #type (context: *void) -> string;
+
+CollectionClient :: struct {
+    context: *void
+    service: CollectionClientService
+    owner: CollectionClientOwner
+    // Monotonic milliseconds; zero selects 1000, negative selects no delay.
+    poll_delay: s64
+    // Zero selects the hard maximum; positive values may lower it.
+    reply_limit: s64
+    result: CollectionClientResult
+    // Internal instance storage. Do not copy an active client or mutate these.
+    owner_bytes: [COLLECTION_CLIENT_OWNER_MAX]u8
+    owner_length: s64
+    bound: bool
+    epoch: u64
+    sent: bool
+    calling: bool
+    next_poll: s64
+    request_bytes: Vec(u8)
+    reply_bytes: Vec(u8)
+}
+
+// Cancels local interest only: an accepted publication may still finish in the
+// provider. No mutation is replayed and no provider cancellation is invented.
+// Also releases owned storage. Call before disposing/reconfiguring an instance.
+CollectionClientReset :: (client: *CollectionClient) {
+    VecFree(client.request_bytes)
+    VecFree(client.reply_bytes)
+    client.epoch += 1
+    client.result = CollectionClientResult.{}
+    client.result.request = -1
+    client.bound = false
+    client.owner_length = 0
+    client.sent = false
+    client.next_poll = 0
+}
+
+CollectionClientCancel :: (client: *CollectionClient) {
+    operation := client.result.operation
+    CollectionClientReset(client)
+    client.result.operation = operation
+    client.result.state = .Cancelled
+}
+
+// Copies the retained wire reply into caller-owned output, clearing it first.
+// Only Done/Failed/Rejected/Unavailable carry validated retained wire text.
+CollectionClientReadReply :: (client: *CollectionClient, output: *Vec(u8)) {
+    VecClear(output.*)
+    if client.bound && !OwnerMatches(client) { unused OwnerChanged(client); return }
+    for index: cast(s64)0..client.reply_bytes.count - 1 { VecPush(output.*, client.reply_bytes[index]) }
+}
+
+CollectionClientStart :: (client: *CollectionClient, operation: CollectionClientOperation,
+    request: string) -> CollectionClientResult {
+    if client.result.state == .Pending || client.calling {
+        busy := client.result
+        busy.error = .Busy
+        return busy
+    }
+    CollectionClientReset(client)
+    client.result.operation = operation
+    if client.service == null || client.owner == null {
+        client.result.state = .Unavailable
+        return client.result
+    }
+    if request.count > COLLECTION_CLIENT_REQUEST_MAX {
+        return FinishError(client, .TooLarge)
+    }
+    document: JsonDocument
+    if !ReadObject(*document, request) ||
+    !JsonIs(*document, JsonMember(*document, document.root, "operation"), OperationName(operation)) ||
+    OperationName(operation) == "" { return FinishError(client, .Invalid) }
+    // The request may itself borrow host scratch that owner() will overwrite.
+    BuilderPrint(*client.request_bytes, "%", request)
+    owner := client.owner(client.context)
+    if owner.count == 0 { return FinishError(client, .SignedOut) }
+    if owner.count > COLLECTION_CLIENT_OWNER_MAX { return FinishError(client, .Invalid) }
+    for byte, index: owner { client.owner_bytes[index] = byte }
+    client.owner_length = cast(s64)owner.count
+    client.bound = true
+    client.result.state = .Pending
+    return client.result
+}
+
+// At most one service invocation per call. First sends the original operation;
+// later calls only send status with its exact provider request number. Terminal
+// results remain available without another send, until Start/Reset/owner change.
+CollectionClientPump :: (client: *CollectionClient, now: s64) -> CollectionClientResult {
+    if client.calling { return client.result }
+    if client.bound && !OwnerMatches(client) { return OwnerChanged(client) }
+    if client.result.state != .Pending || (client.sent && now < client.next_poll) { return client.result }
+    polling := client.sent
+    epoch := client.epoch
+    operation := client.result.operation
+    request: Vec(u8)
+    if polling { CollectionStatusRequest(*request, client.result.request) }
+    else { VecSwap(request, client.request_bytes) }
+    client.calling = true
+    response := client.service(client.context, COLLECTIONS_PUBLISH_SERVICE, TextView(VecSlice(request, 0, request.count)))
+    // Copy before the owner callback can reuse host reply storage.
+    limit := client.reply_limit
+    if limit <= 0 || limit > COLLECTION_CLIENT_REPLY_MAX { limit = COLLECTION_CLIENT_REPLY_MAX }
+    oversized := cast(s64)response.count > limit
+    kept: Vec(u8)
+    if !oversized { BuilderPrint(*kept, "%", response) }
+    client.calling = false
+    if epoch != client.epoch {
+        cancelled: CollectionClientResult
+        cancelled.state = .Cancelled
+        cancelled.operation = operation
+        cancelled.error = .OwnerChanged
+        cancelled.request = -1
+        return cancelled
+    }
+    if !OwnerMatches(client) { return OwnerChanged(client) }
+    if oversized { return FinishError(client, .TooLarge) }
+    text := TextView(VecSlice(kept, 0, kept.count))
+    document: JsonDocument
+    if !ReadObject(*document, text) { return FinishError(client, .Malformed) }
+    op := JsonMember(*document, document.root, "operation")
+    if op >= 0 && !JsonIs(*document, op, OperationName(operation)) { return FinishError(client, .Malformed) }
+    number_node := JsonMember(*document, document.root, "request")
+    number, valid_number := JsonInteger(*document, number_node)
+    if number_node >= 0 && (!valid_number || number < 0 || number >= 2147483647 ||
+        (polling && number != client.result.request)) { return FinishError(client, .Malformed) }
+    status := JsonMember(*document, document.root, "status")
+    error := JsonMember(*document, document.root, "error")
+    if error >= 0 && JsonKindOf(*document, error) != .String { return FinishError(client, .Malformed) }
+    if JsonIs(*document, status, "pending") {
+        if !polling && number_node < 0 { return FinishError(client, .Malformed) }
+        if !polling { client.result.request = cast(s32)number }
+        client.sent = true
+        VecFree(client.request_bytes)
+        delay := client.poll_delay
+        if delay == 0 { delay = 1000 }
+        if delay < 0 { delay = 0 }
+        // Saturate a deadline rather than overflowing the caller's clock.
+        client.next_poll = ifx now > 9223372036854775807 - delay then 9223372036854775807 else now + delay
+        return client.result
+    }
+    if JsonIs(*document, status, "done") {
+        if error >= 0 || !DoneShape(*document, operation) { return FinishError(client, .Malformed) }
+        client.result.state = .Done
+    } else if JsonIs(*document, status, "failed") { client.result.state = .Failed }
+    else if JsonIs(*document, status, "rejected") { client.result.state = .Rejected }
+    else if JsonIs(*document, status, "unavailable") { client.result.state = .Unavailable }
+    else { return FinishError(client, .Malformed) }
+    read := CollectionReplyRead(text)
+    client.result.detail = read.error
+    client.result.error = WireError(TextUntilNul(read.error[:]))
+    VecFree(client.request_bytes)
+    VecFree(client.reply_bytes)
+    VecSwap(client.reply_bytes, kept)
+    return client.result
+}
+
+#scope_file
+OperationName :: (operation: CollectionClientOperation) -> string {
+    if operation == .Publish { return "publish" }
+    if operation == .Unpublish { return "unpublish" }
+    if operation == .Find { return "find" }
+    if operation == .Fetch { return "fetch" }
+    return ""
+}
+
+ReadObject :: (document: *JsonDocument, text: string) -> bool {
+    if !JsonRead(document, text) || JsonKindOf(document, document.root) != .Object { return false }
+    // Ambiguous envelope fields cannot choose an operation, ID or completion.
+    fields: [8]string = .["operation", "request", "status", "error", "publication", "publications", "document", "deleted"]
+    for field: fields {
+        count: s32
+        child := JsonFirst(document, document.root)
+        while child >= 0 {
+            if document.nodes[child].key == field { count += 1 }
+            child = JsonNext(document, child)
+        }
+        if count > 1 { return false }
+    }
+    return true
+}
+
+DoneShape :: (document: *JsonDocument, operation: CollectionClientOperation) -> bool {
+    if operation == .Find { return JsonKindOf(document, JsonMember(document, document.root, "publications")) == .Array }
+    if operation == .Unpublish { return JsonKindOf(document, JsonMember(document, document.root, "deleted")) == .True }
+    if JsonKindOf(document, JsonMember(document, document.root, "publication")) != .Object { return false }
+    return operation == .Publish || (operation == .Fetch &&
+        JsonKindOf(document, JsonMember(document, document.root, "document")) == .Object)
+}
+
+OwnerMatches :: (client: *CollectionClient) -> bool {
+    return client.owner != null && client.owner(client.context) == TextView(client.owner_bytes[0:client.owner_length])
+}
+
+OwnerChanged :: (client: *CollectionClient) -> CollectionClientResult {
+    CollectionClientCancel(client)
+    client.result.error = .OwnerChanged
+    return client.result
+}
+
+FinishError :: (client: *CollectionClient, error: CollectionClientError) -> CollectionClientResult {
+    VecFree(client.request_bytes)
+    VecFree(client.reply_bytes)
+    client.result.state = .Failed
+    client.result.error = error
+    return client.result
+}
+
+WireError :: (error: string) -> CollectionClientError {
+    if error == "" { return .None }
+    if error == "signed-out" { return .SignedOut }
+    if error == "offline" { return .Offline }
+    if error == "not-found" { return .NotFound }
+    if error == "forbidden" { return .Forbidden }
+    if error == "too-large" { return .TooLarge }
+    if error == "invalid" { return .Invalid }
+    if error == "busy" { return .Busy }
+    return .Remote
+}
