@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Share owner-bound reward claim polling and validated credited/already-claimed results without replaying uncertain claims.
 - Share earned-progress hydration, owner isolation, durable pending saves and service acknowledgement across games.
 - Share one owner-bound collection client across games, with bounded replies, typed outcomes and configurable status polling.
 - Buy Dew from a shop of packs: Google Play prices with their real savings, or Monero prices with a custom amount and the payment code filled in.

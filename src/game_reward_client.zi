@@ -1,0 +1,195 @@
+// One owner-bound claim on the existing entity.dew provider slot.
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/vec"
+Rewards :: #import "daochi_client/rewards";
+
+GAME_REWARD_CLIENT_OWNER_MAX :: 128
+GAME_REWARD_CLIENT_REPLY_MAX :: 4096
+GameRewardClientService :: #type (context: *void, service: string, request: string) -> string;
+GameRewardClientOwner :: #type (context: *void) -> string;
+GameRewardClientState :: enum { Idle; Pending; Done; AlreadyClaimed; Failed; Ineligible; SignedOut; Busy; Cancelled; }
+GameRewardClientError :: enum { None; Busy; Invalid; Unavailable; Malformed; TooLarge; OwnerChanged; Remote; }
+GameRewardClientResult :: struct {
+    state: GameRewardClientState
+    error: GameRewardClientError
+    claim: Rewards.RewardClaim
+}
+GameRewardClient :: struct {
+    context: *void
+    service: GameRewardClientService
+    // Verified public identity only. Empty means signed out.
+    owner: GameRewardClientOwner
+    // Monotonic milliseconds; zero defaults to 1000, negative means no delay.
+    poll_delay: s64
+    reply_limit: s64
+    result: GameRewardClientResult
+    // Private storage: never copy/reconfigure an active instance.
+    reward: [64]u8
+    reward_length: s64
+    owner_bytes: [GAME_REWARD_CLIENT_OWNER_MAX]u8
+    owner_length: s64
+    bound: bool
+    calling: bool
+    epoch: u64
+    sent: bool
+    next_poll: s64
+    reply_bytes: Vec(u8)
+}
+
+// Cancels local interest only. The provider may still award the old claim.
+// Explicitly reset on logout/relogin, even for the same public identity.
+GameRewardClientReset :: (client: *GameRewardClient) {
+    client.epoch += 1
+    client.bound = false
+    client.owner_length = 0
+    client.reward_length = 0
+    client.sent = false
+    client.next_poll = 0
+    client.result = .{}
+    VecFree(client.reply_bytes)
+}
+GameRewardClientCancel :: (client: *GameRewardClient) {
+    GameRewardClientReset(client)
+    client.result.state = .Cancelled
+}
+GameRewardClientStart :: (client: *GameRewardClient, reward: string) -> GameRewardClientResult {
+    if client.calling || client.result.state == .Pending {
+        result := client.result
+        result.error = .Busy
+        return result
+    }
+    // Copy before Reset or owner() can overwrite borrowed host/client storage.
+    saved: [64]u8
+    if !Rewards.RewardNameValid(reward) { return Fail(client, .Invalid) }
+    for byte, index: reward { saved[index] = byte }
+    length := cast(s64)reward.count
+    GameRewardClientReset(client)
+    client.reward = saved
+    client.reward_length = length
+    if client.service == null || client.owner == null { return Fail(client, .Unavailable) }
+    epoch := client.epoch
+    client.calling = true
+    identity := client.owner(client.context)
+    if epoch == client.epoch && identity.count <= GAME_REWARD_CLIENT_OWNER_MAX {
+        for byte, index: identity { client.owner_bytes[index] = byte }
+        client.owner_length = cast(s64)identity.count
+    }
+    client.calling = false
+    if epoch != client.epoch { return Cancelled() }
+    if identity.count > GAME_REWARD_CLIENT_OWNER_MAX { return Fail(client, .TooLarge) }
+    if client.owner_length == 0 { client.result.state = .SignedOut; return client.result }
+    client.bound = true
+    client.result.state = .Pending
+    return client.result
+}
+GameRewardClientReadReply :: (client: *GameRewardClient, output: *Vec(u8)) {
+    VecClear(output.*)
+    if client.calling { return }
+    epoch := client.epoch
+    if client.bound && !Matches(client) {
+        if epoch == client.epoch { unused Changed(client) }
+        return
+    }
+    for index: cast(s64)0..client.reply_bytes.count - 1 { VecPush(output.*, client.reply_bytes[index]) }
+}
+// At most one service call. After sending, only claim-status is ever sent.
+// No automatic claim replay, including on malformed/uncertain completion.
+GameRewardClientPump :: (client: *GameRewardClient, now: s64) -> GameRewardClientResult {
+    if client.calling { return client.result }
+    epoch := client.epoch
+    if client.bound && !Matches(client) {
+        if epoch != client.epoch { return Cancelled() }
+        return Changed(client)
+    }
+    if client.result.state != .Pending || (client.sent && now < client.next_poll) { return client.result }
+    request: Vec(u8)
+    if client.sent { BuilderPrint(*request, "claim-status") }
+    else { BuilderPrint(*request, "claim:%", TextView(client.reward[:client.reward_length])) }
+    // Local request stays alive even when a synchronous callback resets us.
+    client.sent = true
+    client.calling = true
+    response := client.service(client.context, "entity.dew", TextView(VecSlice(request, 0, request.count)))
+    limit := client.reply_limit
+    if limit <= 0 || limit > GAME_REWARD_CLIENT_REPLY_MAX { limit = GAME_REWARD_CLIENT_REPLY_MAX }
+    oversized := cast(s64)response.count > limit
+    kept: Vec(u8)
+    if !oversized { BuilderPrint(*kept, "%", response) }
+    client.calling = false
+    if epoch != client.epoch { return Cancelled() }
+    if !Matches(client) {
+        if epoch != client.epoch { return Cancelled() }
+        return Changed(client)
+    }
+    if oversized { return Fail(client, .TooLarge) }
+    text := TextView(VecSlice(kept, 0, kept.count))
+    doc: JsonDocument
+    if !JsonRead(*doc, text) || JsonKindOf(*doc, doc.root) != .Object { return Fail(client, .Malformed) }
+    // No ambiguous envelope fields, including escaped duplicate names.
+    left := JsonFirst(*doc, doc.root)
+    while left >= 0 {
+        right := JsonNext(*doc, left)
+        while right >= 0 {
+            if doc.nodes[left].key == doc.nodes[right].key { return Fail(client, .Malformed) }
+            right = JsonNext(*doc, right)
+        }
+        left = JsonNext(*doc, left)
+    }
+    status := JsonMember(*doc, doc.root, "status")
+    name := JsonMember(*doc, doc.root, "reward")
+    if name >= 0 && !JsonIs(*doc, name, TextView(client.reward[:client.reward_length])) { return Fail(client, .Malformed) }
+    if JsonMember(*doc, doc.root, "error") >= 0 { return Fail(client, .Malformed) }
+    if JsonIs(*doc, status, "pending") {
+        delay := client.poll_delay
+        if delay == 0 { delay = 1000 }
+        if delay < 0 { delay = 0 }
+        client.next_poll = ifx now > 9223372036854775807 - delay then 9223372036854775807 else now + delay
+        return client.result
+    }
+    if JsonIs(*doc, status, "done") {
+        units, valid_units := JsonInteger(*doc, JsonMember(*doc, doc.root, "units"))
+        balance, valid_balance := JsonInteger(*doc, JsonMember(*doc, doc.root, "balance"))
+        credited := JsonKindOf(*doc, JsonMember(*doc, doc.root, "credited"))
+        if name < 0 || !valid_units || units <= 0 || units > 9007199254740991 ||
+        !valid_balance || balance < 0 || balance > 9007199254740991 || (credited != .True && credited != .False) {
+            return Fail(client, .Malformed)
+        }
+        client.result.claim = Rewards.RewardClaim.{.units = units, .balance = balance, .credited = credited == .True}
+        client.result.state = ifx credited == .True then .Done else .AlreadyClaimed
+    } else if JsonIs(*doc, status, "failed") { client.result.state = .Failed; client.result.error = .Remote }
+    else if JsonIs(*doc, status, "ineligible") {
+        if name < 0 { return Fail(client, .Malformed) }
+        client.result.state = .Ineligible
+    } else if JsonIs(*doc, status, "signin") { client.result.state = .SignedOut }
+    else if JsonIs(*doc, status, "busy") { client.result.state = .Busy }
+    else { return Fail(client, .Malformed) }
+    VecSwap(client.reply_bytes, kept)
+    return client.result
+}
+
+#scope_file
+Matches :: (client: *GameRewardClient) -> bool {
+    if client.owner == null { return false }
+    epoch := client.epoch
+    client.calling = true
+    matches := client.owner(client.context) == TextView(client.owner_bytes[:client.owner_length])
+    client.calling = false
+    return matches && epoch == client.epoch && client.bound
+}
+Cancelled :: () -> GameRewardClientResult {
+    result: GameRewardClientResult
+    result.state = .Cancelled
+    return result
+}
+Changed :: (client: *GameRewardClient) -> GameRewardClientResult {
+    GameRewardClientCancel(client)
+    client.result.error = .OwnerChanged
+    return client.result
+}
+Fail :: (client: *GameRewardClient, error: GameRewardClientError) -> GameRewardClientResult {
+    VecFree(client.reply_bytes)
+    client.result.claim = .{}
+    client.result.state = .Failed
+    client.result.error = error
+    return client.result
+}

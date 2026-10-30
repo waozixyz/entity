@@ -182,3 +182,9 @@ game-progress-client-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) run build/game-progress-client-test/test.zx
 
 test: game-progress-client-test
+
+.PHONY: game-reward-client-test
+game-reward-client-test:
+	ZIRAN_BIN=$(ZIRAN) python3 scripts/game_reward_client_test.py
+
+test: game-reward-client-test

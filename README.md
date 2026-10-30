@@ -334,3 +334,61 @@ link/disconnect/poll/ack ordering and retry policy. An app configures its bot na
 and relay path and supplies authenticated transport and its message handler.
 Profile draws `entity.telegram` snapshots and sends owner-bound actions; hosts
 retain key access and validate pending authorization request IDs before approval.
+
+## Game reward claim client
+
+`entity/game_reward_client` exports `GameRewardClient`, its `Result`, `State`
+and `Error` types, and these synchronous operations:
+
+- `GameRewardClientStart(client: *GameRewardClient, reward: string) -> GameRewardClientResult`
+  copies a valid provider reward name (1–64 bytes) and binds the current owner.
+  It queues local interest; it does not send or award anything. A pending client
+  rejects another Start with `error = Busy`, preserving the existing claim.
+- `GameRewardClientPump(client: *GameRewardClient, now: s64) -> GameRewardClientResult`
+  sends at most one service call. The first is `entity.dew` / `claim:REWARD`;
+  subsequent calls use `claim-status` only, with monotonic milliseconds and
+  `poll_delay` (zero = 1000, negative = no delay, overflow saturates).
+- `GameRewardClientReadReply(client: *GameRewardClient, output: *Vec(u8))`
+  clears output and copies a retained, validated terminal wire reply while its
+  owner remains current. It exposes no borrowed host storage.
+- `GameRewardClientReset(client: *GameRewardClient)` releases storage and clears
+  the binding/result. Call on logout/relogin even for the same identity, and
+  before disposal or reconfiguring callbacks.
+- `GameRewardClientCancel(client: *GameRewardClient)` resets local interest and
+  records `Cancelled`. It cannot cancel an award already accepted by a provider.
+
+Configure `context`, `service(context, service, request) -> string` and
+`owner(context) -> string`. Owner returns only a verified public identity
+(up to 128 bytes), empty when signed out. Request/reply strings are borrowed
+for the callback; the client copies inputs before later callbacks reuse scratch.
+Callbacks must not reenter except to Reset/Cancel; either invalidates a synchronous
+completion, including inside owner callbacks. Adapters must route to the verified
+owner, cancel/reject old-owner work on account transitions, and exclusively reserve
+Entity's one reward claim slot until it finishes. Another client must not replace
+that slot. The current protocol exposes no request number, so none is invented.
+
+`Pending` is not an award. A matching `done` reply requires a boolean `credited`,
+positive integer `units` and nonnegative integer `balance`, both at most
+9007199254740991, matching the existing reward helper's monetary semantics.
+`Done` means this reply credited the account; `AlreadyClaimed` means
+`credited:false`, carrying the catalog units without reporting a new award.
+`result.claim` uses the existing Daochi `RewardClaim` model. Neither implies
+remote record synchronization. Provider `busy`, `signin`, `ineligible` and
+`failed` remain distinct terminal states; arbitrary success text is rejected.
+Malformed, duplicate-field, wrong-reward or oversized replies stop without an
+award or automatic claim replay. Replies default to a hard 4096-byte maximum;
+positive `reply_limit` can lower it. Malformed/oversized replies clear retained
+text and claim data; validated provider failures retain their wire reply.
+
+The caller owns eligibility, completion/route evidence, legacy migration, durable
+records, account selection, strings/UI and adoption of the provider's grant.
+An explicit Start after a terminal result is a caller retry decision: retain the
+same reward name for the same award. After uncertain outcomes, reconcile with
+the provider before starting another mutation; Reset/Cancel is not reconciliation.
+There is no cross-process resume or persistent provider request identity in this
+protocol. No games are migrated in this module change.
+
+Run `env -u DISPLAY -u WAYLAND_DISPLAY make -j1 game-reward-client-test` for native C,
+source-to-portable VM and saved-IR-to-portable VM fake-host lifecycle tests, plus
+the dependency's existing reward wire/model fixture. All scratch stays in ignored
+`work/reward-client`; no accounts or provider network are used.

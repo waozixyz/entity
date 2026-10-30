@@ -1,0 +1,202 @@
+#import, file "../src/game_reward_client.zi";
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+Rewards :: #import "daochi_client/rewards";
+
+identity: string = "alice";
+reply: string;
+scratch: [GAME_REWARD_CLIENT_REPLY_MAX + 2]u8;
+last: [80]u8;
+active: *GameRewardClient;
+calls: s32;
+claims: s32;
+failures: s32;
+mode: s32;
+wrong_service: bool;
+request_alive: bool;
+busy: bool;
+huge: [GAME_REWARD_CLIENT_REPLY_MAX + 2]u8;
+Done :: "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":true,\"units\":100,\"balance\":120}"
+Already :: "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":false,\"units\":100,\"balance\":120}"
+Owner :: (context: *void) -> string {
+    if mode == 7 { return TextUntilNul(huge[:]) }
+    if mode == 5 { GameRewardClientReset(active) }
+    if mode == 6 { GameRewardClientCancel(active) }
+    unused CopyCString(identity, scratch[:])
+    return TextUntilNul(scratch[:])
+}
+Service :: (context: *void, service: string, request: string) -> string {
+    calls += 1
+    if service != "entity.dew" { wrong_service = true }
+    unused CopyCString(request, last[:])
+    if request.count > 6 && request[:6] == "claim:" { claims += 1 }
+    if mode == 1 { identity = "bob" }
+    if mode == 2 { GameRewardClientReset(active) }
+    if mode == 3 { GameRewardClientCancel(active) }
+    if mode == 4 {
+        busy = GameRewardClientStart(active, "different").error == .Busy
+        unused GameRewardClientPump(active, 0)
+        output: Vec(u8)
+        GameRewardClientReadReply(active, *output)
+        busy = busy && output.count == 0
+    }
+    request_alive = request == TextUntilNul(last[:])
+    if mode == 8 { return TextUntilNul(huge[:]) }
+    unused CopyCString(reply, scratch[:])
+    return TextUntilNul(scratch[:])
+}
+Expect :: (label: string, value: bool) {
+    if !value { failures += 1; print("FAIL %\n", label) }
+}
+Configure :: (client: *GameRewardClient) {
+    GameRewardClientReset(client)
+    active = client
+    identity = "alice"; reply = "{\"status\":\"pending\"}"
+    calls = 0; claims = 0; mode = 0; busy = false
+    client.service = Service; client.owner = Owner
+    client.reply_limit = 0; client.poll_delay = 10
+    unused GameRewardClientStart(client, "wurm.five-days")
+}
+Read :: (client: *GameRewardClient) -> string {
+    output: Vec(u8)
+    GameRewardClientReadReply(client, *output)
+    return BuilderFinish(output)
+}
+#program_export
+main :: () -> s32 {
+    client: GameRewardClient
+    Configure(*client)
+    unused GameRewardClientPump(*client, 0)
+    Expect("claim once", claims == 1 && TextUntilNul(last[:]) == "claim:wurm.five-days" && client.result.state == .Pending)
+    Expect("busy preserves live claim", GameRewardClientStart(*client, "other").error == .Busy)
+    unused GameRewardClientPump(*client, 9)
+    Expect("poll delay", calls == 1)
+    unused GameRewardClientPump(*client, 10)
+    Expect("pending polls slot without reissuing claim", claims == 1 && calls == 2 && TextUntilNul(last[:]) == "claim-status")
+    reply = Done
+    result := GameRewardClientPump(*client, 20)
+    Expect("done survives shared scratch", result.state == .Done && result.claim.credited && result.claim.units == 100 && result.claim.balance == 120 && Read(*client) == Done)
+    unused GameRewardClientPump(*client, 30)
+    Expect("terminal result never replays", calls == 3 && claims == 1)
+    identity = "bob"
+    Expect("read clears old owner reply", Read(*client) == "" && client.result.error == .OwnerChanged && client.result.claim.units == 0)
+
+    Configure(*client)
+    reply = Already
+    result = GameRewardClientPump(*client, 0)
+    parsed: Rewards.RewardClaim
+    Expect("actual helper already claimed is positive units without credit", Rewards.ParseRewardClaim(Already, *parsed) && !parsed.credited && parsed.units == 100)
+    Expect("already claimed never reports new award", result.state == .AlreadyClaimed && !result.claim.credited && Read(*client) == Already)
+    Expect("actual helper credited semantics", Rewards.ParseRewardClaim(Done, *parsed) && parsed.credited && parsed.units == 100)
+
+    bad: [14]string = .["success", "[]", "{", "{\"status\":\"queued\"}",
+    "{\"status\":\"done\"}",
+    "{\"status\":\"done\",\"reward\":\"other\",\"credited\":true,\"units\":100,\"balance\":120}",
+    "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":\"true\",\"units\":100,\"balance\":120}",
+    "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":true,\"units\":0,\"balance\":120}",
+    "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":false,\"units\":1.5,\"balance\":120}",
+    "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":false,\"units\":100,\"balance\":-1}",
+    "{\"status\":\"done\",\"reward\":\"wurm.five-days\",\"credited\":true,\"units\":9007199254740992,\"balance\":120}",
+    "{\"status\":\"pending\",\"status\":\"done\"}",
+    "{\"status\":\"done\",\"error\":\"offline\"}",
+    "{\"status\":\"ineligible\",\"reward\":\"other\"}"]
+    for text: bad {
+        Configure(*client)
+        reply = text
+        result = GameRewardClientPump(*client, 0)
+        Expect("malformed never awards", result.state == .Failed && result.error == .Malformed && result.claim.units == 0 && Read(*client) == "")
+        reply = Done
+        unused GameRewardClientPump(*client, 100)
+        Expect("uncertain outcome never auto replays", calls == 1 && claims == 1)
+    }
+    rejected: [4]string = .["{\"status\":\"failed\"}", "{\"status\":\"busy\"}", "{\"status\":\"signin\"}", "{\"status\":\"ineligible\",\"reward\":\"wurm.five-days\"}"]
+    states: [4]GameRewardClientState = .[.Failed, .Busy, .SignedOut, .Ineligible]
+    for text, index: rejected {
+        Configure(*client); reply = text
+        result = GameRewardClientPump(*client, 0)
+        Expect("provider rejection never awards", result.state == states[index] && result.claim.units == 0 && Read(*client) == text)
+        unused GameRewardClientPump(*client, 100)
+        Expect("rejection requires caller retry decision", calls == 1)
+    }
+    Configure(*client)
+    reply = "{\"status\":\"busy\"}"
+    unused GameRewardClientPump(*client, 0)
+    unused GameRewardClientStart(*client, "wurm.five-days")
+    reply = Already
+    result = GameRewardClientPump(*client, 10)
+    Expect("explicit retry uses same reward, provider remains authority", claims == 2 && result.state == .AlreadyClaimed && !result.claim.credited)
+
+    for action: cast(s32)1..6 {
+        Configure(*client)
+        reply = Done; mode = action
+        result = GameRewardClientPump(*client, 0)
+        if action == 4 { Expect("reentrant start pump read guarded", busy && calls == 1 && result.state == .Done) }
+        else { Expect("callback owner change/reset/cancel invalidates completion", result.state == .Cancelled && client.result.claim.units == 0 && Read(*client) == "") }
+        Expect("reset cannot free active request", request_alive)
+    }
+    Configure(*client)
+    unused GameRewardClientPump(*client, 0)
+    identity = ""
+    result = GameRewardClientPump(*client, 10)
+    Expect("logout stops polling", result.error == .OwnerChanged && calls == 1)
+    identity = "alice"
+    unused GameRewardClientPump(*client, 20)
+    Expect("relogin cannot revive old interest", calls == 1)
+    Configure(*client)
+    unused GameRewardClientPump(*client, 0)
+    GameRewardClientReset(*client)
+    unused GameRewardClientPump(*client, 10)
+    Expect("same identity explicit reset stops old claim", calls == 1 && client.result.state == .Idle)
+
+    Configure(*client)
+    reply = Done; client.reply_limit = cast(s64)Done.count - 1
+    Expect("reply lower bound", GameRewardClientPump(*client, 0).error == .TooLarge)
+    Configure(*client)
+    reply = Done; client.reply_limit = cast(s64)Done.count
+    Expect("exact reply bound", GameRewardClientPump(*client, 0).state == .Done)
+    Configure(*client)
+    for index: 0..GAME_REWARD_CLIENT_REPLY_MAX { huge[index] = #char "x" }
+    mode = 8
+    client.reply_limit = GAME_REWARD_CLIENT_REPLY_MAX + 1
+    Expect("hard reply bound", GameRewardClientPump(*client, 0).error == .TooLarge)
+    Configure(*client)
+    GameRewardClientReset(*client)
+    unused CopyCString("wurm.five-days", scratch[:])
+    unused GameRewardClientStart(*client, TextUntilNul(scratch[:]))
+    reply = Done
+    Expect("borrowed reward copied before owner callback", GameRewardClientPump(*client, 0).state == .Done && TextUntilNul(last[:]) == "claim:wurm.five-days")
+    Configure(*client)
+    client.poll_delay = 10
+    unused GameRewardClientPump(*client, 9223372036854775805)
+    unused GameRewardClientPump(*client, 9223372036854775806)
+    Expect("deadline saturation", calls == 1)
+    unused GameRewardClientPump(*client, 9223372036854775807)
+    Expect("saturated deadline polls exact slot", calls == 2 && claims == 1)
+    Configure(*client)
+    GameRewardClientReset(*client); identity = ""
+    Expect("signed out start never sends", GameRewardClientStart(*client, "wurm.five-days").state == .SignedOut && calls == 0)
+    Expect("invalid name never sends", GameRewardClientStart(*client, "bad name").error == .Invalid && calls == 0)
+    Configure(*client)
+    GameRewardClientReset(*client)
+    mode = 7
+    Expect("owner bound", GameRewardClientStart(*client, "wurm.five-days").error == .TooLarge && calls == 0)
+    Configure(*client)
+    GameRewardClientReset(*client)
+    mode = 5
+    Expect("reset during initial owner callback cannot bind", GameRewardClientStart(*client, "wurm.five-days").state == .Cancelled && !client.bound)
+    Configure(*client)
+    GameRewardClientReset(*client)
+    empty: GameRewardClient
+    client.service = empty.service
+    Expect("missing transport cannot queue", GameRewardClientStart(*client, "wurm.five-days").error == .Unavailable && calls == 0)
+    Configure(*client)
+    GameRewardClientReset(*client)
+    Expect("maximum name accepted", GameRewardClientStart(*client, "1234567890123456789012345678901234567890123456789012345678901234").state == .Pending)
+    GameRewardClientCancel(*client)
+    Expect("oversize name rejected", GameRewardClientStart(*client, "12345678901234567890123456789012345678901234567890123456789012345").error == .Invalid && calls == 0)
+    Expect("service name", !wrong_service)
+    GameRewardClientReset(*client)
+    print("Reward client local test failures: %\n", failures)
+    return ifx failures == 0 then 0 else 1
+}
