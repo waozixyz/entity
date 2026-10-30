@@ -1078,6 +1078,13 @@ Main :: () -> s64 {
     }
     if mode == APP_COMMAND {
         command := AppCommand()
+        // Each root page replaces the last one, so a Dew or leaderboard page
+        // left open never covers the page asked for next.
+        if command == "root:profile" || command == "root:leaderboard" || command == "root:dew" || command == "root:appearance" {
+            dew_page = false
+            dew_confirmation = -1
+            profile_leaderboard_open = false
+        }
         if command == "root:profile" { root_page = ""; ManagementHome(0); return 0 }
         if command == "root:leaderboard" { root_page = "leaderboard"; unused ProfileLeaderboardCommand("leaderboard"); return 0 }
         if command == "root:dew" { root_page = "dew"; dew_page = true; dew_refresh = true; return 0 }
