@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Share earned-progress hydration, owner isolation, durable pending saves and service acknowledgement across games.
 - Share one owner-bound collection client across games, with bounded replies, typed outcomes and configurable status polling.
 - Buy Dew from a shop of packs: Google Play prices with their real savings, or Monero prices with a custom amount and the payment code filled in.
 - Show Wurm's current skin artwork in leaderboards and friends, including the new coin and daily reward skins.

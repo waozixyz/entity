@@ -171,3 +171,14 @@ collection-client-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) run build/collection-client-test/test.zx
 
 test: collection-client-test
+
+.PHONY: game-progress-client-test
+game-progress-client-test:
+	mkdir -p build/game-progress-client-test
+	$(ZIRAN) build --root . --module-path src --target=c --entry game_progress_client_test:main -o build/game-progress-client-test tests/game_progress_client_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/game-progress-client-test $$(rg --files build/game-progress-client-test -g '*.c') -o build/game-progress-client-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY build/game-progress-client-test/test
+	$(ZIRAN) bundle --root . --module-path src --entry game_progress_client_test:main -o build/game-progress-client-test/test.zx tests/game_progress_client_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY $(ZIRAN) run build/game-progress-client-test/test.zx
+
+test: game-progress-client-test

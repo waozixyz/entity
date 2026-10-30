@@ -1,0 +1,303 @@
+#import, file "../src/game_progress_client.zi";
+#import "game_progress"
+#import "std/c_string"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+
+identity: string = "alice";
+reply: string = "{\"status\":\"missing\"}";
+scratch: [GAME_PROGRESS_CLIENT_REPLY_MAX + 2]u8;
+last: [8192]u8;
+local: GameProgressRecord;
+local_owner: [129]u8;
+local_pending: bool;
+fail_save: bool;
+switch_service: bool;
+switch_save: bool;
+switch_owner: bool;
+reset_service: bool;
+reenter_service: bool;
+reentry_busy: bool;
+active: *GameProgressClient;
+clobber_input: bool;
+input: GameProgressRecord;
+calls: s32;
+put_count: s32;
+saves: s32;
+failures: s32;
+wrong_service: bool;
+
+Owner :: (context: *void) -> string {
+    if switch_owner { identity = "bob"; switch_owner = false }
+    if clobber_input { input = .{} }
+    // The owner's scratch is the SAME buffer returned by Service.
+    unused CopyCString(identity, scratch[:])
+    return TextUntilNul(scratch[:])
+}
+Service :: (context: *void, service: string, request: string) -> string {
+    calls += 1
+    if service != "entity.records" { wrong_service = true }
+    unused CopyCString(request, last[:])
+    operation: [20]u8
+    unused ReadStringText(request, FieldAt(request, 0, "operation"), operation[:])
+    if TextUntilNul(operation[:]) == "put" { put_count += 1 }
+    if switch_service { identity = "bob" }
+    if reset_service { GameProgressClientReset(active) }
+    if reenter_service {
+        candidate := Seed(100, "111")
+        reentry_busy = GameProgressClientQueue(active, *candidate).error == .Busy
+    }
+    unused CopyCString(reply, scratch[:])
+    return TextUntilNul(scratch[:])
+}
+Persist :: (context: *void, owner: string, record: *GameProgressRecord, pending: bool) -> bool {
+    saves += 1
+    if switch_save { identity = "bob" }
+    if fail_save { return false }
+    unused CopyCString(owner, local_owner[:])
+    local = record.*
+    local_pending = pending
+    return true
+}
+Expect :: (label: string, value: bool) {
+    if !value { failures += 1; print("FAIL %\n", label) }
+}
+Seed :: (unlocked: s32, marks: string) -> GameProgressRecord {
+    value: GameProgressRecord
+    unused CopyCString("wurm", value.game[:])
+    unused CopyCString(marks, value.completed[:])
+    value.unlocked = unlocked
+    return value
+}
+Configure :: (client: *GameProgressClient, pending: bool = false) {
+    GameProgressClientReset(client)
+    client.owner = Owner; client.service = Service; client.persist = Persist
+    client.poll_delay = -1; client.read_delay = 100
+    client.reply_limit = 0
+    active = client
+    identity = "alice"; reply = "{\"status\":\"missing\"}"
+    calls = 0; put_count = 0; saves = 0
+    fail_save = false; switch_service = false; switch_save = false
+    switch_owner = false; reset_service = false; clobber_input = false
+    reenter_service = false; reentry_busy = false
+    seed := Seed(2, "1")
+    unused GameProgressClientBind(client, "alice", *seed, pending)
+}
+
+#program_export
+main :: () -> s32 {
+    client: GameProgressClient
+    Configure(*client, true)
+    unused GameProgressClientPump(*client, 0, false)
+    Expect("active puzzle suppresses initial read and upload", calls == 0 && !client.result.hydrated)
+    reply = "{\"status\":\"pending\",\"request\":23}"
+    unused GameProgressClientPump(*client, 0, true)
+    Expect("first operation hydrates before upload", put_count == 0 && calls == 1 && client.result.request == 23)
+    unused GameProgressClientPump(*client, 1, false)
+    Expect("active puzzle suppresses get status poll", calls == 1)
+    reply = "{\"status\":\"done\",\"document\":{\"game\":\"wurm\",\"unlocked\":5,\"completed\":\"001\",\"updated_at\":10}}"
+    unused GameProgressClientPump(*client, 2, true)
+    Expect("borrowed reply survives owner scratch reuse", client.result.hydrated && client.record.unlocked == 5 && TextUntilNul(client.record.completed[:]) == "101")
+    Expect("hydration does not upload yet", put_count == 0 && !client.result.durable)
+    reply = "{\"status\":\"pending\",\"request\":41}"
+    unused GameProgressClientPump(*client, 3, false)
+    Expect("merged record persisted before put", local.unlocked == 5 && TextUntilNul(local.completed[:]) == "101" && local_pending && put_count == 1)
+    sent: GameProgressRecord
+    Expect("wire contains union without resume state", GameProgressReply(TextUntilNul(last[:]), *sent) && GameProgressSame(*sent, *local) && FieldAt(TextUntilNul(last[:]), 0, "state") < 0)
+    input = Seed(6, "0001")
+    clobber_input = true
+    unused GameProgressClientQueue(*client, *input)
+    clobber_input = false
+    Expect("queue copies input before owner callback", client.record.unlocked == 6 && TextUntilNul(client.record.completed[:]) == "1011" && !client.result.durable)
+    reply = "{\"status\":\"pending\"}"
+    unused GameProgressClientPump(*client, 4, false)
+    Expect("dirty updates persist during put polling", local.unlocked == 6 && local_pending && put_count == 1 && TextUntilNul(last[:]) == "{\"operation\":\"status\",\"request\":41}")
+    reply = "{\"status\":\"done\"}"
+    unused GameProgressClientPump(*client, 5, false)
+    fail_save = true
+    result := GameProgressClientPump(*client, 6, false)
+    Expect("ack failure is honest and retains newer dirty earnings", result.error == .Persist && !result.durable && result.dirty && local_pending)
+    fail_save = false
+    result = GameProgressClientPump(*client, 7, false)
+    Expect("durable ack does not clear earnings queued during put", result.state == .Acknowledged && result.dirty && result.durable && local_pending && put_count == 1)
+    unused GameProgressClientPump(*client, 8, false)
+    unused GameProgressClientPump(*client, 9, false)
+    Expect("second put acknowledges current snapshot", put_count == 2 && !client.result.dirty && !local_pending && client.result.state == .Acknowledged)
+    // A stale remote can still add a completion, without reducing unlocks.
+    reply = "{\"status\":\"done\",\"document\":{\"game\":\"wurm\",\"unlocked\":2,\"completed\":\"01\",\"updated_at\":1}}"
+    unused GameProgressClientPump(*client, 200, true)
+    Expect("stale remote earnings preserved monotonically", client.record.unlocked == 6 && TextUntilNul(client.record.completed[:]) == "1111" && client.result.dirty)
+    output: GameProgressRecord
+    identity = "bob"
+    Expect("accessor cannot expose old owner data", !GameProgressClientRead(*client, *output) && client.result.state == .OwnerChanged)
+    seed := Seed(1, "")
+    unused GameProgressClientBind(*client, "bob", *seed, false)
+    Expect("new owner starts without previous pending earnings", client.record.unlocked == 1 && !client.result.dirty && !client.result.hydrated)
+
+    Configure(*client)
+    earned := Seed(3, "11")
+    unused GameProgressClientQueue(*client, *earned)
+    fail_save = true
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("failed pending persist prevents service and durable ack", result.error == .Persist && !result.durable && calls == 0)
+    fail_save = false
+    unused GameProgressClientPump(*client, 1, true)
+    Expect("pending persist retries before hydration", calls == 1 && local_pending && local.unlocked == 3)
+
+    Configure(*client, true)
+    switch_owner = true
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("switch before service drops binding", result.state == .OwnerChanged && calls == 0)
+    Configure(*client, true)
+    switch_service = true
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("switch during service rejects stale reply", result.state == .OwnerChanged && !result.hydrated && put_count == 0)
+    Configure(*client)
+    unused GameProgressClientQueue(*client, *earned)
+    switch_save = true
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("switch during persist never sends old earnings to new owner", result.state == .OwnerChanged && calls == 0 && TextUntilNul(local_owner[:]) == "alice")
+    Configure(*client)
+    reset_service = true
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("callback reset invalidates reply epoch", result.state == .OwnerChanged && !result.hydrated)
+
+    Configure(*client, true)
+    reply = "{\"status\":\"pending\",\"request\":9}"
+    unused GameProgressClientPump(*client, 0, true)
+    identity = "bob"
+    result = GameProgressClientPump(*client, 1, true)
+    Expect("owner switch while request pending never polls stale ID", result.state == .OwnerChanged && calls == 1)
+    Configure(*client)
+    reply = "{\"status\":\"pending\",\"request\":9}"
+    unused GameProgressClientPump(*client, 0, true)
+    reply = "{\"status\":\"done\",\"request\":8}"
+    result = GameProgressClientPump(*client, 1, true)
+    Expect("wrong request number rejected", result.error == .Malformed && !result.hydrated)
+    Configure(*client)
+    reply = "{\"status\":\"pending\"}"
+    Expect("pending requires provider ID", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"done\",\"status\":\"missing\"}"
+    Expect("duplicate status rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"done\",\"document\":{\"game\":\"wurm\",\"unlocked\":1,\"unlocked\":4,\"completed\":\"\"}}"
+    Expect("duplicate document fields rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"done\",\"document\":{\"game\":\"choano\",\"unlocked\":2,\"completed\":\"1\"}}"
+    Expect("wrong game rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"failed\",\"error\":\"offline\"}"
+    Expect("service failure does not hydrate", GameProgressClientPump(*client, 0, true).error == .Remote && !client.result.hydrated)
+    reply = "{\"status\":\"missing\"}"
+    Expect("failed hydration can retry", GameProgressClientPump(*client, 1, true).hydrated)
+    Configure(*client)
+    client.reply_limit = 4
+    Expect("reply bound enforced", GameProgressClientPump(*client, 0, true).error == .TooLarge)
+    Configure(*client)
+    bad := Seed(GAME_PROGRESS_LIMIT + 1, "")
+    Expect("invalid unlock bounds rejected", GameProgressClientQueue(*client, *bad).error == .Invalid && client.record.unlocked == 2)
+    bad = Seed(1, "x")
+    Expect("invalid completion rejected", GameProgressClientQueue(*client, *bad).error == .Invalid)
+    bad = Seed(1, "")
+    bad.completed[GAME_PROGRESS_LIMIT] = 1
+    Expect("unterminated completion rejected", GameProgressClientQueue(*client, *bad).error == .Invalid)
+    Configure(*client)
+    unused GameProgressClientPump(*client, 0, true)
+    Expect("migration without pending marker becomes nondurable dirty", client.result.dirty && !client.result.durable)
+    reply = "{\"status\":\"done\"}"
+    unused GameProgressClientPump(*client, 1, true)
+    Expect("migration persists pending marker before upload", local_pending && saves == 1 && put_count == 1)
+    fail_save = true
+    result = GameProgressClientPump(*client, 2, true)
+    Expect("failed marker clearing is not acknowledged", result.state == .Failed && result.error == .Persist && !result.durable && local_pending)
+    fail_save = false
+    result = GameProgressClientPump(*client, 3, true)
+    Expect("marker clearing retries without replaying put", result.state == .Acknowledged && !result.dirty && !local_pending && put_count == 1)
+
+    Configure(*client, true)
+    unused GameProgressClientPump(*client, 0, true)
+    switch_service = true
+    reply = "{\"status\":\"done\"}"
+    result = GameProgressClientPump(*client, 1, true)
+    Expect("put completion after owner switch never acknowledges", result.state == .OwnerChanged && saves == 0)
+    Configure(*client, true)
+    unused GameProgressClientPump(*client, 0, true)
+    reply = "{\"status\":\"pending\",\"request\":65}"
+    unused GameProgressClientPump(*client, 1, true)
+    identity = "bob"
+    result = GameProgressClientPump(*client, 2, true)
+    Expect("pending put discarded on owner switch", result.state == .OwnerChanged && calls == 2 && put_count == 1)
+
+    Configure(*client)
+    // Both Bind arguments can live in storage reused by owner().
+    input = Seed(4, "101")
+    unused CopyCString("alice", scratch[:])
+    clobber_input = true
+    unused GameProgressClientBind(*client, TextUntilNul(scratch[:]), *input, true)
+    clobber_input = false
+    Expect("bind copies borrowed owner and record", client.record.unlocked == 4 && TextUntilNul(client.record.completed[:]) == "101")
+    reenter_service = true
+    unused GameProgressClientPump(*client, 0, true)
+    Expect("service callback cannot reenter queue", reentry_busy && client.record.unlocked == 4)
+
+    Configure(*client)
+    client.poll_delay = 10
+    reply = "{\"status\":\"pending\",\"request\":1}"
+    unused GameProgressClientPump(*client, 9223372036854775805, true)
+    unused GameProgressClientPump(*client, 9223372036854775806, true)
+    Expect("poll deadline saturates without overflow", calls == 1)
+    unused GameProgressClientPump(*client, 9223372036854775807, true)
+    Expect("saturated deadline eventually polls", calls == 2)
+    Configure(*client)
+    reply = "{\"status\":\"pending\",\"request\":1.5}"
+    Expect("fractional request rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"mystery\"}"
+    Expect("unknown status rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"done\",\"operation\":\"put\"}"
+    Expect("mismatched operation rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "[]"
+    Expect("nonobject reply rejected", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    reply = "{\"status\":\"done\",\"document\":{\"game\":\"wurm\",\"unlocked\":4097,\"completed\":\"1\"}}"
+    Expect("remote unlock bound enforced", GameProgressClientPump(*client, 0, true).error == .Malformed)
+    Configure(*client)
+    empty: GameProgressClient
+    client.service = empty.service
+    Expect("missing transport reported", GameProgressClientPump(*client, 0, true).error == .Unavailable)
+    Configure(*client)
+    unused GameProgressClientQueue(*client, *earned)
+    client.persist = empty.persist
+    Expect("missing persistence blocks transport", GameProgressClientPump(*client, 0, true).error == .Unavailable && calls == 0)
+
+    Configure(*client)
+    client.poll_delay = 10
+    reply = "{\"status\":\"failed\",\"error\":\"offline\"}"
+    unused GameProgressClientPump(*client, 0, true)
+    result = GameProgressClientPump(*client, 9, true)
+    Expect("backoff preserves failure without service retry", result.state == .Failed && result.error == .Remote && calls == 1)
+    reply = "{\"status\":\"missing\"}"
+    result = GameProgressClientPump(*client, 10, true)
+    Expect("successful retry clears prior error", result.hydrated && result.error == .None && calls == 2)
+    boundary := Seed(GAME_PROGRESS_LIMIT, "")
+    for index: 0..GAME_PROGRESS_LIMIT - 1 { boundary.completed[index] = #char "1" }
+    unused GameProgressClientQueue(*client, *boundary)
+    Expect("maximum earned record accepted", client.record.unlocked == GAME_PROGRESS_LIMIT && TextUntilNul(client.record.completed[:]).count == GAME_PROGRESS_LIMIT)
+
+    // Guest earnings are durable locally; never query/upload an account.
+    Configure(*client)
+    identity = ""
+    unused GameProgressClientBind(*client, "", *seed, false)
+    unused GameProgressClientQueue(*client, *earned)
+    result = GameProgressClientPump(*client, 0, true)
+    Expect("guest stays local", result.durable && result.dirty && !result.hydrated && calls == 0 && TextUntilNul(local_owner[:]) == "")
+    Expect("service name remains entity.records", !wrong_service)
+    GameProgressClientReset(*client)
+    if failures != 0 { print("% progress client failures\n", failures); return 1 }
+    print("Game progress client local tests passed\n")
+    return 0
+}

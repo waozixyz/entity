@@ -1,0 +1,285 @@
+// Owner-bound earned progress. Providers own transport; games own local schemas.
+#import "game_progress"
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/vec"
+
+GAME_PROGRESS_CLIENT_OWNER_MAX :: 128
+GAME_PROGRESS_CLIENT_REPLY_MAX :: 32768
+// The adapter must route each invocation to the owner verified immediately
+// before it, and keep pending request IDs owner-scoped. An owner transition
+// inside a service must cancel/reject old work, never reroute it to a new user.
+GameProgressClientService :: #type (context: *void, service: string, request: string) -> string;
+GameProgressClientOwner :: #type (context: *void) -> string;
+// Atomically persist the owner-scoped earned record AND pending marker. Return
+// true only after durable storage. Never infer network sync from pending=false.
+// Arguments are borrowed for this call only; the owner may be empty (guest).
+GameProgressClientPersist :: #type (context: *void, owner: string, record: *GameProgressRecord, pending: bool) -> bool;
+GameProgressClientState :: enum { Idle; Pending; Ready; Acknowledged; Failed; OwnerChanged; }
+GameProgressClientError :: enum { None; Busy; Invalid; Unavailable; Persist; Malformed; TooLarge; Remote; }
+GameProgressClientResult :: struct {
+    state: GameProgressClientState
+    error: GameProgressClientError
+    request: s32
+    hydrated: bool
+    dirty: bool
+    durable: bool
+}
+GameProgressClient :: struct {
+    context: *void
+    service: GameProgressClientService
+    owner: GameProgressClientOwner
+    persist: GameProgressClientPersist
+    // Milliseconds; zero defaults to 1000/5000, negative means no delay.
+    poll_delay: s64
+    read_delay: s64
+    // Zero selects the hard maximum; positive values can lower it.
+    reply_limit: s64
+    result: GameProgressClientResult
+    // Private lifecycle storage: do not copy/mutate an active client.
+    record: GameProgressRecord
+    sent_record: GameProgressRecord
+    owner_bytes: [GAME_PROGRESS_CLIENT_OWNER_MAX]u8
+    owner_length: s64
+    bound: bool
+    calling: bool
+    epoch: u64
+    operation: s32 // 0 idle, 1 get, 2 put
+    next_poll: s64
+    next_read: s64
+    ack_pending: bool
+}
+
+GameProgressClientReset :: (client: *GameProgressClient) {
+    client.epoch += 1
+    client.bound = false
+    client.record = .{}
+    client.sent_record = .{}
+    client.owner_length = 0
+    client.operation = 0
+    client.next_poll = 0
+    client.next_read = 0
+    client.ack_pending = false
+    client.result = .{}
+    client.result.request = -1
+}
+
+// Seed only this owner's earned/migrated progress. Never pass a device resume
+// snapshot belonging to a previous owner. Reset on logout/relogin, even if the
+// public identity is unchanged. Bind copies inputs before invoking callbacks.
+GameProgressClientBind :: (client: *GameProgressClient, owner: string,
+    record: *GameProgressRecord, pending: bool) -> GameProgressClientResult {
+    if client.calling { return Busy(client) }
+    saved := record.*
+    identity: [GAME_PROGRESS_CLIENT_OWNER_MAX]u8
+    if owner.count > GAME_PROGRESS_CLIENT_OWNER_MAX || !Valid(*saved) { return Fail(client, .Invalid) }
+    for byte, index: owner { identity[index] = byte }
+    length := cast(s64)owner.count
+    GameProgressClientReset(client)
+    client.owner_bytes = identity
+    client.owner_length = length
+    client.record = saved
+    client.bound = true
+    client.result.dirty = pending
+    // Seed was loaded from durable storage by the caller.
+    client.result.durable = true
+    client.result.state = .Pending
+    if !Matches(client) { return Changed(client) }
+    return client.result
+}
+
+// Queue copies and merges earnings; Pending is NOT a durable acknowledgement.
+// Pump retries persistence until durable=true. Busy callbacks cannot reenter.
+GameProgressClientQueue :: (client: *GameProgressClient, earned: *GameProgressRecord) -> GameProgressClientResult {
+    if client.calling { return Busy(client) }
+    saved := earned.*
+    if !client.bound || !Valid(*saved) || TextUntilNul(saved.game[:]) != TextUntilNul(client.record.game[:]) {
+        return Fail(client, .Invalid)
+    }
+    if !Matches(client) { return Changed(client) }
+    before := client.record
+    unused GameProgressMerge(*client.record, *saved)
+    if !GameProgressSame(*before, *client.record) {
+        client.result.dirty = true
+        client.result.durable = false
+        client.result.state = .Pending
+        client.result.error = .None
+    }
+    return client.result
+}
+
+// Copies into caller storage only while the binding is current.
+GameProgressClientRead :: (client: *GameProgressClient, output: *GameProgressRecord) -> bool {
+    if client.calling || !client.bound { return false }
+    if !Matches(client) { unused Changed(client); return false }
+    output.* = client.record
+    return true
+}
+
+// At most one service call. Read and read-status polling can be suppressed
+// during active play. Owner checks and local persistence still happen then.
+GameProgressClientPump :: (client: *GameProgressClient, now: s64, allow_read: bool) -> GameProgressClientResult {
+    if client.calling || !client.bound { return client.result }
+    if !Matches(client) { return Changed(client) }
+    if client.ack_pending {
+        client.result.dirty = !GameProgressSame(*client.record, *client.sent_record)
+        client.result.durable = false
+    }
+    if !client.result.durable {
+        snapshot := client.record
+        epoch := client.epoch
+        if client.persist == null { return Fail(client, .Unavailable) }
+        client.calling = true
+        saved := client.persist(client.context, TextView(client.owner_bytes[:client.owner_length]), *snapshot, client.result.dirty)
+        client.calling = false
+        if epoch != client.epoch || !Matches(client) { return Changed(client) }
+        if !saved { return Fail(client, .Persist) }
+        client.result.durable = true
+        client.result.error = .None
+        if client.ack_pending {
+            client.ack_pending = false
+            client.result.state = .Acknowledged
+            return client.result
+        }
+    }
+    if client.owner_length == 0 { client.result.state = .Ready; client.result.error = .None; return client.result }
+    if now < client.next_poll { return client.result }
+    if client.operation == 1 && !allow_read { return client.result }
+    if client.operation == 0 {
+        if !client.result.hydrated || (!client.result.dirty && now >= client.next_read) {
+            if !allow_read { return client.result }
+            client.operation = 1
+        } else if client.result.dirty { client.operation = 2; client.sent_record = client.record }
+        else { client.result.state = .Ready; client.result.error = .None; return client.result }
+    }
+    if client.service == null { return WireFail(client, .Unavailable, now) }
+    request: Vec(u8)
+    if client.result.request >= 0 { BuilderPrint(*request, "{\"operation\":\"status\",\"request\":%}", client.result.request) }
+    else if client.operation == 1 { GameProgressGetRequest(TextUntilNul(client.record.game[:]), *request) }
+    else { GameProgressPutRequest(*client.sent_record, *request) }
+    epoch := client.epoch
+    client.result.error = .None
+    client.calling = true
+    reply := client.service(client.context, "entity.records", TextView(VecSlice(request, 0, request.count)))
+    // Copy borrowed response BEFORE owner() can overwrite shared host scratch.
+    limit := client.reply_limit
+    if limit <= 0 || limit > GAME_PROGRESS_CLIENT_REPLY_MAX { limit = GAME_PROGRESS_CLIENT_REPLY_MAX }
+    oversized := cast(s64)reply.count > limit
+    kept: Vec(u8)
+    if !oversized { BuilderPrint(*kept, "%", reply) }
+    client.calling = false
+    if epoch != client.epoch || !Matches(client) { return Changed(client) }
+    if oversized { return WireFail(client, .TooLarge, now) }
+    text := TextView(VecSlice(kept, 0, kept.count))
+    doc: JsonDocument
+    if !JsonRead(*doc, text) || JsonKindOf(*doc, doc.root) != .Object || !Unique(*doc, doc.root) {
+        return WireFail(client, .Malformed, now)
+    }
+    number_at := JsonMember(*doc, doc.root, "request")
+    number, valid := JsonInteger(*doc, number_at)
+    if number_at >= 0 && (!valid || number < 0 || number >= 2147483647 ||
+        (client.result.request >= 0 && number != client.result.request)) { return WireFail(client, .Malformed, now) }
+    op := JsonMember(*doc, doc.root, "operation")
+    if op >= 0 && !JsonIs(*doc, op, ifx client.operation == 1 then "get" else "put") {
+        return WireFail(client, .Malformed, now)
+    }
+    status := JsonMember(*doc, doc.root, "status")
+    error := JsonMember(*doc, doc.root, "error")
+    if JsonIs(*doc, status, "pending") {
+        if error >= 0 || (client.result.request < 0 && number_at < 0) { return WireFail(client, .Malformed, now) }
+        if client.result.request < 0 { client.result.request = cast(s32)number }
+        client.next_poll = Deadline(now, client.poll_delay, 1000)
+        client.result.state = .Pending
+        return client.result
+    }
+    missing := JsonIs(*doc, status, "missing") && client.operation == 1
+    if !missing && !JsonIs(*doc, status, "done") {
+        if JsonIs(*doc, status, "failed") || JsonIs(*doc, status, "rejected") || JsonIs(*doc, status, "unavailable") {
+            if error >= 0 && JsonKindOf(*doc, error) != .String { return WireFail(client, .Malformed, now) }
+            return WireFail(client, .Remote, now)
+        }
+        return WireFail(client, .Malformed, now)
+    }
+    if error >= 0 { return WireFail(client, .Malformed, now) }
+    if client.operation == 1 {
+        remote: GameProgressRecord
+        remote.game = client.record.game
+        remote.unlocked = 1
+        if !missing {
+            at := JsonMember(*doc, doc.root, "document")
+            if !Unique(*doc, at) || !GameProgressReply(text, *remote) ||
+            TextUntilNul(remote.game[:]) != TextUntilNul(client.record.game[:]) { return WireFail(client, .Malformed, now) }
+        }
+        before := client.record
+        was_dirty := client.result.dirty
+        unused GameProgressMerge(*client.record, *remote)
+        client.result.dirty = client.result.dirty || !GameProgressSame(*client.record, *remote)
+        if !GameProgressSame(*before, *client.record) || was_dirty != client.result.dirty { client.result.durable = false }
+        client.result.hydrated = true
+        client.next_read = Deadline(now, client.read_delay, 5000)
+    } else {
+        // Provider 'done' establishes service storage only, never remote sync.
+        client.ack_pending = true
+    }
+    client.operation = 0
+    client.result.request = -1
+    client.next_poll = 0
+    client.result.state = .Pending
+    return client.result
+}
+
+#scope_file
+Matches :: (client: *GameProgressClient) -> bool {
+    if client.owner == null { return false }
+    epoch := client.epoch
+    client.calling = true
+    matches := client.owner(client.context) == TextView(client.owner_bytes[:client.owner_length])
+    client.calling = false
+    return matches && epoch == client.epoch && client.bound
+}
+Changed :: (client: *GameProgressClient) -> GameProgressClientResult {
+    GameProgressClientReset(client)
+    client.result.state = .OwnerChanged
+    return client.result
+}
+Busy :: (client: *GameProgressClient) -> GameProgressClientResult {
+    result := client.result
+    result.error = .Busy
+    return result
+}
+Fail :: (client: *GameProgressClient, error: GameProgressClientError) -> GameProgressClientResult {
+    client.result.state = .Failed
+    client.result.error = error
+    return client.result
+}
+WireFail :: (client: *GameProgressClient, error: GameProgressClientError, now: s64) -> GameProgressClientResult {
+    client.operation = 0
+    client.result.request = -1
+    client.next_poll = Deadline(now, client.poll_delay, 1000)
+    return Fail(client, error)
+}
+Deadline :: (now: s64, delay: s64, fallback: s64) -> s64 {
+    value := ifx delay == 0 then fallback else ifx delay < 0 then 0 else delay
+    return ifx now > 9223372036854775807 - value then 9223372036854775807 else now + value
+}
+Valid :: (record: *GameProgressRecord) -> bool {
+    if record.game[96] != 0 || record.completed[GAME_PROGRESS_LIMIT] != 0 ||
+    !GameProgressGameValid(TextUntilNul(record.game[:])) || record.unlocked < 1 || record.unlocked > GAME_PROGRESS_LIMIT ||
+    record.updated_at < 0 || record.updated_at > 9007199254740991 { return false }
+    for byte: TextUntilNul(record.completed[:]) { if byte != #char "0" && byte != #char "1" { return false } }
+    return true
+}
+// Reject duplicate keys in envelopes and earned documents.
+Unique :: (doc: *JsonDocument, object: s32) -> bool {
+    if JsonKindOf(doc, object) != .Object { return false }
+    left := JsonFirst(doc, object)
+    while left >= 0 {
+        right := JsonNext(doc, left)
+        while right >= 0 {
+            if doc.nodes[left].key == doc.nodes[right].key { return false }
+            right = JsonNext(doc, right)
+        }
+        left = JsonNext(doc, left)
+    }
+    return true
+}

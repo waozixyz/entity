@@ -239,14 +239,54 @@ that record with `{"operation":"get","kind":"game-progress","game":NAME}`;
 they do not implement record IDs or account cryptography.
 
 A document contains `game`, `unlocked` (1–4096), a `completed` string of up to
-4096 zero/one marks, an opaque `state` string (up to 8192 bytes), and
-`updated_at`. Unlocks take the maximum and completion marks are combined;
-the position from the furthest unlocked campaign wins, with the newer record
-revision breaking ties. A fresh installation downloads account progress before
-uploading its local save. These rules apply both when
-saving locally and when receiving another device's record, including an
-older reply that carries a newly earned completion. Games migrate their old
-saves into this record and keep those saves until the account confirms sync.
+4096 zero/one marks, and `updated_at`. Unlocks take the maximum and completion
+marks are combined, including newly discovered marks in older replies. Legacy
+`state` fields are ignored and never serialized: unfinished boards, positions,
+lives, scores and run state remain device data.
+
+`entity/game_progress_client` supplies the reusable owner-bound lifecycle:
+
+- Configure `service(context, service, request) -> string` and
+  `owner(context) -> string`, matching the collection client's host convention.
+  The owner is a verified public identity, never an account key. The service
+  adapter must keep requests bound to that identity through account transitions.
+- Supply `persist(context, owner, record, pending) -> bool`. It must durably save
+  the earned record and pending marker together in the caller's own schema and
+  owner namespace. It must not navigate, switch profiles or publish run state.
+- `GameProgressClientBind(client, owner, record, pending)` copies this owner's
+  already durable earned save, including caller-selected legacy migration data.
+  Empty owner means guest: persistence runs locally with no account service.
+  Never seed a new account with the previous owner's device campaign.
+- `GameProgressClientQueue(client, earned)` copies and monotonically merges only
+  earnings selected by the game. Its result is pending until Pump persists them;
+  callers must wait for `durable=true` before acknowledging local earnings.
+- `GameProgressClientPump(client, now, allow_read)` takes monotonic milliseconds,
+  persists pending earnings before upload, hydrates before the first put, and
+  polls exact provider request IDs. `allow_read=false` defers gets and their
+  status polls during active play; persistence and hydrated puts still proceed.
+  Zero poll/read delays select 1000/5000 ms; negative delays disable waiting.
+- `GameProgressClientRead(client, output)` copies the merged earned snapshot for
+  caller-controlled adoption. `Reset` drops the binding and any request interest;
+  call it on logout/relogin even for the same identity. Owner changes return
+  `OwnerChanged` and require an explicit new Bind with that owner's local save.
+
+The result exposes `state`, `error`, provider `request`, `hydrated`, `dirty`, and
+`durable`. `Acknowledged` means a provider put returned done and its pending
+marker was durably updated locally. It does **not** mean remote account sync;
+legacy-copy retirement must still use the provider's actual sync evidence.
+Earnings queued while a put is pending stay dirty after its acknowledgement.
+Failed persistence is retried without issuing an upload or advertising a durable
+acknowledgement. Failed service attempts retain earnings and retry with the poll
+delay; only a valid done/missing read establishes hydration. Replies are bounded
+(default/hard maximum 32768 bytes); `reply_limit` may lower that limit.
+Callbacks are synchronous and must not reenter the client. Borrowed input and
+reply storage is copied before subsequent callbacks can overwrite host scratch.
+
+Game integrations remain responsible for their publication policy (Shovey wins,
+Wurm completions and migrated unlocks, Choano growth stages), local resume and
+reward schemas, and when/how to adopt a hydrated snapshot. No consumer migration
+is included in this module. Run `make -j1 game-progress-client-test` for the same
+fake-host lifecycle cases through native source and portable `.zx` execution.
 
 Older Shovey saves can retain earned reward eligibility during the node's
 security upgrade. After an eligibility refusal, the native provider attempts
