@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Own native Profile, runtime and cryptography artifacts through the generic Ziran package API, with explicit platform and edition selection.
+
 - Share owner-bound reward claim polling and validated credited/already-claimed results without replaying uncertain claims.
 - Share earned-progress hydration, owner isolation, durable pending saves and service acknowledgement across games.
 - Share one owner-bound collection client across games, with bounded replies, typed outcomes and configurable status polling.

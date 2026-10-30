@@ -183,6 +183,16 @@ game-progress-client-test:
 
 test: game-progress-client-test
 
+# Dependency-owned native artifacts: keep stdout for the generic descriptor.
+build/bin/artifacts: tools/artifacts.zi ziran.lock artifact-tool-force
+	mkdir -p build/bin
+	CC=cc CFLAGS=-O2 LDFLAGS= LDLIBS=-lcrypto taskset -c $$(python3 -c 'import os; print(min(os.sched_getaffinity(0)))') $(or $(ZIRAN_DIR),$(ZIRAN_ROOT))/build/bin/zi2c --exe --root tools --module-path $(or $(ZIRAN_DIR),$(ZIRAN_ROOT))/cmd --module-path $(or $(ZIRAN_DIR),$(ZIRAN_ROOT))/std --entry artifacts:main -o build/bin tools/artifacts.zi
+
+.PHONY: artifact-test artifact-tool-force
+artifact-tool-force:
+artifact-test:
+	python3 tests/native_artifacts.py
+
 .PHONY: game-reward-client-test
 game-reward-client-test:
 	ZIRAN_BIN=$(ZIRAN) python3 scripts/game_reward_client_test.py

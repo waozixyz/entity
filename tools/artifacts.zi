@@ -1,0 +1,173 @@
+// Entity owns the native host graph. No account operations run in this tool.
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "package_common"
+#import "package_lock"
+#import "package_manifest"
+#import "std/file"
+#import "std/file_tree_linux"
+#import "std/text_tools"
+#import "std/format"
+root: string;
+project: string;
+stage: string;
+compiler: string;
+cc: string;
+ar: string;
+edition: string;
+platform: string;
+web: bool;
+android: bool;
+ndk: string;
+abi: string;
+graph: *PkgLock;
+provider: s32;
+Step :: (a: string, b: string = "", c: string = "", d: string = "", e: string = "", f: string = "", g: string = "", h: string = "", i: string = "", j: string = "", k: string = "", l: string = "", m: string = "", n: string = "", o: string = "", p: string = "", q: string = "", r: string = "") -> bool {
+    all: [18]string = .[a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r]
+    args: Vec(string)
+    for all { if it.count > 0 { VecPush(args, it) } }
+    code := PkgRunToStderr(VecSlice(args, 0, args.count), project)
+    if code != 0 { PkgPrint(PkgJoin("failed command: ", a), true) }
+    return code == 0
+}
+FindPackage :: (owner: s32, name: string, depth: s32) -> s32 {
+    if depth > 64 { return -2 }
+    item := *graph.packages[owner]
+    direct := PkgFindById(graph, PkgEdgeValue(*item.edges[0], item.edge_count, name))
+    if direct >= 0 { return direct }
+    found: s32 = -1
+    for index: 0..item.edge_count - 1 {
+        child := PkgFindById(graph, item.edges[index].value)
+        if child < 0 { return -2 }
+        candidate := FindPackage(child, name, depth + 1)
+        if candidate == -2 { return -2 }
+        if candidate >= 0 {
+            if found >= 0 && found != candidate { return -2 }
+            found = candidate
+        }
+    }
+    return found
+}
+Package :: (name: string) -> string {
+    selected := FindPackage(provider, name, 0)
+    if selected < 0 { PkgFail(PkgJoin("missing or ambiguous provider dependency: ", name)); return "" }
+    return PkgJoin(graph.packages[selected].path, "")
+}
+Out :: (name: string) -> string { return JoinPath(stage, name) }
+Flag :: (prefix: string, value: string) -> string { return PkgJoin(prefix, value) }
+Option :: (name: string, fallback: string) -> string {
+    file := PkgRead(PkgGetenv("ZIRAN_TOOL_OPTIONS"))
+    lines := TextSplit(file.text, "\n")
+    for lines { if TextHasPrefix(it, PkgJoin(name, "=")) { return PkgJoin(it[name.count + 1:it.count], "") } }
+    return fallback
+}
+Walk :: (folder: string, suffix: string, files: *Vec(string)) {
+    names: Vec(string)
+    if !ListDirectory(folder, *names) { return }
+    for names {
+        path := JoinPath(folder, it)
+        if IsDirectory(path) { Walk(path, suffix, files) }
+        else if TextHasSuffix(path, suffix) { VecPush(files.*, path) }
+    }
+}
+Archive :: (generated: string, output: string, include: string = "") -> bool {
+    files: Vec(string)
+    Walk(generated, ".c", *files)
+    for index: 0..files.count - 1 {
+        path := Out(PkgJoin(PkgDigest(files[index][generated.count:]), ".o"))
+        if !Step(cc, "-std=c11", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections", "-I", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "include"), "-I", generated, include, ifx web then "-sUSE_ZLIB=1" else "", "-c", files[index], "-o", path) { return false }
+        if !Step(ar, "rcs", output, path) { return false }
+        if !RemoveFile(path) { return false }
+    }
+    return files.count > 0
+}
+LinkText :: (profile: bool) -> string {
+    if web { return ifx profile then "js-library\tziran_web.js\nembed\tentity.zx@/entity.zx\nembed\tfont.ttf@/kryon-font.ttf\n" else "flag\t-sUSE_ZLIB=1\nflag\t-sASYNCIFY\nflag\t-sALLOW_MEMORY_GROWTH=1\nflag\t-sFORCE_FILESYSTEM=1\nflag\t-lidbfs.js\n" }
+    if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\n" }
+    return ifx profile then "pkg-config\tsdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0\nlibrary\t-lX11\n" else "library\t-l:libcurl.so.4\nlibrary\t-lm\nlibrary\t-lpthread\nlibrary\t-lz\nlibrary\t-ldl\n"
+}
+Crypto :: () -> bool {
+    oqs := Package("liboqs"); mono := Package("monocypher")
+    if oqs.count == 0 || mono.count == 0 { return false }
+    build := Out("oqs")
+    toolchain := ifx web then JoinPath(PathParent(cc), "cmake/Modules/Platform/Emscripten.cmake") else ifx android then JoinPath(ndk, "build/cmake/android.toolchain.cmake") else ""
+    if !Step("cmake", "-S", oqs, "-B", build, "-DCMAKE_BUILD_TYPE=MinSizeRel", "-DBUILD_SHARED_LIBS=OFF", "-DOQS_BUILD_ONLY_LIB=ON", "-DOQS_USE_OPENSSL=OFF", "-DOQS_DIST_BUILD=OFF", "-DOQS_OPT_TARGET=generic", "-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44", Flag("-DCMAKE_C_COMPILER=", cc), "-DCMAKE_POSITION_INDEPENDENT_CODE=ON", ifx toolchain.count > 0 then Flag("-DCMAKE_TOOLCHAIN_FILE=", toolchain) else "", ifx android then Flag("-DANDROID_ABI=", abi) else "", ifx android then "-DANDROID_PLATFORM=android-24" else "") { return false }
+    if !Step("cmake", "--build", build, "--target", "oqs", "-j1") || !CopyFile(JoinPath(build, "lib/liboqs.a"), Out("liboqs.a")) { return false }
+    generated := Out("mono")
+    if !CreateDirectories(generated) || !CopyFile(JoinPath(mono, "src/monocypher.c"), JoinPath(generated, "monocypher.c")) || !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.c"), JoinPath(generated, "ed25519.c")) { return false }
+    if !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.h"), JoinPath(generated, "monocypher-ed25519.h")) || !Archive(generated, Out("libmonocypher.a"), Flag("-I", JoinPath(mono, "src"))) { return false }
+    runtime := Out("runtime")
+    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "BOOTSTRAP=1", Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
+    return CopyFile(JoinPath(runtime, "libziran.a"), Out("libziran.a")) && PkgWrite(Out("link.txt"), LinkText(false))
+}
+Profile :: () -> bool {
+    // The generic driver has already built and verified this requirement.
+    deps := PkgRead(PkgGetenv("ZIRAN_ARTIFACT_DEPENDENCIES"))
+    if !deps.valid || !TextHasPrefix(deps.text, "self:native-crypto\t") { return false }
+    generated := Out("generated")
+    define := ifx edition == "play" then "GOOGLE_PLAY" else ifx edition == "fdroid" then "FDROID" else "ENTITY_DIRECT"
+    // Generate Entity as the root module so the public native header/symbol names
+    // do not depend on a consumer's package alias or lock ID. All dependency
+    // roots still come from that consumer's resolved, keyed package graph.
+    native: Vec(string)
+    start: [10]string = .["env", "-u", "ZIRAN_PACKAGE_MAP", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2c"), "--root", root, "--define", ifx web then "PLATFORM_WEB" else ifx android then "PLATFORM_ANDROID" else "PLATFORM_DESKTOP", "--define", define]
+    for start { VecPush(native, it) }
+    kryon_root := Package("kryon"); daochi := Package("daochi_client")
+    modules: [11]string = .[JoinPath(root, "src"), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "std"), Flag("kryon=", JoinPath(kryon_root, "src/backend")), JoinPath(kryon_root, "src/backend"), Flag("kryon=", JoinPath(kryon_root, "src/ui")), JoinPath(kryon_root, "src/ui"), Flag("daochi_client=", daochi), daochi, Flag("crypto=", JoinPath(Package("crypto"), "src")), Flag("oqs=", JoinPath(Package("oqs"), "src")), Flag("qrcode=", JoinPath(Package("qrcode"), "src"))]
+    for modules { VecPush(native, "--module-path"); VecPush(native, it) }
+    VecPush(native, "-o"); VecPush(native, generated); VecPush(native, JoinPath(root, "src/native_host.zi"))
+    if PkgRunToStderr(VecSlice(native, 0, native.count), project) != 0 { return false }
+    if !Archive(generated, Out("libentity.a")) { return false }
+    headers: Vec(string)
+    Walk(generated, ".c", *headers)
+    for headers { if !RemoveFile(it) { return false } }
+    if !Step("cp", "-r", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "include"), JoinPath(generated, "ziran")) { return false }
+    if !Step("tar", "-cf", Out("headers.tar"), "-C", generated, ".") { return false }
+    if !CopyFile(JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "web/ziran_web.js"), Out("ziran_web.js")) { return false }
+    if !CopyFile(JoinPath(Package("kryon"), "assets/fonts/LiberationSans-Regular.ttf"), Out("font.ttf")) { return false }
+    // Use the existing Profile recipe and asset embedding, with private output.
+    kryon := Package("kryon"); qr := Package("qrcode")
+    args: Vec(string)
+    initial: [8]string = .["env", "-u", "ZIRAN_PACKAGE_MAP", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2zx"), "bundle", "--root", root, "--module-path"]
+    for initial { VecPush(args, it) }
+    VecPush(args, JoinPath(root, "src"))
+    paths: [5]string = .[Flag("kryon=", JoinPath(kryon, "src/backend")), Flag("kryon=", JoinPath(kryon, "src/ui")), JoinPath(kryon, "src/ui"), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "std"), Flag("qrcode=", JoinPath(qr, "src"))]
+    for paths { VecPush(args, "--module-path"); VecPush(args, it) }
+    rest: [11]string = .["--define", "KRYON_HOSTED_UI", "--asset-dir", Flag("assets=", JoinPath(root, "assets")), "--entry", "entity:Main", "-o", Out("entity.zx"), JoinPath(root, "src/entity.zi"), "", ""]
+    for rest { if it.count > 0 { VecPush(args, it) } }
+    return PkgRunToStderr(VecSlice(args, 0, args.count), project) == 0 && PkgWrite(Out("link.txt"), LinkText(true))
+}
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 7 || TextFromCString(argv[1]) != "artifact" || TextFromCString(argv[3]) != "--platform" || TextFromCString(argv[5]) != "--output" { return PkgFail("expected artifact NAME --platform OS-ARCH-ABI --output STAGE") }
+    target := TextFromCString(argv[4])
+    web = target == "emscripten-wasm32-emscripten"
+    android = target == "android-aarch64-bionic" || target == "android-armv7-bionic"
+    platform = target
+    abi = ifx target == "android-aarch64-bionic" then "arm64-v8a" else "armeabi-v7a"
+    if target != "linux-x86_64-gnu" && !web && !android { return PkgFail("unsupported Entity native platform") }
+    root = PkgGetenv("ZIRAN_PACKAGE_ROOT"); project = PkgGetenv("ZIRAN_PROJECT_ROOT"); if project.count == 0 { project = root }; stage = TextFromCString(argv[6])
+    compiler = JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/ziran")
+    graph = PkgNewLock()
+    current := PkgNewManifest()
+    if graph == null || current == null || !PkgReadLock(JoinPath(project, "ziran.lock"), graph) || !PkgCheckoutGraph(project, graph, true, false, current) { return PkgFail("cannot read the resolved consumer package graph") }
+    provider = PkgFindById(graph, PkgGetenv("ZIRAN_PACKAGE_ID"))
+    if provider < 0 { return PkgFail("provider is absent from the resolved consumer package graph") }
+    cc = PkgGetenv("CC"); if cc.count == 0 { cc = "cc" }
+    ar = PkgGetenv("AR"); if ar.count == 0 { ar = ifx web then JoinPath(PathParent(cc), "emar") else ifx android then JoinPath(PathParent(cc), "llvm-ar") else "ar" }
+    ndk = Option("ndk", "")
+    if android && ndk.count == 0 { return PkgFail("Android requires the keyed ndk package option and CC for API 24") }
+    if (web || android) && !TextHasPrefix(cc, "/") { return PkgFail("cross builds require an absolute CC toolchain executable") }
+    edition = Option("edition", "direct")
+    if edition != "direct" && edition != "fdroid" && edition != "play" { return PkgFail("edition must be direct, fdroid or play") }
+    args: [2]string = .[cc, "-dumpmachine"]
+    machine := PkgCapture(args[:], project)
+    expected := ifx web then "wasm32-unknown-emscripten" else ifx android then ifx abi == "arm64-v8a" then "aarch64-unknown-linux-android24" else "armv7a-unknown-linux-android24" else "x86_64-linux-gnu"
+    if machine.code != 0 || (PkgTrim(machine.text) != expected && (web || android || !TextHasPrefix(machine.text, "x86_64-") || TextFind(machine.text, "linux-gnu") < 0)) { return PkgFail("CC target does not match the requested native ABI (Android requires API 24)") }
+    name := TextFromCString(argv[2])
+    ok := ifx name == "native-crypto" then Crypto() else ifx name == "native-profile" then Profile() else false
+    if ok {
+        folders: [4]string = .["oqs", "mono", "runtime", "generated"]
+        for folders { unused RemoveTree(Out(it)) }
+    }
+    return ifx ok then 0 else PkgFail("Entity artifact recipe failed")
+}

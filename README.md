@@ -392,3 +392,61 @@ Run `env -u DISPLAY -u WAYLAND_DISPLAY make -j1 game-reward-client-test` for nat
 source-to-portable VM and saved-IR-to-portable VM fake-host lifecycle tests, plus
 the dependency's existing reward wire/model fixture. All scratch stays in ignored
 `work/reward-client`; no accounts or provider network are used.
+
+## Native package artifacts
+
+Entity's Ziran project tool (`tools/artifacts.zi`) owns the native Profile and
+account cryptography build graph. Consumers request the generic package API:
+
+```sh
+ziran pkg artifact entity:native-profile --platform linux-x86_64-gnu --locked
+ziran pkg artifact entity:native-crypto --platform linux-x86_64-gnu --locked
+```
+
+Each command prints one absolute `artifact.tsv` path. Resolve its declared output
+paths beside that descriptor and verify the recorded SHA-256 values. The Profile
+artifact's `dependencies.tsv` maps `self:native-crypto` to its crypto descriptor;
+follow that edge rather than discovering package sources or rebuilding libraries.
+
+`native-profile` supplies `libentity.a`, `headers.tar`, `entity.zx`, `font.ttf`,
+`ziran_web.js` and `link.txt`. Extract the generated headers into a private build
+folder and add that folder and its `ziran/` child as include paths. C hosts include
+`src/native_host.h` and use its generated declarations (for example,
+`native_host_EntityHostProfileSections`). The archive contains the complete
+Entity native-host graph, including its generated dependency objects; do not
+compile another copy of that graph into the same host. `entity.zx` already embeds
+Entity's picture assets. Hosts retain the current bundle lifecycle, private
+account directory, service adapters and account isolation described above.
+
+`native-crypto` supplies `libmonocypher.a`, `liboqs.a` (ML-DSA-44 only),
+`libziran.a` and `link.txt`. Link the host archive before those support archives.
+`link.txt` is TSV: `pkg-config` rows name packages to query, `library` and `flag`
+rows supply individual linker arguments. Browser `js-library` and `embed` rows
+name descriptor-relative support files and virtual asset destinations.
+These are compiler-version-specific C ABI artifacts, not a stable binary SDK.
+No application main, account keys or app-specific collection is packaged.
+
+Consumer variation belongs in the package options, for example:
+
+```toml
+[tool.entity]
+edition = "fdroid" # direct (default), fdroid, play
+```
+
+The native target is independent of `--target=c`, the language backend. Cross
+builds require an absolute `CC` executable and matching `AR` (or the sibling
+`emar`/`llvm-ar`). Supported cross targets are
+`emscripten-wasm32-emscripten`, `android-aarch64-bionic` and
+`android-armv7-bionic`. Android requires API 24 compiler drivers and a keyed
+`ndk` option pointing at the NDK root. Unsupported targets, mismatched compiler
+ABIs and unknown editions fail before compiling. These recipes produce support
+archives and assets; packaging an APK or a web application remains the host's job.
+
+The driver keys the resolved dependency graph, explicit recipe files, compiler,
+target, native flags, options and prerequisite descriptors. Dirty graph checkouts
+produce isolated artifacts. Two clean consumers share one verified artifact.
+`make -j1 artifact-test` requires that clean graph and links/runs two synthetic
+C consumers without accounts or a display. For development,
+`python3 tests/native_artifacts.py --dirty` explicitly tests isolation instead;
+it does not certify clean reuse. Later game migrations consume these outputs;
+this change does not alter any game's build or account policy.
