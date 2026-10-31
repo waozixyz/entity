@@ -9,7 +9,7 @@ ref = "master"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "6113d3a7d3776e775ac490ceb7a806be734840f5"
+ref = "a02feeb703192f1481e72160b1ccff401d17ef9d"
 module_aliases = { FileDialogLinux = "file_dialog_linux" }
 
 [exports]
@@ -54,7 +54,7 @@ ref = "master"
 
 [dependencies.daochi_client]
 git = "https://github.com/ziranlang/daochi-client.git"
-ref = "master"
+ref = "970d5e44b1702158cb16469892da6ff50f142427"
 
 [dependencies.monocypher]
 git = "https://github.com/LoupVaillant/Monocypher.git"
