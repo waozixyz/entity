@@ -57,19 +57,11 @@ DewPlayContains :: (text: string, part: string) -> bool {
     return false
 }
 
-DewPlayAccountID :: (accountID: string) -> bool {
-    if accountID.count != 64 { return false }
-    for byte: accountID {
-        if !((byte >= #char "a" && byte <= #char "f") || (byte >= #char "0" && byte <= #char "9")) { return false }
-    }
-    return true
-}
-
 // Opens Play's purchase sheet for one Dew pack.
-DewPlayBuy :: (play: *DewPlay, id: string, accountID: string) -> bool {
-    if !play.enabled || !DewPlayProduct(id) || !DewPlayAccountID(accountID) { return false }
+DewPlayBuy :: (play: *DewPlay, id: string) -> bool {
+    if !play.enabled || !DewPlayProduct(id) { return false }
     play.status = .{}
-    unused PlayBillingBuy(id, accountID, play.state[:])
+    unused PlayBillingBuy(id, play.state[:])
     play.wait = 0
     return true
 }
