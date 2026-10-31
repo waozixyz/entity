@@ -1,0 +1,12 @@
+#import "asset_presence"
+#program_export
+Check :: (bundle: *void, optional: bool) -> s32 {
+    if !EntityAssetPresent(bundle, "assets/entity/pfp.png") { return 1 }
+    if EntityAssetPresent(bundle, "assets/entity/wurm-base.png") != optional { return 2 }
+    paths: [5]string = .["", "/etc/passwd", "assets/entity/../pfp.png", "assets/entity/sub/pfp.png", "assets/entity/unknown.png"]
+    for path: paths {
+        if EntityAssetPresent(bundle, path) { return 3 }
+    }
+    if EntityAssetPresent(null, "assets/entity/pfp.png") { return 4 }
+    return 0
+}

@@ -36,6 +36,14 @@ The optional `entity.assets` service supplies an absolute extracted asset root t
 hosts that need one. Other hosts use the bundle-relative `assets/entity/` paths.
 The picture atlas comes from Kryon and the flower picture from Inner Breeze.
 
+Embedding hosts may stage `asset-groups.json` through
+`scripts/stage-assets.py --group profile --output HOST_STAGING`. The `profile`
+group keeps ordinary picture choices; `leaderboard` adds optional game imagery.
+Full builds retain both. The native `entity.asset` service answers `available`
+only for a safe bundle-relative asset present in the current verified bundle,
+and `missing` otherwise. Leaderboards use the ordinary profile picture when
+optional game imagery is absent, including after updating a fuller install.
+
 ## Visual reference and checks
 
 The generated [design reference](design/entity-reference.png) informed the native

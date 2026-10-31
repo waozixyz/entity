@@ -1,0 +1,15 @@
+{
+  "profile": [
+    "assets/entity/abstract-amber.png",
+    "assets/entity/abstract-jade.png",
+    "assets/entity/abstract-violet.png",
+    "assets/entity/flowers.png",
+    "assets/entity/pfp.png"
+  ],
+  "leaderboard": [
+    "assets/entity/wurm-base.png",
+    "assets/entity/wurm-reward-skins.png",
+    "assets/entity/wurm-skins.png",
+    "assets/entity/wurm-special-skins.png"
+  ]
+}

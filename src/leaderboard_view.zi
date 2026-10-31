@@ -69,6 +69,8 @@ ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectan
     skin := ifx icon >= 1 && icon <= 13 then icon - 1 else 0
     root := AppService("entity.assets", "")
     asset := ifx skin == 0 then "assets/entity/wurm-base.png" else ifx skin <= 6 then "assets/entity/wurm-skins.png" else ifx skin <= 8 then "assets/entity/wurm-special-skins.png" else "assets/entity/wurm-reward-skins.png"
+    // Optional imagery is checked against this bundle, never old extracted files.
+    if AppSupports("entity.asset") && AppService("entity.asset", asset) != "available" { return false }
     out: Vec(u8)
     if root != "" { BuilderPrint(*out, "%/", root) }
     Append(*out, asset)

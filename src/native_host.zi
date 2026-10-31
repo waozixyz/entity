@@ -1,6 +1,7 @@
 // Shared native host for Entity. Games keep only a route to this context;
 // account keys remain in this provider and never enter a game bundle.
 #import "account_store"
+#import "asset_presence"
 #import "dew_native"
 #import "dew_packs"
 #import "dew_model"
@@ -70,7 +71,7 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
+    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.asset" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
     name == PUBLICATIONS_SERVICE
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
@@ -98,6 +99,11 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
                 return 1
             }
             result.* = EntityHostText(ifx request == "" then DewSnapshot() else ifx DewEnqueue(request) then "queued" else "rejected")
+            return 1
+        }
+        if service == "entity.asset" {
+            present := EntityAssetPresent(portable.app.bundle, AppArgumentText(arguments[1]))
+            result.* = EntityHostText(ifx present then "available" else "missing")
             return 1
         }
         if service == "entity.assets" { result.* = EntityHostText(TextUntilNul(asset_folder[:])); return 1 }

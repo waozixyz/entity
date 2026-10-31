@@ -1,0 +1,24 @@
+// Optional imagery is available only when present in this actual bundle.
+// Never infer availability from old extracted files in an account folder.
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+
+EntityAssetPathValid :: (path: string) -> bool {
+    if path.count <= 14 || path[:14] != "assets/entity/" { return false }
+    for index: cast(s64)14..path.count - 1 {
+        byte := path[index]
+        if byte == cast(u8)47 || byte == cast(u8)92 || byte == cast(u8)0 { return false }
+        if byte == cast(u8)46 && index + 1 < path.count && path[index + 1] == cast(u8)46 { return false }
+    }
+    return true
+}
+
+EntityAssetPresent :: (bundle: *void, path: string) -> bool {
+    if bundle == null || !EntityAssetPathValid(path) { return false }
+    count := BundleAssets(bundle)
+    if count == 0 { return false }
+    for index: cast(u64)0..count - 1 {
+        if path == TextFromCString(BundleAssetPath(bundle, index)) && BundleAssetLength(bundle, index) > 0 { return true }
+    }
+    return false
+}
