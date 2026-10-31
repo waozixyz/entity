@@ -10,9 +10,10 @@ PURCHASE :: "{\"sequence\":3,\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"err
 #program_export
 main :: () -> s32 {
     play: DewPlay = .{.enabled = DewPlayEdition()}
-    if play.enabled || DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_10") { return 1 }
+    accountID := "0000000000000000000000000000000000000000000000000000000000000abc"
+    if play.enabled || DewPlayTick(*play, true) || DewPlayBuy(*play, "dew_10", accountID) { return 1 }
     play.enabled = true
-    if DewPlayBuy(*play, "dew_42") { return 2 }
+    if DewPlayBuy(*play, "dew_42", accountID) || DewPlayBuy(*play, "dew_10", "not-an-account") { return 2 }
     unused CopyCString(PURCHASE, play.state[:])
     // A purchase waits while the host cannot send it.
     if DewPlayTick(*play, false) || TextUntilNul(play.status[:]) != "" { return 3 }
