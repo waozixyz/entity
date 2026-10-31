@@ -67,16 +67,22 @@ Check :: () -> s32 {
     }
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
-    if step == "restored" { return ifx shop_owned == 654 then 0 else 8 }
+    if step == "restored" {
+        if shop_owned != 7822 { return 8 }
+        // Wurm keeps its own mask; decorations arrive in their own field.
+        reply := EntityGameShopAnswer("status")
+        owned := ReadNumber(reply, FieldAt(reply, 0, "owned"))
+        decorations := ReadNumber(reply, FieldAt(reply, 0, "decorations"))
+        return ifx owned.valid && owned.value == 654.0 && decorations.valid && decorations.value == 7168.0 then 0 else 18
+    }
     if step == "buy" {
-        products: [5]s32 = .[1, 2, 3, 7, 9]
-        for product: products {
+        for product: GAME_SHOP_PRODUCTS {
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() || (shop_owned & (1 << product)) == 0 { print("purchase % failed: %\n", product, shop_status); return 9 }
         }
         // An uncertain response has no local ownership; retry those same keys.
         shop_owned = 0
-        for product: products {
+        for product: GAME_SHOP_PRODUCTS {
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() { return 10 }
         }
@@ -85,6 +91,8 @@ Check :: () -> s32 {
     if step == "insufficient" {
         unused EntityGameShopAnswer("wurm.mint")
         if Wait() || shop_owned != 0 { return 11 }
+        unused EntityGameShopAnswer("choano.pearl")
+        if Wait() || shop_owned != 0 { return 19 }
         return 0
     }
     if step == "holiday_early" {

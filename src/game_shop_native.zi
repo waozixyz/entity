@@ -87,8 +87,7 @@ EntityGameShopAnswer :: (request: string) -> string {
         else if DewReady() { shop_pack = pack; shop_product = 0; shop_requested = true }
         else { shop_status = "signin" }
     }
-    products: [5]s32 = .[1, 2, 3, 7, 9]
-    for product: products {
+    for product: GAME_SHOP_PRODUCTS {
         if request == GameShopProduct(cast(s32)product) && !shop_active && !shop_requested {
             if (shop_owned & (1 << product)) != 0 {
                 shop_status = "done"
@@ -100,8 +99,8 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "status" && !shop_loaded && !shop_active && shop_status == "idle" { shop_requested = true }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
-        TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), shop_owned, shop_coins,
+    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"decorations\":%,\"coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
+        TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), GameShopWurmOwned(shop_owned), GameShopDecorations(shop_owned), shop_coins,
         ChristmasClaimWindow(UnixNow()),
         ifx shop_active || shop_requested then "pending" else shop_status)
     text := BuilderFinish(out)

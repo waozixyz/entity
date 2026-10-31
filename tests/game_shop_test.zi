@@ -11,8 +11,7 @@ Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") ->
 main :: () -> s32 {
     owner := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     other := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    products: [5]s32 = .[1, 2, 3, 7, 9]
-    for product: products {
+    for product: GAME_SHOP_PRODUCTS {
         p := cast(s32)product
         text := Receipt(p, owner, -GameShopPrice(p))
         if GameShopReceipt(text, owner) != p { return 1 }
@@ -27,6 +26,19 @@ main :: () -> s32 {
     if ChristmasClaimWindow(1796083199) || !ChristmasClaimWindow(1796083200) ||
     !ChristmasClaimWindow(1798761599) || ChristmasClaimWindow(1798761600) { return 10 }
     if GameShopKey(1) == GameShopKey(2) || GameShopKey(1) == GameShopKey(3) || GameShopKey(2) == GameShopKey(3) { return 7 }
+    // Choano decorations: fixed names, prices and references that never change.
+    if GameShopProduct(10) != "choano.pearl" || GameShopKey(10) != "decoration-choano-pearl-v1" || GameShopPrice(10) != 10000000 ||
+    GameShopProduct(11) != "choano.flower" || GameShopKey(11) != "decoration-choano-flower-v1" || GameShopPrice(11) != 20000000 ||
+    GameShopProduct(12) != "choano.wizard" || GameShopKey(12) != "decoration-choano-wizard-v1" || GameShopPrice(12) != 30000000 { return 16 }
+    if GameShopReference(10) != "choano.pearl:decoration-choano-pearl-v1" || GameShopReference(11) != "choano.flower:decoration-choano-flower-v1" ||
+    GameShopReference(12) != "choano.wizard:decoration-choano-wizard-v1" { return 17 }
+    if GameShopPrice(13) != 0 || GameShopProduct(13) != "" || GameShopKey(13) != "" || GameShopReference(13) != "" { return 18 }
+    // A decoration's receipt must carry its own price, not another product's.
+    if GameShopReceipt(Receipt(10, owner, -GameShopPrice(11)), owner) != 0 || GameShopReceipt(Receipt(12, owner, -GameShopPrice(10)), owner) != 0 ||
+    GameShopReceipt(Receipt(10, owner, -GameShopPrice(10) / 10), owner) != 0 { return 19 }
+    if GameShopReceipt(Receipt(1, owner, -10000000, "choano.pearl:decoration-choano-pearl-v2"), owner) != 0 { return 20 }
+    // Wurm's reply stays within the bits it accepts, whatever else the account owns.
+    if GameShopWurmOwned(910 | 7168) != 910 || GameShopDecorations(910 | 7168) != 7168 || GameShopDecorations(910) != 0 || GameShopWurmOwned(7168) != 0 { return 21 }
     // Coin packs: each pack number is one key; the receipt's price names the coins.
     key: [64]u8
     other_key: [64]u8
@@ -40,6 +52,6 @@ main :: () -> s32 {
         if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack) + 1, reference), owner) != 0 { return 14 }
     }
     if CoinPackReceipt(Receipt(1, owner, -GameShopPrice(1)), owner) != 0 || GameShopReceipt(Receipt(1, owner, -CoinPackPrice(1), "wurm.coins:coins-wurm-1-1-v1"), owner) != 0 { return 15 }
-    print("Game shop local tests: exact paid receipt, account isolation, amount validation, stable purchase keys and coin packs.\n")
+    print("Game shop local tests: exact paid receipt, account isolation, amount validation, stable purchase keys, Choano decorations and coin packs.\n")
     return 0
 }

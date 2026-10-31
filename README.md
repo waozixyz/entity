@@ -209,6 +209,10 @@ per account and product. Retrying from another device cannot debit twice.
 Ownership is restored from exact ledger receipts; enqueueing or a failed
 request never grants a skin. Hosts call `EntityGameShopPump` after frames
 (included in `EntityHostPump`).
+Choano's decorations use the same flow: `choano.pearl`, `choano.flower` and
+`choano.wizard` cost 10, 20 and 30 Dew and are products 10, 11 and 12. The
+status reply's `decorations` field holds their ownership as `1 << product`;
+`owned` keeps only Wurm's bits.
 Hosts that already expose `entity.dew` can use the same service through
 `shop:REQUEST`; `EntityDewPump` advances it. The fixed `shop:visit` request
 queues opening `https://waozi.xyz/` after the guest frame.
