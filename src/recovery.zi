@@ -6,6 +6,10 @@
 #import "std/c_string"
 #import "std/text_buffer"
 
+// Android providers identify .key as PGP keys or generic binary data. Recovery
+// backups can also be JSON or plain text; keep all of those visible to import.
+RecoveryFileMimeTypes :: "application/pgp-keys,application/octet-stream,application/json,text/plain"
+
 Recovery :: struct {
     keys: AccountKeys
     context: [128]u8

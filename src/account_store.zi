@@ -98,7 +98,7 @@ AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         if save {
             opened = AndroidSavePickerOpen(ACCOUNT_PICKER_REQUEST, "entity-account.key", "application/octet-stream")
         } else {
-            opened = AndroidPickerOpen(ACCOUNT_PICKER_REQUEST, "*/*")
+            opened = AndroidPickerOpen(ACCOUNT_PICKER_REQUEST, RecoveryFileMimeTypes)
         }
         if !opened { return -1 }
         account_picker_open = true

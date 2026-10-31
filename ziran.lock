@@ -54,14 +54,6 @@
       "url": "https://github.com/ziranlang/oqs.git"
     },
     {
-      "commit": "1d987043bf1c07bde429d3f8a30b74d5401bea45",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p77028198b0e09537",
-      "name": "kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
-    },
-    {
       "commit": "8250ece58a03f4d9c07cd8434780d659b54f5d7f",
       "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
       "id": "p7de54c8ad98fe034",
@@ -78,6 +70,14 @@
       "url": "https://github.com/ziranlang/crypto.git"
     },
     {
+      "commit": "ee9d204548295e6c6900939ba1120efe44659e79",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "pe5e9983467e15f53",
+      "name": "kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "4778aa5044bf119c30df54219fa89357080af27f",
       "dependencies": {},
       "id": "pecdb097af6ab16f7",
@@ -88,7 +88,7 @@
     }
   ],
   "root": {
-    "dependencies": {"curl": "p1ca0e8d3c19dbe4c", "daochi_client": "p7de54c8ad98fe034", "kryon": "p77028198b0e09537", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096", "zlib": "p1dff88558141400b"},
+    "dependencies": {"curl": "p1ca0e8d3c19dbe4c", "daochi_client": "p7de54c8ad98fe034", "kryon": "pe5e9983467e15f53", "monocypher": "p4266498010aa1745", "qrcode": "p0dfa70137405b096", "zlib": "p1dff88558141400b"},
     "name": "Entity"
   },
   "toolchain": {

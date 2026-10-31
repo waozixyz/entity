@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Filter Android account-key imports to key files and related backup types.
 - Own native Profile, runtime and cryptography artifacts through the generic Ziran package API, with explicit platform and edition selection.
 
 - Share owner-bound reward claim polling and validated credited/already-claimed results without replaying uncertain claims.
