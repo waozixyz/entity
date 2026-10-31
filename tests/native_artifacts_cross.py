@@ -103,9 +103,12 @@ def main():
              '--entry', 'ordinary:main', '-o', generated, 'src/ordinary.zi'], app)
         support = link_flags(profile.parent / 'link.txt', crypto.parent / 'link.txt', ordinary_imports=True)
         assert str(profile.parent / 'libentity.a') not in support
+        # C generation retains the Ziran entry; the test host supplies C main.
+        entry = app / 'ordinary_main.c'
+        entry.write_text('#include "ordinary.h"\nint main(void) { return ordinary_main(); }\n')
         run([cc, '-std=c11', '-O2', '-ffunction-sections', '-fdata-sections',
              '-Wl,--gc-sections', '-static', '-static-libgcc', '-I', compiler / 'include', '-I', generated,
-             *sorted(generated.rglob('*.c')), *support, *shlex.split(ENV.get('LDFLAGS', '')), '-o', app / 'ordinary.exe'])
+             entry, *sorted(generated.rglob('*.c')), *support, *shlex.split(ENV.get('LDFLAGS', '')), '-o', app / 'ordinary.exe'])
     if windows:
         members = run([ENV['AR'], 't', crypto.parent / 'libplatform.a']).splitlines()
         assert members and len(members) == len(set(members)), 'platform archive member collisions'
