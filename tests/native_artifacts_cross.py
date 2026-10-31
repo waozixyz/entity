@@ -35,7 +35,11 @@ def main():
     app.mkdir(parents=True, exist_ok=True)
     (app / 'src').mkdir(exist_ok=True)
     for name in ('ziran.toml', 'ziran.local.toml', 'ziran.lock'):
-        shutil.copyfile(WORK / 'one' / name, app / name)
+        source = WORK / 'one' / name
+        if source.exists():
+            shutil.copyfile(source, app / name)
+        else:
+            (app / name).unlink(missing_ok=True)
     options = f'[tool.entity]\nedition="{args.edition}"\n'
     if args.ndk:
         options += f'ndk="{args.ndk}"\nandroid_api="{args.android_api}"\n'
@@ -59,7 +63,7 @@ def main():
         run(['tar', '-xf', profile.parent / 'headers.tar', '-C', headers])
         shutil.copyfile(WORK / 'one/consumer.c', app / 'consumer.c')
     else:
-        (app / 'consumer.c').write_text('extern void crypto_wipe(void*, unsigned long);\n'
+        (app / 'consumer.c').write_text('#include <stddef.h>\nextern void crypto_wipe(void*, size_t);\n'
             'extern void *OQS_SIG_new(const char*); extern void OQS_SIG_free(void*);\n'
             'extern void *BundleOpen(unsigned char*); extern void BundleClose(void*);\n'
             + ('extern void *curl_easy_init(void); extern void curl_easy_cleanup(void*);\n' if args.platform.startswith('windows') else '')

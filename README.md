@@ -454,6 +454,10 @@ builds require an absolute `CC` executable and matching `AR` (or the sibling
 `x86_64-w64-mingw32-gcc` driver and its matching `ar`, `windres`, `ranlib` and
 `objcopy` siblings. Entity builds its locked curl/zlib sources; consumers need
 no curl source paths, archive inventory or extra target zlib installation.
+Windows generated graph objects contain GCC LTO and native code. The declared
+`-flto=1` link flag removes unused graph functions before PE linking, including
+unused host callbacks and cryptographic algorithms; hosts must retain that flag.
+LTO runs with one worker and keeps normal Windows unwind metadata.
 Android takes a keyed absolute `ndk` root and `android_api` string: `"21"`,
 `"23"` or `"24"` (default). Select the matching NDK compiler driver and sibling
 `llvm-ar`, for example `aarch64-linux-android21-clang` with `android_api="21"`.
@@ -471,6 +475,11 @@ C consumers without accounts or a display. For development,
 `python3 tests/native_artifacts.py --dirty` explicitly tests isolation instead;
 it does not certify clean reuse. Later game migrations consume these outputs;
 this change does not alter any game's build or account policy.
+
+To validate a published candidate independently of local edits, run
+`python3 tests/native_artifacts.py --published ENTITY_COMMIT --toolchain ZIRAN_COMMIT`
+with full commit IDs. This uses the normal immutable package graph without a
+local Entity override. Subsequent cross fixtures inherit that resolved graph.
 
 The focused cross fixture `tests/native_artifacts_cross.py TARGET` accepts
 `--ndk`, `--android-api`, `--edition` and explicit `--dirty` isolation mode. It

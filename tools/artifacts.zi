@@ -84,7 +84,7 @@ Archive :: (generated: string, output: string, include: string = "") -> bool {
     Walk(generated, ".c", *files)
     for index: 0..files.count - 1 {
         path := Out(PkgJoin(PkgDigest(files[index][generated.count:]), ".o"))
-        if !Step(cc, "-std=c11", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections", "-I", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "include"), "-I", generated, include, ifx web then "-sUSE_ZLIB=1" else "", "-c", files[index], "-o", path) { return false }
+        if !Step(cc, "-std=c11", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections", "-I", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "include"), "-I", generated, include, ifx web then "-sUSE_ZLIB=1" else ifx windows then "-flto" else "", ifx windows then "-ffat-lto-objects" else "", "-c", files[index], "-o", path) { return false }
         if !Step(ar, "rcs", output, path) { return false }
         if !RemoveFile(path) { return false }
     }
@@ -92,7 +92,7 @@ Archive :: (generated: string, output: string, include: string = "") -> bool {
 }
 SystemLinkText :: (profile: bool) -> string {
     if web { return ifx profile then "js-library\tziran_web.js\nembed\tentity.zx@/entity.zx\nembed\tfont.ttf@/kryon-font.ttf\n" else "flag\t-sUSE_ZLIB=1\nflag\t-sASYNCIFY\nflag\t-sALLOW_MEMORY_GROWTH=1\nflag\t-sFORCE_FILESYSTEM=1\nflag\t-lidbfs.js\n" }
-    if windows { return ifx profile then "library\t-luser32\nlibrary\t-lshell32\nlibrary\t-lole32\nlibrary\t-lcomdlg32\n" else "library\t-lws2_32\nlibrary\t-liphlpapi\nlibrary\t-lcrypt32\nlibrary\t-lsecur32\nlibrary\t-lbcrypt\nlibrary\t-ladvapi32\nlibrary\t-lm\n" }
+    if windows { return ifx profile then "flag\t-flto=1\nlibrary\t-luser32\nlibrary\t-lshell32\nlibrary\t-lole32\nlibrary\t-lcomdlg32\n" else "library\t-lws2_32\nlibrary\t-liphlpapi\nlibrary\t-lcrypt32\nlibrary\t-lsecur32\nlibrary\t-lbcrypt\nlibrary\t-ladvapi32\nlibrary\t-lm\n" }
     if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\n" }
     return ifx profile then "pkg-config\tsdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0\nlibrary\t-lX11\n" else "library\t-l:libcurl.so.4\nlibrary\t-lm\nlibrary\t-lpthread\nlibrary\t-lz\nlibrary\t-ldl\n"
 }

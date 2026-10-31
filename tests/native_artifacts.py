@@ -66,8 +66,8 @@ def consume(app, profile, crypto):
     headers.mkdir(exist_ok=True)
     run(['tar', '-xf', profile / 'headers.tar', '-C', headers])
     # Call real native host policy and real Monocypher without keys/accounts.
-    (app / 'consumer.c').write_text('#include "src/native_host.h"\n'
-        'extern void crypto_wipe(void *, unsigned long);\n'
+    (app / 'consumer.c').write_text('#include "src/native_host.h"\n#include <stddef.h>\n'
+        'extern void crypto_wipe(void *, size_t);\n'
         'extern void *OQS_SIG_new(const char *); extern void OQS_SIG_free(void *);\n'
         'int main(int argc, char **argv) { unsigned char b[8]={1,2,3}; '
         'native_host_EntityHostProfileSections(7); native_host_EntityHostEdition(0); '
@@ -90,8 +90,13 @@ def main():
     # These are synthetic consumer manifests, never source copies/checkouts.
     dirty = argparse.ArgumentParser()
     dirty.add_argument('--dirty', action='store_true', help='assert dirty graph isolation before commit; default requires clean reuse')
-    allow_dirty = dirty.parse_args().dirty
-    tool_ref = json.loads((ROOT / 'ziran.lock').read_text())['toolchain']['commit']
+    dirty.add_argument('--published', default='', help='verify an exact published Entity commit without local overrides')
+    dirty.add_argument('--toolchain', default='', help='exact published consumer toolchain commit')
+    args = dirty.parse_args()
+    allow_dirty = args.dirty
+    for commit in (args.published, args.toolchain):
+        assert not commit or (len(commit) == 40 and all(c in '0123456789abcdef' for c in commit))
+    tool_ref = args.toolchain or json.loads((ROOT / 'ziran.lock').read_text())['toolchain']['commit']
     apps = []
     for name in ('one', 'two'):
         app = WORK / name
@@ -99,8 +104,11 @@ def main():
         (app / 'src').mkdir(exist_ok=True)
         (app / 'ziran.toml').write_text('[package]\nname="' + name + '"\n'
             '[toolchain]\ngit="https://github.com/ziranlang/ziran.git"\nref="' + tool_ref + '"\n'
-            '[dependencies.entity]\ngit="https://github.com/waozixyz/entity.git"\nref="master"\n')
-        (app / 'ziran.local.toml').write_text(f'[overrides]\nentity="{ROOT}"\n')
+            '[dependencies.entity]\ngit="https://github.com/waozixyz/entity.git"\nref="' + (args.published or 'master') + '"\n')
+        if args.published:
+            (app / 'ziran.local.toml').unlink(missing_ok=True)
+        else:
+            (app / 'ziran.local.toml').write_text(f'[overrides]\nentity="{ROOT}"\n')
         run(['ziran', 'lock'], app)
         selected = Path(run(['ziran', 'pkg', 'path', 'ziran'], app))
         assert compiler is None or compiler == selected
