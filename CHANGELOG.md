@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve the surrounding game theme when nested controls finish drawing.
+
 - Embedding apps can keep profile pictures without bundled game imagery; leaderboards use profile pictures when optional game art is absent.
 
 - Filter Android account-key imports to key files and related backup types.
