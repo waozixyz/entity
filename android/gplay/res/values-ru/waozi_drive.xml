@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Выберите резервную копию аккаунта</string>
+    <string name="waozi_drive_pick">Выбрать в Google Drive</string>
+    <string name="waozi_drive_create">Создать новую копию</string>
+    <string name="waozi_drive_conflict">Копия на Drive отличается от этого устройства. Оставить её или заменить зашифрованной копией с устройства? Сначала сохраните локальную копию, если нужны обе.</string>
+    <string name="waozi_drive_replace">Заменить копию на Drive</string>
+    <string name="waozi_drive_keep">Оставить копию на Drive</string>
+    <string name="waozi_drive_offline">Нет соединения. Локальный аккаунт в безопасности. Повторите после подключения.</string>
+    <string name="waozi_drive_unauthorized">Снова разрешите доступ к Google Drive. Проверьте выбранный аккаунт Google.</string>
+    <string name="waozi_drive_forbidden">Доступ к Drive запрещён или отозван. Выберите верный аккаунт и разрешите доступ снова.</string>
+    <string name="waozi_drive_quota">Drive занят или достигнут предел запросов. Повторите позже.</string>
+    <string name="waozi_drive_full">Google Drive заполнен. Освободите место и повторите.</string>
+    <string name="waozi_drive_missing">Копия отсутствует или принадлежит другому аккаунту Google. Выберите её снова.</string>
+    <string name="waozi_drive_changed">Копия на Drive изменилась. Откройте и проверьте её перед заменой.</string>
+    <string name="waozi_drive_invalid">Это неподдерживаемая зашифрованная копия Waozi. Файл не изменён.</string>
+    <string name="waozi_drive_setup">Google Drive ещё не настроен для этого приложения. Можно использовать локальные копии.</string>
+    <string name="waozi_drive_unavailable">Сервисы Google Play недоступны. Используйте локальную копию.</string>
+    <string name="waozi_drive_error">Не удалось завершить операцию Drive. Локальный аккаунт в безопасности.</string>
+    <string name="waozi_drive_uncertain">Результат загрузки неизвестен. Не создавайте другую копию. Выберите существующую перед повтором.</string>
+    <string name="waozi_drive_duplicate">Найдено несколько копий. Выберите файл; новая копия не создана.</string>
+    <string name="waozi_drive_saved">Копия сохранена в Google Drive.</string>
+</resources>

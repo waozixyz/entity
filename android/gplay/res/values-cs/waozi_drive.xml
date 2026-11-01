@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Vyberte zálohu účtu</string>
+    <string name="waozi_drive_pick">Vybrat z Google Drive</string>
+    <string name="waozi_drive_create">Vytvořit novou zálohu</string>
+    <string name="waozi_drive_conflict">Záloha na Drive se liší od tohoto zařízení. Ponechat ji, nebo nahradit šifrovanou zálohou tohoto zařízení? Pokud potřebujete obě, nejprve uložte místní kopii.</string>
+    <string name="waozi_drive_replace">Nahradit zálohu na Drive</string>
+    <string name="waozi_drive_keep">Ponechat zálohu na Drive</string>
+    <string name="waozi_drive_offline">Bez připojení. Místní účet je v bezpečí. Zkuste to po připojení.</string>
+    <string name="waozi_drive_unauthorized">Znovu povolte přístup ke Google Drive. Ověřte vybraný účet Google.</string>
+    <string name="waozi_drive_forbidden">Přístup k Drive byl odepřen nebo odvolán. Vyberte správný účet a znovu povolte přístup.</string>
+    <string name="waozi_drive_quota">Drive je zaneprázdněn nebo byl dosažen limit požadavků. Zkuste to později.</string>
+    <string name="waozi_drive_full">Google Drive je plný. Uvolněte místo a zkuste to znovu.</string>
+    <string name="waozi_drive_missing">Záloha chybí nebo patří jinému účtu Google. Vyberte ji znovu.</string>
+    <string name="waozi_drive_changed">Záloha na Drive se změnila. Před nahrazením ji znovu otevřete a zkontrolujte.</string>
+    <string name="waozi_drive_invalid">Toto není podporovaná šifrovaná záloha Waozi. Soubor zůstal beze změny.</string>
+    <string name="waozi_drive_setup">Google Drive pro tuto aplikaci ještě není nastaven. Místní zálohy můžete používat dál.</string>
+    <string name="waozi_drive_unavailable">Služby Google Play nejsou dostupné. Použijte místní zálohu.</string>
+    <string name="waozi_drive_error">Operaci na Drive nelze dokončit. Místní účet je v bezpečí.</string>
+    <string name="waozi_drive_uncertain">Výsledek nahrávání je nejistý. Nevytvářejte další kopii. Před dalším pokusem vyberte stávající zálohu.</string>
+    <string name="waozi_drive_duplicate">Nalezeno více záloh. Vyberte soubor; nová kopie nebyla vytvořena.</string>
+    <string name="waozi_drive_saved">Záloha uložena na Google Drive.</string>
+</resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Escolha a cópia da sua conta</string>
+    <string name="waozi_drive_pick">Escolher no Google Drive</string>
+    <string name="waozi_drive_create">Criar nova cópia</string>
+    <string name="waozi_drive_conflict">A cópia no Drive é diferente deste dispositivo. Manter ou substituir pela cópia criptografada deste dispositivo? Salve uma cópia local antes se precisar das duas.</string>
+    <string name="waozi_drive_replace">Substituir cópia do Drive</string>
+    <string name="waozi_drive_keep">Manter cópia do Drive</string>
+    <string name="waozi_drive_offline">Sem conexão. Sua conta local está segura. Tente quando estiver online.</string>
+    <string name="waozi_drive_unauthorized">Autorize o Google Drive novamente. Verifique a conta Google selecionada.</string>
+    <string name="waozi_drive_forbidden">Acesso ao Drive negado ou revogado. Escolha a conta correta e autorize novamente.</string>
+    <string name="waozi_drive_quota">O Drive está ocupado ou atingiu o limite de solicitações. Tente mais tarde.</string>
+    <string name="waozi_drive_full">O Google Drive está cheio. Libere espaço e tente novamente.</string>
+    <string name="waozi_drive_missing">A cópia não existe ou pertence a outra conta Google. Escolha novamente.</string>
+    <string name="waozi_drive_changed">A cópia no Drive mudou. Abra e confira antes de substituir.</string>
+    <string name="waozi_drive_invalid">Esta não é uma cópia criptografada compatível do Waozi. Ela não foi alterada.</string>
+    <string name="waozi_drive_setup">O Google Drive ainda não foi configurado neste app. Você pode salvar e abrir cópias locais.</string>
+    <string name="waozi_drive_unavailable">Os serviços do Google Play estão indisponíveis. Use uma cópia local.</string>
+    <string name="waozi_drive_error">Não foi possível concluir a operação no Drive. Sua conta local está segura.</string>
+    <string name="waozi_drive_uncertain">O resultado do envio é incerto. Não crie outra cópia. Escolha a cópia existente antes de tentar novamente.</string>
+    <string name="waozi_drive_duplicate">Foram encontradas várias cópias. Escolha o arquivo; nenhuma nova cópia foi criada.</string>
+    <string name="waozi_drive_saved">Cópia salva no Google Drive.</string>
+</resources>

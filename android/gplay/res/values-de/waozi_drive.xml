@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Kontosicherung auswählen</string>
+    <string name="waozi_drive_pick">Aus Google Drive auswählen</string>
+    <string name="waozi_drive_create">Neue Sicherung erstellen</string>
+    <string name="waozi_drive_conflict">Die Drive-Sicherung unterscheidet sich von diesem Gerät. Behalten oder durch dessen verschlüsselte Sicherung ersetzen? Speichere zuerst eine lokale Kopie, wenn du beide brauchst.</string>
+    <string name="waozi_drive_replace">Drive-Sicherung ersetzen</string>
+    <string name="waozi_drive_keep">Drive-Sicherung behalten</string>
+    <string name="waozi_drive_offline">Keine Verbindung. Dein lokales Konto ist sicher. Versuche es wieder, wenn du online bist.</string>
+    <string name="waozi_drive_unauthorized">Erlaube den Zugriff auf Google Drive erneut. Prüfe das ausgewählte Google-Konto.</string>
+    <string name="waozi_drive_forbidden">Drive-Zugriff verweigert oder widerrufen. Wähle das richtige Konto und erlaube den Zugriff erneut.</string>
+    <string name="waozi_drive_quota">Drive ist ausgelastet oder das Anfragelimit wurde erreicht. Versuche es später erneut.</string>
+    <string name="waozi_drive_full">Google Drive ist voll. Gib Speicherplatz frei und versuche es erneut.</string>
+    <string name="waozi_drive_missing">Die Sicherung fehlt oder gehört zu einem anderen Google-Konto. Wähle sie erneut aus.</string>
+    <string name="waozi_drive_changed">Die Drive-Sicherung wurde geändert. Öffne und prüfe sie vor dem Ersetzen erneut.</string>
+    <string name="waozi_drive_invalid">Dies ist keine unterstützte verschlüsselte Waozi-Sicherung. Die Datei bleibt unverändert.</string>
+    <string name="waozi_drive_setup">Google Drive ist für diese App noch nicht eingerichtet. Lokale Sicherungsdateien funktionieren weiterhin.</string>
+    <string name="waozi_drive_unavailable">Google Play-Dienste sind nicht verfügbar. Nutze eine lokale Sicherungsdatei.</string>
+    <string name="waozi_drive_error">Der Drive-Vorgang konnte nicht abgeschlossen werden. Dein lokales Konto ist sicher.</string>
+    <string name="waozi_drive_uncertain">Das Ergebnis des Uploads ist unklar. Erstelle keine weitere Kopie. Wähle vor einem erneuten Versuch die bestehende Sicherung.</string>
+    <string name="waozi_drive_duplicate">Mehrere Sicherungen gefunden. Wähle die Datei aus; keine neue Kopie erstellt.</string>
+    <string name="waozi_drive_saved">Sicherung in Google Drive gespeichert.</string>
+</resources>

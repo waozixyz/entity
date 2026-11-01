@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Elige tu copia de la cuenta</string>
+    <string name="waozi_drive_pick">Elegir de Google Drive</string>
+    <string name="waozi_drive_create">Crear nueva copia</string>
+    <string name="waozi_drive_conflict">La copia de Drive difiere de este dispositivo. ¿Conservarla o reemplazarla con la copia cifrada de este dispositivo? Guarda primero una copia local si necesitas ambas.</string>
+    <string name="waozi_drive_replace">Reemplazar copia de Drive</string>
+    <string name="waozi_drive_keep">Conservar copia de Drive</string>
+    <string name="waozi_drive_offline">Sin conexión. Tu cuenta local está segura. Inténtalo cuando tengas conexión.</string>
+    <string name="waozi_drive_unauthorized">Vuelve a autorizar Google Drive. Comprueba la cuenta de Google seleccionada.</string>
+    <string name="waozi_drive_forbidden">Acceso a Drive denegado o revocado. Elige la cuenta correcta y autoriza de nuevo.</string>
+    <string name="waozi_drive_quota">Drive está ocupado o se alcanzó el límite de solicitudes. Inténtalo más tarde.</string>
+    <string name="waozi_drive_full">Google Drive está lleno. Libera espacio y vuelve a intentarlo.</string>
+    <string name="waozi_drive_missing">La copia no existe o pertenece a otra cuenta de Google. Elígela de nuevo.</string>
+    <string name="waozi_drive_changed">La copia de Drive cambió. Ábrela y revísala antes de reemplazarla.</string>
+    <string name="waozi_drive_invalid">No es una copia cifrada de Waozi compatible. No se modificó.</string>
+    <string name="waozi_drive_setup">Google Drive aún no está configurado para esta app. Puedes guardar y abrir copias locales.</string>
+    <string name="waozi_drive_unavailable">Los servicios de Google Play no están disponibles. Usa una copia local.</string>
+    <string name="waozi_drive_error">No se pudo completar la operación de Drive. Tu cuenta local está segura.</string>
+    <string name="waozi_drive_uncertain">El resultado de la subida es incierto. No crees otra copia. Elige la copia existente antes de reintentar.</string>
+    <string name="waozi_drive_duplicate">Se encontraron varias copias. Elige el archivo; no se creó otra copia.</string>
+    <string name="waozi_drive_saved">Copia guardada en Google Drive.</string>
+</resources>

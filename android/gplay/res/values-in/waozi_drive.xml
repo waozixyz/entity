@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Pilih cadangan akun</string>
+    <string name="waozi_drive_pick">Pilih dari Google Drive</string>
+    <string name="waozi_drive_create">Buat cadangan baru</string>
+    <string name="waozi_drive_conflict">Cadangan Drive berbeda dari perangkat ini. Simpan atau ganti dengan cadangan terenkripsi perangkat ini? Simpan salinan lokal dahulu jika memerlukan keduanya.</string>
+    <string name="waozi_drive_replace">Ganti cadangan Drive</string>
+    <string name="waozi_drive_keep">Pertahankan cadangan Drive</string>
+    <string name="waozi_drive_offline">Tidak ada koneksi. Akun lokal Anda aman. Coba lagi saat online.</string>
+    <string name="waozi_drive_unauthorized">Izinkan akses Google Drive lagi. Periksa akun Google yang dipilih.</string>
+    <string name="waozi_drive_forbidden">Akses Drive ditolak atau dicabut. Pilih akun yang benar dan izinkan lagi.</string>
+    <string name="waozi_drive_quota">Drive sibuk atau batas permintaan tercapai. Coba lagi nanti.</string>
+    <string name="waozi_drive_full">Google Drive penuh. Kosongkan ruang lalu coba lagi.</string>
+    <string name="waozi_drive_missing">Cadangan tidak ada atau milik akun Google lain. Pilih lagi.</string>
+    <string name="waozi_drive_changed">Cadangan Drive berubah. Buka dan periksa lagi sebelum menggantinya.</string>
+    <string name="waozi_drive_invalid">Ini bukan cadangan Waozi terenkripsi yang didukung. Berkas tidak diubah.</string>
+    <string name="waozi_drive_setup">Google Drive belum disiapkan untuk aplikasi ini. Anda tetap dapat memakai cadangan lokal.</string>
+    <string name="waozi_drive_unavailable">Layanan Google Play tidak tersedia. Gunakan cadangan lokal.</string>
+    <string name="waozi_drive_error">Operasi Drive tidak dapat diselesaikan. Akun lokal Anda aman.</string>
+    <string name="waozi_drive_uncertain">Hasil unggahan belum pasti. Jangan buat salinan lain. Pilih cadangan yang ada sebelum mencoba lagi.</string>
+    <string name="waozi_drive_duplicate">Ditemukan beberapa cadangan. Pilih berkas; tidak ada salinan baru yang dibuat.</string>
+    <string name="waozi_drive_saved">Cadangan disimpan ke Google Drive.</string>
+</resources>

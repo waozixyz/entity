@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Choisir la sauvegarde du compte</string>
+    <string name="waozi_drive_pick">Choisir dans Google Drive</string>
+    <string name="waozi_drive_create">Créer une sauvegarde</string>
+    <string name="waozi_drive_conflict">La sauvegarde Drive diffère de cet appareil. La conserver ou la remplacer par celle chiffrée de cet appareil ? Enregistrez une copie locale si vous voulez garder les deux.</string>
+    <string name="waozi_drive_replace">Remplacer la sauvegarde Drive</string>
+    <string name="waozi_drive_keep">Conserver la sauvegarde Drive</string>
+    <string name="waozi_drive_offline">Aucune connexion. Votre compte local est intact. Réessayez en ligne.</string>
+    <string name="waozi_drive_unauthorized">Autorisez à nouveau Google Drive. Vérifiez le compte Google sélectionné.</string>
+    <string name="waozi_drive_forbidden">Accès à Drive refusé ou révoqué. Choisissez le bon compte et autorisez à nouveau.</string>
+    <string name="waozi_drive_quota">Drive est occupé ou sa limite de requêtes est atteinte. Réessayez plus tard.</string>
+    <string name="waozi_drive_full">Google Drive est plein. Libérez de la place et réessayez.</string>
+    <string name="waozi_drive_missing">La sauvegarde manque ou appartient à un autre compte Google. Choisissez-la à nouveau.</string>
+    <string name="waozi_drive_changed">La sauvegarde Drive a changé. Ouvrez-la et vérifiez-la avant de la remplacer.</string>
+    <string name="waozi_drive_invalid">Ce fichier ne contient pas une sauvegarde Waozi chiffrée compatible. Il reste inchangé.</string>
+    <string name="waozi_drive_setup">Google Drive doit encore être configuré pour cette application. Vous pouvez utiliser les sauvegardes locales.</string>
+    <string name="waozi_drive_unavailable">Les services Google Play sont indisponibles. Utilisez une sauvegarde locale.</string>
+    <string name="waozi_drive_error">Impossible de terminer cette opération Drive. Votre compte local est intact.</string>
+    <string name="waozi_drive_uncertain">Le résultat du transfert est incertain. Ne créez pas de doublon. Choisissez la sauvegarde existante avant de réessayer.</string>
+    <string name="waozi_drive_duplicate">Plusieurs sauvegardes existent. Choisissez le fichier ; aucune nouvelle copie créée.</string>
+    <string name="waozi_drive_saved">Sauvegarde enregistrée dans Google Drive.</string>
+</resources>

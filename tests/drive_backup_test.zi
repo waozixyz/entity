@@ -1,0 +1,32 @@
+// Normal editions must not discover or invoke the Play adapter.
+#import "drive_backup"
+#import "management"
+#import "model"
+#import "std/c_string"
+
+#program_export
+main :: () -> s32 {
+    if DriveBackupAvailable() { return 1 }
+    if DriveImportStart() { return 2 }
+    state: Management
+    state.available = true
+    state.capabilities = 2047
+    encoded := ManagementEncode(state)
+    defer { EntityFree(encoded) }
+    decoded: Management
+    if !ManagementDecode(encoded, *decoded) || decoded.capabilities != 2047 { return 3 }
+    state.capabilities = 8191
+    all := ManagementEncode(state)
+    defer { EntityFree(all) }
+    if !ManagementDecode(all, *decoded) || decoded.capabilities != 8191 { return 4 }
+    if ManagementOperation("drive_import") != ACCOUNT_DRIVE || ManagementOperation("drive_backup") != ACCOUNT_DRIVE { return 5 }
+    request: ManagementRequest
+    request.sequence = 1
+    unused CopyCString("drive_import", request.operation[:])
+    text := ManagementRequestEncode(request)
+    defer { EntityFree(text) }
+    queue: ManagementQueue
+    if ManagementEnqueue(*queue, text, 2047) { return 6 }
+    if !ManagementEnqueue(*queue, text, ACCOUNT_DRIVE) { return 7 }
+    return 0
+}

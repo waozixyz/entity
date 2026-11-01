@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Scegli il backup del tuo account</string>
+    <string name="waozi_drive_pick">Scegli da Google Drive</string>
+    <string name="waozi_drive_create">Crea nuovo backup</string>
+    <string name="waozi_drive_conflict">Il backup di Drive è diverso da questo dispositivo. Conservarlo o sostituirlo con il backup cifrato di questo dispositivo? Salva prima una copia locale se servono entrambi.</string>
+    <string name="waozi_drive_replace">Sostituisci backup di Drive</string>
+    <string name="waozi_drive_keep">Conserva backup di Drive</string>
+    <string name="waozi_drive_offline">Nessuna connessione. Il tuo account locale è al sicuro. Riprova quando sei online.</string>
+    <string name="waozi_drive_unauthorized">Autorizza di nuovo Google Drive. Controlla l’account Google selezionato.</string>
+    <string name="waozi_drive_forbidden">Accesso a Drive negato o revocato. Scegli l’account corretto e autorizza di nuovo.</string>
+    <string name="waozi_drive_quota">Drive è occupato o è stato raggiunto il limite di richieste. Riprova più tardi.</string>
+    <string name="waozi_drive_full">Google Drive è pieno. Libera spazio e riprova.</string>
+    <string name="waozi_drive_missing">Il backup manca o appartiene a un altro account Google. Sceglilo di nuovo.</string>
+    <string name="waozi_drive_changed">Il backup di Drive è cambiato. Aprilo e controllalo prima di sostituirlo.</string>
+    <string name="waozi_drive_invalid">Questo non è un backup Waozi cifrato supportato. Non è stato modificato.</string>
+    <string name="waozi_drive_setup">Google Drive non è ancora configurato per questa app. Puoi usare i backup locali.</string>
+    <string name="waozi_drive_unavailable">I servizi Google Play non sono disponibili. Usa un backup locale.</string>
+    <string name="waozi_drive_error">Impossibile completare l’operazione su Drive. Il tuo account locale è al sicuro.</string>
+    <string name="waozi_drive_uncertain">L’esito del caricamento è incerto. Non creare altre copie. Scegli il backup esistente prima di riprovare.</string>
+    <string name="waozi_drive_duplicate">Trovati più backup. Scegli il file; non è stata creata un’altra copia.</string>
+    <string name="waozi_drive_saved">Backup salvato su Google Drive.</string>
+</resources>

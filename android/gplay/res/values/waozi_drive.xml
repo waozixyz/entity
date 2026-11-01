@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">Choose your account backup</string>
+    <string name="waozi_drive_pick">Choose from Google Drive</string>
+    <string name="waozi_drive_create">Create new backup</string>
+    <string name="waozi_drive_conflict">The Drive backup differs from this device. Keep it, or replace it with this device’s encrypted backup? Save a local copy first if you need both.</string>
+    <string name="waozi_drive_replace">Replace Drive backup</string>
+    <string name="waozi_drive_keep">Keep Drive backup</string>
+    <string name="waozi_drive_offline">No connection. Your local account is safe. Try again when online.</string>
+    <string name="waozi_drive_unauthorized">Authorize Google Drive access again. Check the selected Google account.</string>
+    <string name="waozi_drive_forbidden">Drive access was denied or revoked. Choose the correct account and authorize again.</string>
+    <string name="waozi_drive_quota">Drive is busy or its request limit was reached. Try again later.</string>
+    <string name="waozi_drive_full">Google Drive is full. Free some space and try again.</string>
+    <string name="waozi_drive_missing">The backup is missing or belongs to another Google account. Choose it again.</string>
+    <string name="waozi_drive_changed">The Drive backup changed. Open it again and review before replacing.</string>
+    <string name="waozi_drive_invalid">This is not a supported encrypted Waozi backup. It was left unchanged.</string>
+    <string name="waozi_drive_setup">Google Drive setup is not complete for this app. You can still save and open local backup files.</string>
+    <string name="waozi_drive_unavailable">Google Play services are unavailable. Use a local backup file.</string>
+    <string name="waozi_drive_error">Could not complete the Drive operation. Your local account is safe.</string>
+    <string name="waozi_drive_uncertain">The upload result is uncertain. Do not create another copy. Choose the existing backup before trying again.</string>
+    <string name="waozi_drive_duplicate">More than one backup was found. Choose the file to use; no new copy was created.</string>
+    <string name="waozi_drive_saved">Backup saved to Google Drive.</string>
+</resources>

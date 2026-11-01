@@ -1,0 +1,22 @@
+// Apply only while building the Play edition, after resolving Entity's package.
+// No secret credentials. Picker key is a restricted public browser API key.
+def driveEntityRoot = project.ext.waoziEntityDir
+['gplay', 'gplayDebug'].findAll { android.buildTypes.findByName(it) != null }.each { edition ->
+    android.sourceSets.getByName(edition).java.srcDir new File(driveEntityRoot, 'android/gplay/java')
+    android.sourceSets.getByName(edition).res.srcDir new File(driveEntityRoot, 'android/gplay/res')
+    android.buildTypes.getByName(edition).with {
+        proguardFile new File(driveEntityRoot, 'android/gplay/proguard-rules.pro')
+        resValue 'string', 'waozi_drive_picker_key', (project.findProperty('waozi.drivePickerKey') ?: '').toString()
+        resValue 'string', 'waozi_drive_project_number', (project.findProperty('waozi.driveProjectNumber') ?: '').toString()
+        resValue 'string', 'waozi_drive_picker_origin', (project.findProperty('waozi.drivePickerOrigin') ?: 'https://waozi.xyz').toString()
+    }
+}
+// 21.4 retains Android 6 support; 22 requires API 24.
+dependencies {
+    gplayImplementation 'com.google.android.gms:play-services-auth:21.4.0'
+
+}
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('gplaydebug') }) {
+    android.testBuildType 'gplayDebug'
+    android.sourceSets.androidTest.java.srcDir new File(driveEntityRoot, 'android/gplayTest/java')
+}

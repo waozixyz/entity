@@ -204,3 +204,14 @@ test: game-reward-client-test
 profile-routes-test:
 	python3 scripts/profile_routes_test.py
 test: profile-routes-test
+
+# The shared Drive policy runs against a fake transport without Google services.
+.PHONY: drive-backup-test
+drive-backup-test:
+	python3 android/tests/test_adapter.py
+	mkdir -p build/drive-native-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry drive_backup_test:main -o build/drive-native-test tests/drive_backup_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/drive-native-test $$(rg --files build/drive-native-test -g '*.c') -o build/drive-native-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/drive-native-test/test
+
+test: drive-backup-test

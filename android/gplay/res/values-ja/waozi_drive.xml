@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">アカウントのバックアップを選択</string>
+    <string name="waozi_drive_pick">Google Drive から選択</string>
+    <string name="waozi_drive_create">新しいバックアップを作成</string>
+    <string name="waozi_drive_conflict">Drive のバックアップはこの端末と異なります。保持するか、この端末の暗号化バックアップで置き換えますか？両方必要な場合は先にローカルコピーを保存してください。</string>
+    <string name="waozi_drive_replace">Drive のバックアップを置換</string>
+    <string name="waozi_drive_keep">Drive のバックアップを保持</string>
+    <string name="waozi_drive_offline">接続できません。端末のアカウントは安全です。接続後に再試行してください。</string>
+    <string name="waozi_drive_unauthorized">Google Drive へのアクセスを再度許可してください。選択した Google アカウントを確認してください。</string>
+    <string name="waozi_drive_forbidden">Drive へのアクセスが拒否または取り消されました。正しいアカウントを選び、再度許可してください。</string>
+    <string name="waozi_drive_quota">Drive が混雑しているか、リクエスト上限に達しました。後で再試行してください。</string>
+    <string name="waozi_drive_full">Google Drive の空き容量がありません。容量を確保して再試行してください。</string>
+    <string name="waozi_drive_missing">バックアップがないか、別の Google アカウントに属しています。再度選択してください。</string>
+    <string name="waozi_drive_changed">Drive のバックアップが変更されました。置換前に再度開いて確認してください。</string>
+    <string name="waozi_drive_invalid">対応する暗号化 Waozi バックアップではありません。ファイルは変更していません。</string>
+    <string name="waozi_drive_setup">このアプリの Google Drive 設定は未完了です。ローカルバックアップは利用できます。</string>
+    <string name="waozi_drive_unavailable">Google Play 開発者サービスが利用できません。ローカルバックアップを使ってください。</string>
+    <string name="waozi_drive_error">Drive の操作を完了できませんでした。端末のアカウントは安全です。</string>
+    <string name="waozi_drive_uncertain">アップロード結果が不明です。別のコピーは作らず、既存のバックアップを選んでから再試行してください。</string>
+    <string name="waozi_drive_duplicate">複数のバックアップがあります。ファイルを選んでください。新しいコピーは作成していません。</string>
+    <string name="waozi_drive_saved">Google Drive にバックアップを保存しました。</string>
+</resources>

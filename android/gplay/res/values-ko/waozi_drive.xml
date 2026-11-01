@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="waozi_drive_select">계정 백업 선택</string>
+    <string name="waozi_drive_pick">Google Drive에서 선택</string>
+    <string name="waozi_drive_create">새 백업 만들기</string>
+    <string name="waozi_drive_conflict">Drive 백업이 이 기기와 다릅니다. 유지하거나 이 기기의 암호화된 백업으로 바꿀까요? 둘 다 필요하면 먼저 로컬 사본을 저장하세요.</string>
+    <string name="waozi_drive_replace">Drive 백업 바꾸기</string>
+    <string name="waozi_drive_keep">Drive 백업 유지</string>
+    <string name="waozi_drive_offline">연결되지 않았습니다. 로컬 계정은 안전합니다. 연결 후 다시 시도하세요.</string>
+    <string name="waozi_drive_unauthorized">Google Drive 접근을 다시 허용하세요. 선택한 Google 계정을 확인하세요.</string>
+    <string name="waozi_drive_forbidden">Drive 접근이 거부되거나 취소되었습니다. 올바른 계정을 선택하고 다시 허용하세요.</string>
+    <string name="waozi_drive_quota">Drive가 바쁘거나 요청 한도에 도달했습니다. 나중에 다시 시도하세요.</string>
+    <string name="waozi_drive_full">Google Drive가 가득 찼습니다. 공간을 확보하고 다시 시도하세요.</string>
+    <string name="waozi_drive_missing">백업이 없거나 다른 Google 계정에 속합니다. 다시 선택하세요.</string>
+    <string name="waozi_drive_changed">Drive 백업이 변경되었습니다. 바꾸기 전에 다시 열어 확인하세요.</string>
+    <string name="waozi_drive_invalid">지원되는 암호화 Waozi 백업이 아닙니다. 파일을 변경하지 않았습니다.</string>
+    <string name="waozi_drive_setup">이 앱의 Google Drive 설정이 완료되지 않았습니다. 로컬 백업은 사용할 수 있습니다.</string>
+    <string name="waozi_drive_unavailable">Google Play 서비스를 사용할 수 없습니다. 로컬 백업을 사용하세요.</string>
+    <string name="waozi_drive_error">Drive 작업을 완료하지 못했습니다. 로컬 계정은 안전합니다.</string>
+    <string name="waozi_drive_uncertain">업로드 결과가 불확실합니다. 다른 사본을 만들지 마세요. 기존 백업을 선택한 후 다시 시도하세요.</string>
+    <string name="waozi_drive_duplicate">백업이 여러 개 있습니다. 파일을 선택하세요. 새 사본은 만들지 않았습니다.</string>
+    <string name="waozi_drive_saved">Google Drive에 백업을 저장했습니다.</string>
+</resources>

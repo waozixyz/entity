@@ -1,0 +1,143 @@
+// Optional sealed-backup transport. Normal/F-Droid builds do not reference a
+// Google class, scope or Android adapter. The adapter receives sealed v3 only.
+#import "recovery"
+#import "daochi_client/keys"
+#import "std/text_buffer"
+#import "std/c_string"
+#import "std/byte_text_linux"
+Json :: #import "std/json_scan";
+#if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+    #import "kryon/android_jni"
+}
+
+DriveBackupAvailable :: () -> bool {
+    output: [32]u8
+    return DriveAndroidCall("available", output[:]) == "yes"
+}
+
+// Only the existing sealed v3 bytes cross the Java boundary.
+DriveBackupStart :: (value: *Recovery, passphrase: string) -> bool {
+    sealed: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*sealed[0], sealed.count) }
+    if !RecoveryEncode(value, passphrase, sealed[:]) || !RecoverySealedParse(TextUntilNul(sealed[:])).valid { return false }
+    request: [17800]u8
+    prefix := "save\n"
+    text := TextUntilNul(sealed[:])
+    for byte, index: prefix { request[index] = byte }
+    for byte, index: text { request[prefix.count + index] = byte }
+    output: [128]u8
+    answer := DriveAndroidCall(TextView(request[:prefix.count + text.count]), output[:])
+    return Json.MatchLiteral(answer, Json.FieldAt(answer, 0, "status"), "\"pending\"")
+}
+
+DriveBackupCancel :: () {
+    output: [128]u8
+    unused DriveAndroidCall("cancel", output[:])
+}
+
+DriveImportStart :: () -> bool {
+    output: [128]u8
+    answer := DriveAndroidCall("restore", output[:])
+    return Json.MatchLiteral(answer, Json.FieldAt(answer, 0, "status"), "\"pending\"")
+}
+
+// false while authorization, Picker or a bounded REST request is in progress.
+DriveBackupPoll :: (status: []u8, content: []u8) -> bool {
+    output: [20000]u8
+    answer := DriveAndroidCall("poll", output[:])
+    if Json.ReadStringText(answer, Json.FieldAt(answer, 0, "status"), status) <= 0 {
+        unused CopyCString("error", status)
+        return true
+    }
+    pending := TextUntilNul(status) == "pending"
+    restored := TextUntilNul(status) == "restored"
+    if pending { return false }
+    if restored {
+        if Json.ReadStringText(answer, Json.FieldAt(answer, 0, "content"), content) <= 0 ||
+        !RecoverySealedParse(TextUntilNul(content)).valid {
+            unused CopyCString("invalid", status)
+        }
+    }
+    return true
+}
+
+DriveAndroidCall :: (request: string, output: []u8) -> string {
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        text: [17800]u8
+        if !CopyCString(request, text[:]) { return "" }
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return "" }
+        defer { AndroidJniDetachCurrent(*session) }
+        env := session.env
+        // The activity's class loader finds the Play-only class, so apps need
+        // no bridge code: an edition without it simply answers "".
+        adapter := DriveAndroidClass(env, session.activity)
+        if adapter == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, adapter) }
+        name_1: [8]u8
+        name_2: [80]u8
+        method := env.functions.GetStaticMethodID(env, adapter, DriveAndroidName("call", name_1[:]),
+            DriveAndroidName("(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;", name_2[:]))
+        if method == null { DriveAndroidClear(env); return "" }
+        arguments: [2]JniValue
+        arguments[0].reference = session.activity
+        arguments[1].reference = AndroidJniString(env, *text[0])
+        if arguments[1].reference == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, arguments[1].reference) }
+        value := env.functions.CallStaticObjectMethodA(env, adapter, method, *arguments[0])
+        if DriveAndroidClear(env) || value == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, value) }
+        bytes := env.functions.GetStringUTFChars(env, value, null)
+        if bytes == null { return "" }
+        defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+        answer := TextFromCString(bytes)
+        if !CopyCString(answer, output) { return "" }
+        return TextView(output[:answer.count])
+    }
+    unused request
+    unused output
+    return ""
+}
+
+#if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+    // A NUL-terminated copy for JNI names and signatures.
+    DriveAndroidName :: (text: string, output: []u8) -> *u8 {
+        if !CopyCString(text, output) { return null }
+        return *output[0]
+    }
+
+    DriveAndroidClear :: (env: *JniEnv) -> bool {
+        if env.functions.ExceptionCheck(env) == 0 { return false }
+        env.functions.ExceptionClear(env)
+        return true
+    }
+
+    // xyz.waozi.entity.DriveBackup through the activity's class loader, or null.
+    DriveAndroidClass :: (env: *JniEnv, activity: *void) -> *void {
+        activity_class := env.functions.GetObjectClass(env, activity)
+        if activity_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, activity_class) }
+        name_3: [24]u8
+        name_4: [40]u8
+        get_loader := env.functions.GetMethodID(env, activity_class, DriveAndroidName("getClassLoader", name_3[:]), DriveAndroidName("()Ljava/lang/ClassLoader;", name_4[:]))
+        if get_loader == null { DriveAndroidClear(env); return null }
+        loader := env.functions.CallObjectMethodA(env, activity, get_loader, null)
+        if DriveAndroidClear(env) || loader == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader) }
+        loader_class := env.functions.GetObjectClass(env, loader)
+        if loader_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader_class) }
+        name_5: [16]u8
+        name_6: [48]u8
+        load := env.functions.GetMethodID(env, loader_class, DriveAndroidName("loadClass", name_5[:]), DriveAndroidName("(Ljava/lang/String;)Ljava/lang/Class;", name_6[:]))
+        if load == null { DriveAndroidClear(env); return null }
+        arguments: [1]JniValue
+        name_7: [48]u8
+        arguments[0].reference = AndroidJniString(env, DriveAndroidName("xyz.waozi.entity.DriveBackup", name_7[:]))
+        if arguments[0].reference == null { return null }
+        defer { env.functions.DeleteLocalRef(env, arguments[0].reference) }
+        billing := env.functions.CallObjectMethodA(env, loader, load, *arguments[0])
+        if DriveAndroidClear(env) { return null }
+        return billing
+    }
+}
