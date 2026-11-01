@@ -7,6 +7,7 @@
 #import "recovery"
 #import "account_backup"
 #import "shared_account"
+#import "account_handoff"
 #import "native_files"
 #import "drive_backup"
 #import "passkey"
@@ -62,6 +63,7 @@ ManagementProvider :: struct {
     request_node: [512]u8
     network_operation: s32
     drive_pending: bool
+    handoff_pending: bool
     asynchronous: bool
     delegated: bool
     alias_offer: AliasOffer
@@ -125,7 +127,7 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     if DriveBackupAvailable() { state.capabilities |= ACCOUNT_DRIVE }
     ProviderBridgeState(provider, *state)
     state.alias_pricing = true
-    state.busy = state.busy || provider.asynchronous || provider.drive_pending || provider.bridge_operation != 0
+    state.busy = state.busy || provider.asynchronous || provider.drive_pending || provider.handoff_pending || provider.bridge_operation != 0
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     state.password_needed = provider.held_backup[0] != cast(u8)0
     state.backed_up = state.account && provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
@@ -348,6 +350,10 @@ ProviderSharedPump :: (provider: *ManagementProvider) {
         ProviderSharedWebPump(provider)
         return
     }
+    #if #defined(ANDROID_BUILD) {
+        ProviderSharedAndroidPump(provider)
+        return
+    }
     root_buffer: [4096]u8
     root := SharedAccountRoot(root_buffer[:])
     if root == "" { return }
@@ -439,7 +445,58 @@ ProviderSharedWebPump :: (provider: *ManagementProvider) {
     }
 }
 
+// On Android the signed-in app keeps the copy its consent dialog offers, and
+// an app with no account asks which one another app offers.
+ProviderSharedAndroidPump :: (provider: *ManagementProvider) {
+    state := ProviderState(provider)
+    if !state.account {
+        provider.shared_owner = .{}
+        AccountHandoffWithdraw()
+        unused AccountHandoffOfferedName(provider.shared_name[:])
+        return
+    }
+    provider.shared_name = .{}
+    if TextUntilNul(state.public_id[:]) == TextUntilNul(provider.shared_owner[:]) &&
+    TextUntilNul(state.alias[:]) == TextUntilNul(provider.shared_alias[:]) { return }
+    provider.shared_owner = state.public_id
+    provider.shared_alias = state.alias
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    if provider.load != null && provider.load(provider.context, *recovery) {
+        unused AccountHandoffPublish(*recovery, TextUntilNul(state.alias[:]))
+    }
+}
+
+// The other app's consent dialog answers on a later frame.
+ProviderHandoffPoll :: (provider: *ManagementProvider) {
+    incoming: Recovery
+    defer { RecoveryClear(*incoming) }
+    result := AccountHandoffPoll(*incoming)
+    if result == ACCOUNT_HANDOFF_PENDING { return }
+    provider.handoff_pending = false
+    if result == ACCOUNT_HANDOFF_DONE {
+        RecoveryClear(*provider.incoming)
+        provider.incoming = incoming
+        provider.has_incoming = true
+        state := ProviderState(provider)
+        provider.incoming_owner = state.public_id
+        ProviderApplyIncoming(provider, 0)
+    } else if result == ACCOUNT_HANDOFF_CANCELLED {
+        ProviderFinish(provider, "cancelled", "")
+    } else if result == ACCOUNT_HANDOFF_REFUSED {
+        provider.shared_name = .{}
+        ProviderFinish(provider, "error", "That account is no longer signed in on this device")
+    } else {
+        ProviderFinish(provider, "error", "Could not get the account from the other app. Sign in instead.")
+    }
+}
+
 ProviderContinue :: (provider: *ManagementProvider) {
+    #if #defined(ANDROID_BUILD) {
+        provider.handoff_pending = AccountHandoffStart()
+        if !provider.handoff_pending { ProviderFinish(provider, "error", "Could not get the account from the other app. Sign in instead.") }
+        return
+    }
     root_buffer: [4096]u8
     incoming: Recovery
     defer { RecoveryClear(*incoming) }
@@ -490,6 +547,8 @@ ProviderSignOutFirst :: (provider: *ManagementProvider) {
     if !provider.queue.pending { return }
     if provider.drive_pending { DriveBackupCancel() }
     provider.drive_pending = false
+    if provider.handoff_pending { AccountHandoffCancel() }
+    provider.handoff_pending = false
     if provider.asynchronous { ProviderCancelTransfer(cast(*void)provider) }
     provider.asynchronous = false
     ProviderOnlineForget(provider)
@@ -502,6 +561,7 @@ ProviderSignOutClear :: (provider: *ManagementProvider, owner: string, share: bo
     if share && !provider.shared_web_files { SharedWebShare("", owner, false) }
     provider.shared_web_tried = .{}
     provider.shared_name = .{}
+    AccountHandoffWithdraw()
     unused SharedAccountRemove(SharedAccountRoot(root_buffer[:]), owner)
     provider.shared_owner = .{}
     provider.shared_next = 0
@@ -1270,6 +1330,7 @@ ProviderPump :: (provider: *ManagementProvider) {
     if !provider.queue.pending { return }
     if !ProviderOwnerMatches(provider, *provider.queue.request) {
         if provider.drive_pending { DriveBackupCancel(); provider.drive_pending = false }
+        if provider.handoff_pending { AccountHandoffCancel(); provider.handoff_pending = false }
         if provider.bridge_operation != 0 { SignInBridgeCancel(); provider.bridge_operation = 0 }
         ProviderPasskeyForget(provider)
         if provider.asynchronous { ProviderCancelTransfer(cast(*void)provider) }
@@ -1279,6 +1340,7 @@ ProviderPump :: (provider: *ManagementProvider) {
         return
     }
     if provider.drive_pending { ProviderDrivePoll(provider); return }
+    if provider.handoff_pending { ProviderHandoffPoll(provider); return }
     if provider.bridge_operation != 0 { ProviderBridgePoll(provider); return }
     if provider.delegated { return }
     if provider.asynchronous && (provider.network_operation == 20 || provider.network_operation == 21) {
