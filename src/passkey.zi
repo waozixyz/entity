@@ -1,0 +1,222 @@
+// An extra sealed copy of the account key that a passkey unlocks, so no password
+// is typed. The ML-DSA account key stays the identity and the passkey never
+// signs for the account: the WebAuthn PRF extension only gives this device a
+// secret, and a node keeps text it cannot open.
+//
+// The wrapper is plain text, versioned apart from waozi-account-backup-v3:
+//
+//     waozi-account-passkey-v1
+//     algorithm=ML-DSA-44
+//     kdf=WebAuthn-PRF-SHA-256
+//     credential=<SHA-256 of the credential ID, hex>
+//     nonce=<12 bytes hex>
+//     ciphertext=<ChaCha20-Poly1305 output hex>
+//
+// It seals the same plaintext as v3 with the same cipher. Only the key source
+// differs: 32 bytes of PRF output are already uniform, so they need no Argon2id.
+// Everything before "ciphertext=" is authenticated, which ties a copy to its
+// credential. As in v3, the node stores only SHA-256 of the login proof.
+#import "recovery"
+#import "account_backup"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+Json :: #import "std/json_scan";
+
+PASSKEY_PREFIX :: "waozi-account-passkey-v1\nalgorithm=ML-DSA-44\nkdf=WebAuthn-PRF-SHA-256\ncredential="
+PASSKEY_NONCE_LABEL :: "\nnonce="
+PASSKEY_CIPHERTEXT_LABEL :: "\nciphertext="
+PASSKEY_SEAL_LABEL :: "waozi-account-passkey-seal-v1\n"
+PASSKEY_PROOF_LABEL :: "waozi-account-passkey-login-v1\n"
+// Every waozi.xyz app asks for this one PRF value, so a discoverable sign-in can
+// ask before it knows which account or credential will answer.
+PASSKEY_PRF_INPUT :: "waozi-account-passkey-prf-v1"
+PASSKEY_PRF_BYTES :: 32
+PASSKEY_CREDENTIAL_HEX :: 64
+PASSKEY_LABEL_MAX :: 40
+PASSKEY_LIMIT :: 8
+PASSKEY_OPEN_PATH :: "/api/v1/account-backup/passkey/open"
+PASSKEY_PATH :: "/api/v1/account/passkeys"
+// The wrapper and the JSON around it.
+PASSKEY_BODY_MAX :: ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE + 768
+
+PasskeyHash :: (label: string, secret: *u8, output: *u8) {
+    input: [64]u8
+    defer { SecureWipe(*input[0], input.count) }
+    for byte, index: label { input[index] = byte }
+    for index: 0..PASSKEY_PRF_BYTES - 1 { input[label.count + index] = secret[index] }
+    Sha256(*input[0], label.count + PASSKEY_PRF_BYTES, output)
+}
+
+// Refuses anything but 32 bytes, and an all-zero answer from a broken provider.
+PasskeyDerive :: (prf: []u8, keys: *RecoveryKeys) -> bool {
+    if keys == null || prf.count != PASSKEY_PRF_BYTES { return false }
+    seen: u8 = cast(u8)0
+    for byte: prf { seen = seen | byte }
+    if seen == cast(u8)0 { return false }
+    PasskeyHash(PASSKEY_SEAL_LABEL, *prf[0], *keys.seal[0])
+    PasskeyHash(PASSKEY_PROOF_LABEL, *prf[0], *keys.proof[0])
+    Sha256(*keys.proof[0], RECOVERY_KEY_BYTES, *keys.verifier[0])
+    return true
+}
+
+PasskeyDeriveFromHex :: (prf_hex: string, keys: *RecoveryKeys) -> bool {
+    prf: [PASSKEY_PRF_BYTES]u8
+    defer { SecureWipe(*prf[0], prf.count) }
+    if prf_hex.count != PASSKEY_PRF_BYTES * 2 || HexToBytes(prf_hex, *prf[0], prf.count) == 0 { return false }
+    return PasskeyDerive(prf[:], keys)
+}
+
+PasskeyCredentialValid :: (credential: string) -> bool {
+    return AccountBackupPublicId(credential) && credential.count == PASSKEY_CREDENTIAL_HEX
+}
+
+// Seals with a fresh nonce under keys already derived from this credential.
+PasskeySeal :: (value: *Recovery, credential: string, keys: *RecoveryKeys, output: []u8) -> bool {
+    if value == null || keys == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || !PasskeyCredentialValid(credential) { return false }
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    nonce: [RECOVERY_NONCE_BYTES]u8
+    defer {
+        SecureWipe(*plaintext[0], plaintext.count)
+        SecureWipe(*sealed[0], sealed.count)
+    }
+    if !RecoveryPlain(value, plaintext[:]) { return false }
+    length := TextUntilNul(plaintext[:]).count
+    if length + AccountEncryptedTagBytes >= sealed.count || SecureRandom(*nonce[0], nonce.count) == 0 { return false }
+    cursor: s64 = 0
+    if !AccountTextAppend(*output[0], output.count, *cursor, PASSKEY_PREFIX) ||
+    !AccountTextAppend(*output[0], output.count, *cursor, credential) ||
+    !AccountTextAppend(*output[0], output.count, *cursor, PASSKEY_NONCE_LABEL) ||
+    !AccountAppendHex(*output[0], output.count, *cursor, *nonce[0], nonce.count) { return false }
+    if ChaCha20Poly1305Seal(*keys.seal[0], *nonce[0], *plaintext[0], length, *output[0], cursor, *sealed[0], sealed.count) == 0 { return false }
+    return AccountTextAppend(*output[0], output.count, *cursor, PASSKEY_CIPHERTEXT_LABEL) &&
+    AccountAppendHex(*output[0], output.count, *cursor, *sealed[0], length + AccountEncryptedTagBytes)
+}
+
+// The fixed-layout fields. Anything else, v3 included, is not this format.
+PasskeyParts :: struct {
+    valid: bool
+    credential: string
+    nonce: string
+    ciphertext: string
+    authenticated: string
+}
+
+PasskeyParse :: (input: string) -> PasskeyParts {
+    parts: PasskeyParts
+    end := input.count
+    while end > 0 && input[end - 1] <= cast(u8)32 { end -= 1 }
+    text := input[:end]
+    prefix := PASSKEY_PREFIX
+    nonce_label := PASSKEY_NONCE_LABEL
+    cipher_label := PASSKEY_CIPHERTEXT_LABEL
+    credential_at := prefix.count
+    nonce_label_at := credential_at + PASSKEY_CREDENTIAL_HEX
+    nonce_at := nonce_label_at + nonce_label.count
+    cipher_label_at := nonce_at + RECOVERY_NONCE_BYTES * 2
+    cipher_at := cipher_label_at + cipher_label.count
+    if text.count <= cipher_at || !AccountStartsWith(text, prefix) || text[nonce_label_at:nonce_at] != nonce_label ||
+    text[cipher_label_at:cipher_at] != cipher_label { return parts }
+    parts.credential = text[credential_at:nonce_label_at]
+    parts.nonce = text[nonce_at:cipher_label_at]
+    parts.ciphertext = text[cipher_at:]
+    parts.authenticated = text[:cipher_label_at]
+    length := parts.ciphertext.count
+    parts.valid = PasskeyCredentialValid(parts.credential) && length % 2 == 0 &&
+    length / 2 > AccountEncryptedTagBytes && length / 2 < ACCOUNT_EXPORT_TEXT_SIZE
+    return parts
+}
+
+// Opens a copy only for the credential that answered.
+PasskeyOpen :: (input: string, credential: string, keys: *RecoveryKeys, output: *Recovery) -> bool {
+    if output == null || keys == null { return false }
+    output.* = Recovery.{}
+    parts := PasskeyParse(input)
+    if !parts.valid || parts.credential != credential { return false }
+    nonce: [RECOVERY_NONCE_BYTES]u8
+    sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    defer {
+        SecureWipe(*plaintext[0], plaintext.count)
+        SecureWipe(*sealed[0], sealed.count)
+    }
+    sealed_length := parts.ciphertext.count / 2
+    if HexToBytes(parts.nonce, *nonce[0], nonce.count) == 0 || HexToBytes(parts.ciphertext, *sealed[0], sealed_length) == 0 ||
+    ChaCha20Poly1305Open(*keys.seal[0], *nonce[0], *sealed[0], sealed_length, RecoveryBytes(parts.authenticated), parts.authenticated.count,
+        *plaintext[0], plaintext.count) == 0 { return false }
+    plaintext[sealed_length - AccountEncryptedTagBytes] = cast(u8)0
+    return RecoveryReadPlain(TextUntilNul(plaintext[:]), output)
+}
+
+// A device's name for its passkey may hold only plain letters, digits, spaces,
+// and - or _: it travels in JSON and is shown beside other accounts' text.
+PasskeyLabelClean :: (value: string, output: []u8) -> string {
+    count: s64 = 0
+    for byte: value {
+        keep := (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+        (byte >= #char "0" && byte <= #char "9") || byte == #char " " || byte == #char "-" || byte == #char "_"
+        if keep && count < PASSKEY_LABEL_MAX && count + 1 < output.count {
+            output[count] = byte
+            count += 1
+        }
+    }
+    if output.count > 0 { output[count] = cast(u8)0 }
+    return TextUntilNul(output)
+}
+
+// The wrapper has no quotes or backslashes, only line breaks to escape.
+PasskeyUploadBody :: (wrapper: string, credential: string, keys: *RecoveryKeys, label: string, output: []u8) -> bool {
+    if !PasskeyParse(wrapper).valid || !PasskeyCredentialValid(credential) { return false }
+    verifier: [RECOVERY_KEY_BYTES * 2 + 1]u8
+    clean: [PASSKEY_LABEL_MAX + 1]u8
+    if BytesToHex(*keys.verifier[0], RECOVERY_KEY_BYTES, *verifier[0], verifier.count) == 0 { return false }
+    at: s64 = 0
+    if !AccountBackupAppend(output, *at, "{\"credential\":\"") || !AccountBackupAppend(output, *at, credential) ||
+    !AccountBackupAppend(output, *at, "\",\"label\":\"") || !AccountBackupAppend(output, *at, PasskeyLabelClean(label, clean[:])) ||
+    !AccountBackupAppend(output, *at, "\",\"verifier\":\"") || !AccountBackupAppend(output, *at, TextUntilNul(verifier[:])) ||
+    !AccountBackupAppend(output, *at, "\",\"wrapper\":\"") { return false }
+    for byte: wrapper {
+        if byte == cast(u8)34 || byte == cast(u8)92 { return false }
+        if byte == cast(u8)10 {
+            if !AccountBackupAppend(output, *at, "\\n") { return false }
+        } else {
+            if at + 1 >= output.count { return false }
+            output[at] = byte
+            at += 1
+            output[at] = cast(u8)0
+        }
+    }
+    return AccountBackupAppend(output, *at, "\"}")
+}
+
+PasskeyOpenBody :: (account: string, credential: string, keys: *RecoveryKeys, output: []u8) -> bool {
+    if !AccountBackupPublicId(account) || !PasskeyCredentialValid(credential) { return false }
+    proof: [RECOVERY_KEY_BYTES * 2 + 1]u8
+    defer { SecureWipe(*proof[0], proof.count) }
+    if BytesToHex(*keys.proof[0], RECOVERY_KEY_BYTES, *proof[0], proof.count) == 0 { return false }
+    at: s64 = 0
+    return AccountBackupAppend(output, *at, "{\"account\":\"") && AccountBackupAppend(output, *at, account) &&
+    AccountBackupAppend(output, *at, "\",\"credential\":\"") && AccountBackupAppend(output, *at, credential) &&
+    AccountBackupAppend(output, *at, "\",\"proof\":\"") && AccountBackupAppend(output, *at, TextUntilNul(proof[:])) &&
+    AccountBackupAppend(output, *at, "\"}")
+}
+
+// Opens what the node released. The account inside must be the one the passkey
+// and the node both named, so a node cannot pass another account off as this one.
+PasskeyOpenReply :: (reply: string, account: string, credential: string, keys: *RecoveryKeys, output: *Recovery) -> bool {
+    identity: [65]u8
+    wrapper: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*wrapper[0], wrapper.count) }
+    if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "account_id"), identity[:]) != 64 ||
+    Json.ReadStringText(reply, Json.FieldAt(reply, 0, "wrapper"), wrapper[:]) <= 0 ||
+    TextUntilNul(identity[:]) != account { return false }
+    if !PasskeyOpen(TextUntilNul(wrapper[:]), credential, keys, output) { return false }
+    if TextUntilNul(output.keys.public_id[:]) != account {
+        RecoveryClear(output)
+        return false
+    }
+    return true
+}

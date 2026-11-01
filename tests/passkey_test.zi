@@ -1,0 +1,206 @@
+// The passkey wrapper: round trip, wrong passkey, wrong credential, tampering,
+// PRF output that is not usable, the v3 boundary and exact node bodies.
+#import "passkey"
+#import "sign_in_bridge"
+#import "management"
+#import "model"
+#import "recovery"
+#import "account_backup"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+
+CREDENTIAL_A :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+CREDENTIAL_B :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+PRF_A :: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+PRF_B :: "2102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+ZEROS :: "0000000000000000000000000000000000000000000000000000000000000000"
+
+#program_export
+main :: () -> s32 {
+    account: Recovery
+    if CreateAccountKeys(*account.keys) == 0 { return 1 }
+    unused CopyCString("vault-context", account.context[:])
+    public_id_copy: [128]u8
+    unused CopyCString(TextUntilNul(account.keys.public_id[:]), public_id_copy[:])
+    public_id := TextUntilNul(public_id_copy[:])
+
+    keys_a: RecoveryKeys
+    keys_b: RecoveryKeys
+    defer { RecoveryKeysClear(*keys_a); RecoveryKeysClear(*keys_b) }
+    if !PasskeyDeriveFromHex(PRF_A, *keys_a) || !PasskeyDeriveFromHex(PRF_B, *keys_b) { return 2 }
+
+    // PRF unavailable or unusable never produces keys.
+    unusable: RecoveryKeys
+    if PasskeyDeriveFromHex("", *unusable) { return 3 }
+    if PasskeyDeriveFromHex("0102", *unusable) { return 4 }
+    if PasskeyDeriveFromHex(ZEROS, *unusable) { return 5 }
+    if PasskeyDeriveFromHex("zz02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", *unusable) { return 6 }
+
+    // The proof, the seal key and the verifier are unrelated, and the proof is
+    // not the seal key, so what the node sees cannot open what it holds.
+    same := true
+    for index: 0..RECOVERY_KEY_BYTES - 1 {
+        if keys_a.seal[index] != keys_a.proof[index] { same = false }
+    }
+    if same { return 7 }
+
+    wrapper: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if !PasskeySeal(*account, CREDENTIAL_A, *keys_a, wrapper[:]) { return 8 }
+    text := TextUntilNul(wrapper[:])
+    if !AccountStartsWith(text, "waozi-account-passkey-v1\nalgorithm=ML-DSA-44\nkdf=WebAuthn-PRF-SHA-256\ncredential=") { return 9 }
+
+    // The node holds nothing readable.
+    if TextContains(text, TextUntilNul(account.keys.private_key_hex[:])) { return 10 }
+
+    opened: Recovery
+    defer { RecoveryClear(*opened) }
+    if !PasskeyOpen(text, CREDENTIAL_A, *keys_a, *opened) { return 11 }
+    if TextUntilNul(opened.keys.public_id[:]) != public_id { return 12 }
+    if TextUntilNul(opened.keys.private_key_hex[:]) != TextUntilNul(account.keys.private_key_hex[:]) { return 13 }
+    if TextUntilNul(opened.context[:]) != "vault-context" { return 14 }
+
+    // Wrong passkey, and the right passkey for a copy of another credential.
+    wrong: Recovery
+    if PasskeyOpen(text, CREDENTIAL_A, *keys_b, *wrong) { return 15 }
+    if PasskeyOpen(text, CREDENTIAL_B, *keys_a, *wrong) { return 16 }
+
+    // A wrapper moved to another credential fails: the header is authenticated.
+    moved: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    unused CopyCString(text, moved[:])
+    prefix := PASSKEY_PREFIX
+    for index: 0..PASSKEY_CREDENTIAL_HEX - 1 { moved[prefix.count + index] = #char "b" }
+    if PasskeyOpen(TextUntilNul(moved[:]), CREDENTIAL_B, *keys_a, *wrong) { return 17 }
+
+    // A changed ciphertext fails.
+    tampered: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    unused CopyCString(text, tampered[:])
+    last := text.count - 1
+    tampered[last] = ifx tampered[last] == #char "0" then #char "1" else #char "0"
+    if PasskeyOpen(TextUntilNul(tampered[:]), CREDENTIAL_A, *keys_a, *wrong) { return 18 }
+
+    // v3 and this format do not open as each other.
+    v3: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if !RecoveryEncode(*account, "correct horse battery", v3[:]) { return 19 }
+    if PasskeyParse(TextUntilNul(v3[:])).valid { return 20 }
+    if RecoverySealedParse(text).valid { return 21 }
+    if RecoveryNeedsPassword(text) { return 22 }
+
+    // Bodies carry the proof or verifier, never the seal key or the PRF output.
+    body: [PASSKEY_BODY_MAX]u8
+    if !PasskeyUploadBody(text, CREDENTIAL_A, *keys_a, "Pixel \"7\"", body[:]) { return 23 }
+    upload := TextUntilNul(body[:])
+    seal_hex: [65]u8
+    proof_hex: [65]u8
+    verifier_hex: [65]u8
+    unused BytesToHex(*keys_a.seal[0], 32, *seal_hex[0], seal_hex.count)
+    unused BytesToHex(*keys_a.proof[0], 32, *proof_hex[0], proof_hex.count)
+    unused BytesToHex(*keys_a.verifier[0], 32, *verifier_hex[0], verifier_hex.count)
+    if TextContains(upload, TextUntilNul(seal_hex[:])) || TextContains(upload, TextUntilNul(proof_hex[:])) || TextContains(upload, PRF_A) { return 24 }
+    if !TextContains(upload, TextUntilNul(verifier_hex[:])) { return 25 }
+    if !TextContains(upload, "\"label\":\"Pixel 7\"") { return 26 }
+
+    open_body: [512]u8
+    if !PasskeyOpenBody(public_id, CREDENTIAL_A, *keys_a, open_body[:]) { return 27 }
+    opening := TextUntilNul(open_body[:])
+    if !TextContains(opening, TextUntilNul(proof_hex[:])) || TextContains(opening, TextUntilNul(seal_hex[:])) { return 28 }
+    refused_body: [512]u8
+    if PasskeyOpenBody("not-an-account", CREDENTIAL_A, *keys_a, refused_body[:]) { return 29 }
+
+    // A node's reply opens only for the account the passkey named.
+    reply: [PASSKEY_BODY_MAX]u8
+    if !ReplyFor(public_id, text, reply[:]) { return 30 }
+    released: Recovery
+    defer { RecoveryClear(*released) }
+    if !PasskeyOpenReply(TextUntilNul(reply[:]), public_id, CREDENTIAL_A, *keys_a, *released) { return 31 }
+    other: Recovery
+    if CreateAccountKeys(*other.keys) == 0 { return 32 }
+    other_id := TextUntilNul(other.keys.public_id[:])
+    if PasskeyOpenReply(TextUntilNul(reply[:]), other_id, CREDENTIAL_A, *keys_a, *wrong) { return 33 }
+    if !ReplyFor(other_id, text, reply[:]) { return 34 }
+    if PasskeyOpenReply(TextUntilNul(reply[:]), other_id, CREDENTIAL_A, *keys_a, *wrong) { return 35 }
+    // Without a platform to ask, nothing is offered and nothing pretends.
+    if PasskeyBridgeAvailable() || GoogleBridgeAvailable() { return 40 }
+    if PasskeyBridgeCreate(public_id, "name") || PasskeyBridgeGet() || GoogleBridgeStart("client", "") { return 41 }
+    unavailable: SignInAnswer
+    if !SignInBridgePoll(*unavailable) || TextUntilNul(unavailable.status[:]) != "unsupported" { return 42 }
+
+    // Android's answers: PRF unavailable, cancelled, and a real answer.
+    no_prf: SignInAnswer
+    if !SignInAnswerRead("{\"status\":\"no_prf\"}", *no_prf) || TextUntilNul(no_prf.status[:]) != "no_prf" || no_prf.prf[0] != cast(u8)0 { return 43 }
+    full: SignInAnswer
+    if !SignInAnswerRead("{\"status\":\"ok\",\"credential\":\"aaaa\",\"account\":\"bbbb\",\"prf\":\"cccc\"}", *full) { return 44 }
+    if TextUntilNul(full.prf[:]) != "cccc" || TextUntilNul(full.account[:]) != "bbbb" || TextUntilNul(full.credential[:]) != "aaaa" { return 45 }
+    SignInAnswerClear(*full)
+    if full.prf[0] != cast(u8)0 { return 46 }
+    garbled: SignInAnswer
+    if SignInAnswerRead("not json", *garbled) { return 47 }
+
+    // A linking nonce is the node's: SHA-256 of the label and the account.
+    nonce: [65]u8
+    if !SignInGoogleNonce(CREDENTIAL_A, nonce[:]) { return 48 }
+    if TextUntilNul(nonce[:]) != "95583e1273ddfe0fbd48c21c6835bd081a9d2374246449af48f0999f87c16e1c" { return 49 }
+    if SignInGoogleNonce("short", nonce[:]) { return 50 }
+
+    // A token is base64url and dots; anything else never reaches a JSON body.
+    token_body: [256]u8
+    if !SignInTokenBody("aaa.bbb-_.ccc", token_body[:]) || TextUntilNul(token_body[:]) != "{\"id_token\":\"aaa.bbb-_.ccc\"}" { return 51 }
+    if SignInTokenBody("aaa\",\"x\":\"y", token_body[:]) || SignInTokenBody("", token_body[:]) { return 52 }
+
+    // Revoked or expired Google access: the node refuses, the account stays.
+    if !SignInFoundAccount("{\"account_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", nonce[:]) { return 53 }
+    if SignInFoundAccount("{\"error\":\"google token not accepted\"}", nonce[:]) || nonce[0] != cast(u8)0 { return 54 }
+    if SignInFoundAccount("{\"account_id\":\"../../etc\"}", nonce[:]) { return 55 }
+
+    // Google is offered only for a client ID the node named.
+    client: [SIGN_IN_GOOGLE_CLIENT_MAX]u8
+    if SignInGoogleClient("{}", client[:]) || !SignInGoogleClient("{\"google_client_id\":\"id.example\"}", client[:]) { return 56 }
+
+    // The node's list reaches the screens; a garbled entry is dropped.
+    entries: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
+    listed := SignInPasskeyList("{\"passkeys\":[{\"credential\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Phone\",\"created_at\":1},{\"credential\":\"bad\",\"label\":\"x\"}]}", entries[:])
+    if listed != 1 || TextUntilNul(entries[0].label[:]) != "Phone" { return 57 }
+
+    // Each operation needs its own capability, and the state survives encoding.
+    if ManagementOperation("passkey_sign_in") != ACCOUNT_PASSKEY || ManagementOperation("google_sign_in") != ACCOUNT_GOOGLE { return 58 }
+    state: Management
+    state.available = true
+    state.capabilities = ACCOUNT_PASSKEY | ACCOUNT_GOOGLE
+    state.google_linked = true
+    state.passkey_count = 1
+    state.passkeys[0] = entries[0]
+    unused CopyCString(CREDENTIAL_A, state.found_account[:])
+    encoded := ManagementEncode(state)
+    defer { EntityFree(encoded) }
+    decoded: Management
+    if !ManagementDecode(encoded, *decoded) { return 59 }
+    if decoded.capabilities != state.capabilities || !decoded.google_linked || decoded.passkey_count != 1 { return 60 }
+    if TextUntilNul(decoded.passkeys[0].label[:]) != "Phone" || TextUntilNul(decoded.found_account[:]) != CREDENTIAL_A { return 61 }
+    return 0
+}
+
+ReplyFor :: (account: string, wrapper: string, output: []u8) -> bool {
+    at: s64 = 0
+    if !AccountBackupAppend(output, *at, "{\"account_id\":\"") || !AccountBackupAppend(output, *at, account) ||
+    !AccountBackupAppend(output, *at, "\",\"wrapper\":\"") { return false }
+    for byte: wrapper {
+        if byte == cast(u8)10 {
+            if !AccountBackupAppend(output, *at, "\\n") { return false }
+        } else {
+            output[at] = byte
+            at += 1
+            output[at] = cast(u8)0
+        }
+    }
+    return AccountBackupAppend(output, *at, "\"}")
+}
+
+TextContains :: (text: string, part: string) -> bool {
+    if part.count == 0 || part.count > text.count { return false }
+    for start: 0..text.count - part.count {
+        if text[start:start + part.count] == part { return true }
+    }
+    return false
+}

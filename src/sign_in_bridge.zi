@@ -1,0 +1,780 @@
+// Asks the platform for a passkey or a Google sign-in. Everything else about
+// those flows, and every screen, stays in Entity's shared code. The browser
+// speaks WebAuthn and Google's script directly from here. On Android only the
+// Play edition holds the adapter (android/gplay), found through the activity's
+// class loader; normal and F-Droid builds answer that neither is available.
+// Desktop hosts have no platform passkey API to ask.
+//
+// No account key crosses this boundary. A passkey gives back a 32-byte PRF value
+// and Google gives back an ID token; the caller wipes both when finished.
+#import "passkey"
+#import "management"
+#import "account_backup"
+#import "recovery"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+Json :: #import "std/json_scan";
+#if #defined(PLATFORM_WEB) {
+    #import "std/web"
+}
+#if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+    #import "kryon/android_jni"
+}
+
+SIGN_IN_TOKEN_MAX :: 4096
+SIGN_IN_GOOGLE_CLIENT_MAX :: 160
+SIGN_IN_METHODS_PATH :: "/api/v1/account-backup/methods"
+SIGN_IN_GOOGLE_FIND_PATH :: "/api/v1/account-backup/google"
+SIGN_IN_GOOGLE_PATH :: "/api/v1/account/google"
+SIGN_IN_GOOGLE_UNLINK_PATH :: "/api/v1/account/google/remove"
+SIGN_IN_PASSKEY_REMOVE_PATH :: "/api/v1/account/passkeys/remove"
+
+// What a person reads when a flow cannot go on. Each one says what is still open.
+SIGN_IN_NO_PASSKEY :: "Passkeys are not available here. Use your password."
+SIGN_IN_NO_PRF :: "This passkey or password manager cannot unlock accounts here. Use your password."
+SIGN_IN_WRONG_PASSKEY :: "That passkey is not linked to an account on this node. Use your password."
+SIGN_IN_NO_GOOGLE :: "Sign in with Google is not available here. Use your username and password."
+SIGN_IN_GOOGLE_REFUSED :: "Google did not accept this sign-in. Try again, or use your username and password."
+SIGN_IN_GOOGLE_UNLINKED :: "No account is linked to this Google account. Use your username and password."
+SIGN_IN_GOOGLE_TAKEN :: "This Google account is linked to another account."
+SIGN_IN_GOOGLE_FOUND :: "Found your account. Unlock it with your password or a passkey."
+
+// status: pending, ok, no_prf (this passkey or manager has no PRF), cancelled,
+// unsupported or error.
+SignInAnswer :: struct {
+    status: [16]u8
+    credential: [PASSKEY_CREDENTIAL_HEX + 1]u8
+    account: [65]u8
+    prf: [PASSKEY_PRF_BYTES * 2 + 1]u8
+    token: [SIGN_IN_TOKEN_MAX]u8
+}
+
+SignInAnswerClear :: (answer: *SignInAnswer) {
+    SecureWipe(*answer.prf[0], answer.prf.count)
+    SecureWipe(*answer.token[0], answer.token.count)
+    answer.* = SignInAnswer.{}
+}
+
+// A request and a poll are both one line of text on Android, so its answers are
+// JSON. The browser's callbacks fill the same fields directly.
+SignInAnswerRead :: (text: string, output: *SignInAnswer) -> bool {
+    if Json.ReadStringText(text, Json.FieldAt(text, 0, "status"), output.status[:]) <= 0 { return false }
+    if Json.FieldAt(text, 0, "credential") >= 0 &&
+    Json.ReadStringText(text, Json.FieldAt(text, 0, "credential"), output.credential[:]) < 0 { return false }
+    if Json.FieldAt(text, 0, "account") >= 0 &&
+    Json.ReadStringText(text, Json.FieldAt(text, 0, "account"), output.account[:]) < 0 { return false }
+    if Json.FieldAt(text, 0, "prf") >= 0 &&
+    Json.ReadStringText(text, Json.FieldAt(text, 0, "prf"), output.prf[:]) < 0 { return false }
+    if Json.FieldAt(text, 0, "token") >= 0 &&
+    Json.ReadStringText(text, Json.FieldAt(text, 0, "token"), output.token[:]) < 0 { return false }
+    return true
+}
+
+// A public ID is 32 bytes written as hex, the WebAuthn user handle's size.
+SignInAccountBytes :: (account: string, output: *u8) -> bool {
+    return account.count == 64 && HexToBytes(account, output, 32) != 0
+}
+
+// The nonce a linking token must carry, bound to this account on the node too.
+SignInGoogleNonce :: (account: string, output: []u8) -> bool {
+    label := "waozi-google-link-v1\n"
+    input: [128]u8
+    if account.count != 64 || output.count < 65 { return false }
+    for byte, index: label { input[index] = byte }
+    for byte, index: account { input[label.count + index] = byte }
+    digest: [32]u8
+    Sha256(*input[0], label.count + account.count, *digest[0])
+    return BytesToHex(*digest[0], 32, *output[0], output.count) != 0
+}
+
+// An ID token is base64url text and two dots: it needs no JSON escaping, and
+// anything else is not a token.
+SignInTokenBody :: (token: string, output: []u8) -> bool {
+    if token.count == 0 || token.count + 16 >= output.count { return false }
+    prefix := "{\"id_token\":\""
+    at: s64 = 0
+    for byte: prefix { output[at] = byte; at += 1 }
+    for byte: token {
+        keep := (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+        (byte >= #char "0" && byte <= #char "9") || byte == #char "-" || byte == #char "_" || byte == #char "."
+        if !keep { return false }
+        output[at] = byte
+        at += 1
+    }
+    output[at] = #char "\""
+    output[at + 1] = #char "}"
+    output[at + 2] = cast(u8)0
+    return true
+}
+
+SignInRemoveBody :: (credential: string, output: []u8) -> bool {
+    if !PasskeyCredentialValid(credential) || output.count < 128 { return false }
+    prefix := "{\"credential\":\""
+    at: s64 = 0
+    for byte: prefix { output[at] = byte; at += 1 }
+    for byte: credential { output[at] = byte; at += 1 }
+    output[at] = #char "\""
+    output[at + 1] = #char "}"
+    output[at + 2] = cast(u8)0
+    return true
+}
+
+SignInGoogleClient :: (reply: string, output: []u8) -> bool {
+    if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "google_client_id"), output) <= 0 {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+// The account a node named for a Google sign-in: a public ID and nothing else.
+SignInFoundAccount :: (reply: string, output: []u8) -> bool {
+    if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "account_id"), output) != 64 || !AccountBackupPublicId(TextUntilNul(output)) {
+        output[0] = cast(u8)0
+        return false
+    }
+    return true
+}
+
+SignInGoogleLinked :: (reply: string) -> bool {
+    return Json.MatchLiteral(reply, Json.FieldAt(reply, 0, "linked"), "true")
+}
+
+// Reads the node's list. Returns how many are kept.
+SignInPasskeyList :: (reply: string, output: []ManagementPasskey) -> s32 {
+    positions: [MANAGEMENT_PASSKEY_LIMIT]s32
+    count := Json.ArrayPositions(reply, Json.FieldAt(reply, 0, "passkeys"), positions[:])
+    if count <= 0 { return 0 }
+    kept: s32 = 0
+    for index: 0..count - 1 {
+        entry: ManagementPasskey
+        if Json.ReadStringText(reply, Json.FieldAt(reply, positions[index], "credential"), entry.credential[:]) == PASSKEY_CREDENTIAL_HEX &&
+        Json.ReadStringText(reply, Json.FieldAt(reply, positions[index], "label"), entry.label[:]) >= 0 &&
+        cast(s64)kept < output.count {
+            output[kept] = entry
+            kept += 1
+        }
+    }
+    return kept
+}
+
+// A plain name for the list of passkeys, so a person can tell them apart.
+SignInDeviceLabel :: (output: []u8) -> string {
+    name := "Passkey"
+    #if #defined(ANDROID_BUILD) {
+        name = "Android passkey"
+    }
+    #if #defined(PLATFORM_WEB) {
+        name = "Browser passkey"
+    }
+    return ifx CopyCString(name, output) then TextUntilNul(output) else ""
+}
+
+#if #defined(PLATFORM_WEB) {
+    bridge_answer: SignInAnswer;
+    bridge_pending: bool;
+    // 1 waits for a new passkey, 2 for a passkey's PRF value.
+    bridge_step: s32;
+    bridge_abort: s32;
+    bridge_account: [65]u8;
+    bridge_overlay: s32;
+    bridge_google_client: [160]u8;
+    bridge_google_nonce: [65]u8;
+    bridge_google_ready: bool;
+
+    BridgeFinish :: (status: string) {
+        unused CopyCString(status, bridge_answer.status[:])
+        bridge_pending = false
+        bridge_step = 0
+        BridgeOverlayClose()
+        if bridge_abort != 0 { WebRelease(bridge_abort); bridge_abort = 0 }
+    }
+
+    // waozi.xyz for every waozi.xyz site, so one passkey works across them.
+    // Local addresses are for tests with a virtual authenticator.
+    BridgeRelyingParty :: (output: []u8) -> string {
+        location := WebGetObject(WebGlobal, WebName("location"))
+        if location == 0 || WebFailed() { return "" }
+        handle := WebAsObject(WebGet(location, WebName("hostname")))
+        if handle == 0 || WebFailed() { return "" }
+        host: [256]u8
+        length := WebCopyString(handle, host[:])
+        if length <= 0 || length >= cast(s32)host.count { return "" }
+        name := TextUntilNul(host[:])
+        if name == "localhost" { return ifx CopyCString("localhost", output) then TextUntilNul(output) else "" }
+        suffix := ".waozi.xyz"
+        if name == "waozi.xyz" || (name.count > suffix.count && name[name.count - suffix.count:] == suffix) {
+            return ifx CopyCString("waozi.xyz", output) then TextUntilNul(output) else ""
+        }
+        return ""
+    }
+
+    BridgeCredentials :: () -> s32 {
+        navigator := WebGetObject(WebGlobal, WebName("navigator"))
+        if navigator == 0 || WebFailed() { return 0 }
+        credentials := WebGetObject(navigator, WebName("credentials"))
+        return ifx WebFailed() then 0 else credentials
+    }
+
+    BridgeBytes :: (data: *u8, count: s32) -> s32 {
+        return WebBytes(WebBytesUint8, cast(*void)data, count)
+    }
+
+    BridgeChallenge :: () -> s32 {
+        // The node verifies no signature, so nothing checks this value; WebAuthn
+        // only requires one to exist.
+        bytes: [32]u8
+        unused SecureRandom(*bytes[0], bytes.count)
+        return BridgeBytes(*bytes[0], 32)
+    }
+
+    BridgePrfExtension :: () -> s32 {
+        input := PASSKEY_PRF_INPUT
+        first := BridgeBytes(RecoveryTextBytes(input), cast(s32)input.count)
+        evaluation := WebNewObject()
+        WebSet(evaluation, WebName("first"), WebObject(first))
+        prf := WebNewObject()
+        WebSet(prf, WebName("eval"), WebObject(evaluation))
+        extensions := WebNewObject()
+        WebSet(extensions, WebName("prf"), WebObject(prf))
+        return extensions
+    }
+
+    RecoveryTextBytes :: (value: string) -> *u8 {
+        descriptor := cast(*TextDescriptor)(*value)
+        return descriptor.data
+    }
+
+    // Copies a Uint8Array or ArrayBuffer value as hex. Returns the byte count.
+    BridgeHexOf :: (buffer: WebValue, limit: s32, output: []u8) -> s32 {
+        handle := WebAsObject(buffer)
+        if handle == 0 || WebFailed() { return 0 }
+        bytes := WebNew1(WebGetObject(WebGlobal, WebName("Uint8Array")), WebObject(handle))
+        if bytes == 0 || WebFailed() { return 0 }
+        data: [64]u8
+        count := WebCopyOut(bytes, cast(*void)*data[0], cast(s32)data.count)
+        if count <= 0 || count != limit { return 0 }
+        if BytesToHex(*data[0], cast(s64)count, *output[0], output.count) == 0 { return 0 }
+        SecureWipe(*data[0], data.count)
+        return count
+    }
+
+    // The credential is named by its SHA-256, so its length does not matter.
+    BridgeCredentialHash :: (credential: s32) -> bool {
+        raw := WebGet(credential, WebName("rawId"))
+        handle := WebAsObject(raw)
+        if handle == 0 || WebFailed() { return false }
+        bytes := WebNew1(WebGetObject(WebGlobal, WebName("Uint8Array")), WebObject(handle))
+        if bytes == 0 || WebFailed() { return false }
+        data: [1024]u8
+        count := WebCopyOut(bytes, cast(*void)*data[0], cast(s32)data.count)
+        if count <= 0 { return false }
+        digest: [32]u8
+        Sha256(*data[0], cast(s64)count, *digest[0])
+        return BytesToHex(*digest[0], 32, *bridge_answer.credential[0], bridge_answer.credential.count) != 0
+    }
+
+    // prf.results.first, or false when the browser or manager gave none.
+    BridgePrfValue :: (credential: s32) -> bool {
+        results := WebCall0(credential, WebName("getClientExtensionResults"))
+        holder := WebAsObject(results)
+        if holder == 0 || WebFailed() { return false }
+        prf := WebGet(holder, WebName("prf"))
+        if WebIsUndefined(prf) { return false }
+        values := WebGet(WebAsObject(prf), WebName("results"))
+        if WebIsUndefined(values) { return false }
+        first := WebGet(WebAsObject(values), WebName("first"))
+        if WebIsUndefined(first) { return false }
+        return BridgeHexOf(first, PASSKEY_PRF_BYTES, bridge_answer.prf[:]) == PASSKEY_PRF_BYTES
+    }
+
+    BridgePrfEnabled :: (credential: s32) -> bool {
+        results := WebCall0(credential, WebName("getClientExtensionResults"))
+        holder := WebAsObject(results)
+        if holder == 0 || WebFailed() { return false }
+        prf := WebGet(holder, WebName("prf"))
+        if WebIsUndefined(prf) { return false }
+        return WebAsBool(WebGet(WebAsObject(prf), WebName("enabled")))
+    }
+
+    // Asks the manager to forget a passkey that cannot unlock anything, where
+    // the browser supports it, so it does not sit there looking useful.
+    BridgeForgetUseless :: (credential: s32) {
+        constructor := WebGetObject(WebGlobal, WebName("PublicKeyCredential"))
+        if constructor == 0 || WebFailed() { return }
+        if WebTypeOf(WebGetObject(constructor, WebName("signalUnknownCredential"))) != WebTypeFunction { return }
+        identifier := WebGet(credential, WebName("id"))
+        options := WebNewObject()
+        party: [32]u8
+        WebSet(options, WebName("rpId"), WebText(BridgeRelyingParty(party[:])))
+        WebSet(options, WebName("credentialId"), identifier)
+        unused WebCall1(constructor, WebName("signalUnknownCredential"), WebObject(options))
+    }
+
+    BridgeStartPrfRead :: (credential: s32) -> bool {
+        credentials := BridgeCredentials()
+        if credentials == 0 { return false }
+        party: [32]u8
+        options := WebNewObject()
+        WebSet(options, WebName("rpId"), WebText(BridgeRelyingParty(party[:])))
+        WebSet(options, WebName("challenge"), WebObject(BridgeChallenge()))
+        WebSet(options, WebName("userVerification"), WebText("required"))
+        WebSet(options, WebName("timeout"), WebNumber(120000.0))
+        WebSet(options, WebName("extensions"), WebObject(BridgePrfExtension()))
+        allowed := WebNewObject()
+        WebSet(allowed, WebName("type"), WebText("public-key"))
+        WebSet(allowed, WebName("id"), WebGet(credential, WebName("rawId")))
+        list := WebNewArray()
+        WebSetAt(list, 0, WebObject(allowed))
+        WebSet(options, WebName("allowCredentials"), WebObject(list))
+        bridge_step = 2
+        return BridgeRequest(credentials, "get", options)
+    }
+
+    BridgeResolved :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused second
+        unused third
+        scope := WebScope()
+        defer WebEnd(scope)
+        if !bridge_pending { return }
+        if first == 0 || WebTypeOf(first) != WebTypeObject { BridgeFinish("cancelled"); return }
+        if !BridgeCredentialHash(first) { BridgeFinish("error"); return }
+        if BridgePrfValue(first) {
+            handle := WebGet(WebAsObject(WebGet(first, WebName("response"))), WebName("userHandle"))
+            if !WebIsUndefined(handle) && WebAsObject(handle) != 0 {
+                if BridgeHexOf(handle, 32, bridge_answer.account[:]) != 32 { bridge_answer.account = .{} }
+            }
+            BridgeFinish("ok")
+            return
+        }
+        // A new passkey may give PRF only on its first use, not when created.
+        if bridge_step == 1 && BridgePrfEnabled(first) && BridgeStartPrfRead(first) { return }
+        if bridge_step == 1 { BridgeForgetUseless(first) }
+        BridgeFinish("no_prf")
+    }
+
+    BridgeRejected :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused second
+        unused third
+        scope := WebScope()
+        defer WebEnd(scope)
+        if !bridge_pending { return }
+        name: [40]u8
+        handle := WebAsObject(WebGet(first, WebName("name")))
+        if handle != 0 && !WebFailed() { unused WebCopyString(handle, name[:]) }
+        text := TextUntilNul(name[:])
+        // The user closed the prompt, or no passkey on this device answered.
+        if text == "NotAllowedError" || text == "AbortError" { BridgeFinish("cancelled"); return }
+        if text == "NotSupportedError" || text == "SecurityError" { BridgeFinish("unsupported"); return }
+        BridgeFinish("error")
+    }
+
+    BridgeRequest :: (credentials: s32, method: string, options: s32) -> bool {
+        controller := WebNew0(WebGetObject(WebGlobal, WebName("AbortController")))
+        if controller != 0 && !WebFailed() {
+            if bridge_abort != 0 { WebRelease(bridge_abort) }
+            bridge_abort = WebKeep(controller)
+        }
+        wrapper := WebNewObject()
+        WebSet(wrapper, WebName("publicKey"), WebObject(options))
+        if bridge_abort != 0 { WebSet(wrapper, WebName("signal"), WebGet(bridge_abort, WebName("signal"))) }
+        promise := WebAsObject(WebCall1(credentials, WebName(method), WebObject(wrapper)))
+        if promise == 0 || WebFailed() { return false }
+        resolved := WebFunction(BridgeResolved, 0)
+        rejected := WebFunction(BridgeRejected, 0)
+        unused WebCall2(promise, WebName("then"), WebObject(resolved), WebObject(rejected))
+        return !WebFailed()
+    }
+
+    BridgeOverlayClose :: () {
+        if bridge_overlay == 0 { return }
+        unused WebCall0(bridge_overlay, WebName("remove"))
+        WebRelease(bridge_overlay)
+        bridge_overlay = 0
+    }
+
+    BridgeGoogleToken :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused second
+        unused third
+        scope := WebScope()
+        defer WebEnd(scope)
+        if !bridge_pending { return }
+        handle := WebAsObject(WebGet(first, WebName("credential")))
+        if handle == 0 || WebFailed() { BridgeFinish("error"); return }
+        length := WebCopyString(handle, bridge_answer.token[:])
+        if length <= 0 || length >= cast(s32)bridge_answer.token.count { BridgeFinish("error"); return }
+        BridgeFinish("ok")
+    }
+
+    BridgeGoogleCancel :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused first
+        unused second
+        unused third
+        if bridge_pending { BridgeFinish("cancelled") }
+    }
+
+    BridgeGoogleFailed :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused first
+        unused second
+        unused third
+        if bridge_pending { BridgeFinish("error") }
+    }
+
+    // Google's button has to be Google's own element, over the canvas.
+    BridgeGoogleShow :: () {
+        document := WebGetObject(WebGlobal, WebName("document"))
+        google := WebGetObject(WebGlobal, WebName("google"))
+        if document == 0 || google == 0 || WebFailed() { BridgeFinish("unsupported"); return }
+        accounts := WebGetObject(google, WebName("accounts"))
+        identity := WebGetObject(accounts, WebName("id"))
+        if identity == 0 || WebFailed() { BridgeFinish("unsupported"); return }
+        settings := WebNewObject()
+        WebSet(settings, WebName("client_id"), WebText(TextUntilNul(bridge_google_client[:])))
+        WebSet(settings, WebName("callback"), WebObject(WebFunction(BridgeGoogleToken, 0)))
+        WebSet(settings, WebName("auto_select"), WebBool(false))
+        if bridge_google_nonce[0] != cast(u8)0 {
+            WebSet(settings, WebName("nonce"), WebText(TextUntilNul(bridge_google_nonce[:])))
+        }
+        unused WebCall1(identity, WebName("initialize"), WebObject(settings))
+        BridgeOverlayClose()
+        overlay := WebAsObject(WebCall1(document, WebName("createElement"), WebText("div")))
+        style := WebGetObject(overlay, WebName("style"))
+        WebSet(style, WebName("cssText"), WebText("position:fixed;inset:0;z-index:1000;display:grid;place-content:center;gap:16px;background:rgba(0,0,0,.55);padding:24px"))
+        holder := WebAsObject(WebCall1(document, WebName("createElement"), WebText("div")))
+        unused WebCall1(overlay, WebName("append"), WebObject(holder))
+        cancel := WebAsObject(WebCall1(document, WebName("createElement"), WebText("button")))
+        WebSet(cancel, WebName("type"), WebText("button"))
+        WebSet(cancel, WebName("textContent"), WebText("Cancel"))
+        WebSet(WebGetObject(cancel, WebName("style")), WebName("cssText"), WebText("padding:12px;border:0;border-radius:8px;font:16px system-ui,sans-serif;cursor:pointer"))
+        WebSet(cancel, WebName("onclick"), WebObject(WebFunction(BridgeGoogleCancel, 0)))
+        unused WebCall1(overlay, WebName("append"), WebObject(cancel))
+        unused WebCall1(WebGetObject(document, WebName("body")), WebName("append"), WebObject(overlay))
+        bridge_overlay = WebKeep(overlay)
+        button := WebNewObject()
+        WebSet(button, WebName("theme"), WebText("outline"))
+        WebSet(button, WebName("size"), WebText("large"))
+        WebSet(button, WebName("text"), WebText("signin_with"))
+        unused WebCall2(identity, WebName("renderButton"), WebObject(holder), WebObject(button))
+        if WebFailed() { BridgeFinish("error") }
+    }
+
+    BridgeGoogleLoaded :: (context: s32, first: s32, second: s32, third: s32) {
+        unused context
+        unused first
+        unused second
+        unused third
+        scope := WebScope()
+        defer WebEnd(scope)
+        bridge_google_ready = true
+        if bridge_pending { BridgeGoogleShow() }
+    }
+
+    BridgeGoogleLoad :: () -> bool {
+        // Google's script loads only once someone chooses Google.
+        if bridge_google_ready { BridgeGoogleShow(); return true }
+        document := WebGetObject(WebGlobal, WebName("document"))
+        if document == 0 || WebFailed() { return false }
+        script := WebAsObject(WebCall1(document, WebName("createElement"), WebText("script")))
+        if script == 0 || WebFailed() { return false }
+        WebSet(script, WebName("src"), WebText("https://accounts.google.com/gsi/client"))
+        WebSet(script, WebName("onload"), WebObject(WebFunction(BridgeGoogleLoaded, 0)))
+        WebSet(script, WebName("onerror"), WebObject(WebFunction(BridgeGoogleFailed, 0)))
+        unused WebCall1(WebGetObject(document, WebName("head")), WebName("append"), WebObject(script))
+        return !WebFailed()
+    }
+}
+
+#if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+    BridgeName :: (text: string, output: []u8) -> *u8 {
+        if !CopyCString(text, output) { return null }
+        return *output[0]
+    }
+
+    BridgeClear :: (env: *JniEnv) -> bool {
+        if env.functions.ExceptionCheck(env) == 0 { return false }
+        env.functions.ExceptionClear(env)
+        return true
+    }
+
+    // xyz.waozi.entity.SignInBridge through the activity's class loader, or null.
+    BridgeClass :: (env: *JniEnv, activity: *void) -> *void {
+        activity_class := env.functions.GetObjectClass(env, activity)
+        if activity_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, activity_class) }
+        method_name: [24]u8
+        method_type: [40]u8
+        get_loader := env.functions.GetMethodID(env, activity_class, BridgeName("getClassLoader", method_name[:]), BridgeName("()Ljava/lang/ClassLoader;", method_type[:]))
+        if get_loader == null { BridgeClear(env); return null }
+        loader := env.functions.CallObjectMethodA(env, activity, get_loader, null)
+        if BridgeClear(env) || loader == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader) }
+        loader_class := env.functions.GetObjectClass(env, loader)
+        if loader_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader_class) }
+        load_name: [16]u8
+        load_type: [48]u8
+        load := env.functions.GetMethodID(env, loader_class, BridgeName("loadClass", load_name[:]), BridgeName("(Ljava/lang/String;)Ljava/lang/Class;", load_type[:]))
+        if load == null { BridgeClear(env); return null }
+        arguments: [1]JniValue
+        class_name: [48]u8
+        arguments[0].reference = AndroidJniString(env, BridgeName("xyz.waozi.entity.SignInBridge", class_name[:]))
+        if arguments[0].reference == null { return null }
+        defer { env.functions.DeleteLocalRef(env, arguments[0].reference) }
+        found := env.functions.CallObjectMethodA(env, loader, load, *arguments[0])
+        if BridgeClear(env) { return null }
+        return found
+    }
+
+    BridgeAndroidCall :: (request: string, output: []u8) -> string {
+        text: [512]u8
+        if !CopyCString(request, text[:]) { return "" }
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return "" }
+        defer { AndroidJniDetachCurrent(*session) }
+        env := session.env
+        bridge := BridgeClass(env, session.activity)
+        if bridge == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, bridge) }
+        method_name: [8]u8
+        method_type: [80]u8
+        method := env.functions.GetStaticMethodID(env, bridge, BridgeName("call", method_name[:]),
+            BridgeName("(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;", method_type[:]))
+        if method == null { BridgeClear(env); return "" }
+        arguments: [2]JniValue
+        arguments[0].reference = session.activity
+        arguments[1].reference = AndroidJniString(env, *text[0])
+        if arguments[1].reference == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, arguments[1].reference) }
+        value := env.functions.CallStaticObjectMethodA(env, bridge, method, *arguments[0])
+        if BridgeClear(env) || value == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, value) }
+        bytes := env.functions.GetStringUTFChars(env, value, null)
+        if bytes == null { return "" }
+        defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+        answer := TextFromCString(bytes)
+        if !CopyCString(answer, output) { return "" }
+        return TextUntilNul(output)
+    }
+}
+
+// Whether this platform can even ask. Whether a given passkey manager has PRF
+// is only known once it answers, as no_prf.
+PasskeyBridgeAvailable :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        party: [32]u8
+        constructor := WebGetObject(WebGlobal, WebName("PublicKeyCredential"))
+        return constructor != 0 && !WebFailed() && BridgeCredentials() != 0 && BridgeRelyingParty(party[:]) != ""
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        output: [32]u8
+        return BridgeAndroidCall("available", output[:]) == "yes"
+    }
+    return false
+}
+
+// Google needs its script (web) or the Play adapter (Android), and a client ID
+// the node gave, so nothing offers Google before the owner has set it up.
+GoogleBridgeAvailable :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        return true
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        output: [32]u8
+        return BridgeAndroidCall("available", output[:]) == "yes"
+    }
+    return false
+}
+
+// Makes a new passkey for this account. It may prompt twice: once to create it
+// and once to read its PRF value, on browsers that only give that on first use.
+PasskeyBridgeCreate :: (account: string, name: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        credentials := BridgeCredentials()
+        user_bytes: [32]u8
+        party: [32]u8
+        if credentials == 0 || bridge_pending || !SignInAccountBytes(account, *user_bytes[0]) { return false }
+        relying := WebNewObject()
+        WebSet(relying, WebName("id"), WebText(BridgeRelyingParty(party[:])))
+        WebSet(relying, WebName("name"), WebText("Waozi"))
+        user := WebNewObject()
+        WebSet(user, WebName("id"), WebObject(BridgeBytes(*user_bytes[0], 32)))
+        WebSet(user, WebName("name"), WebText(name))
+        WebSet(user, WebName("displayName"), WebText(name))
+        first_type := WebNewObject()
+        WebSet(first_type, WebName("type"), WebText("public-key"))
+        WebSet(first_type, WebName("alg"), WebNumber(-7.0))
+        second_type := WebNewObject()
+        WebSet(second_type, WebName("type"), WebText("public-key"))
+        WebSet(second_type, WebName("alg"), WebNumber(-257.0))
+        kinds := WebNewArray()
+        WebSetAt(kinds, 0, WebObject(first_type))
+        WebSetAt(kinds, 1, WebObject(second_type))
+        selection := WebNewObject()
+        WebSet(selection, WebName("residentKey"), WebText("required"))
+        WebSet(selection, WebName("requireResidentKey"), WebBool(true))
+        WebSet(selection, WebName("userVerification"), WebText("required"))
+        options := WebNewObject()
+        WebSet(options, WebName("rp"), WebObject(relying))
+        WebSet(options, WebName("user"), WebObject(user))
+        WebSet(options, WebName("challenge"), WebObject(BridgeChallenge()))
+        WebSet(options, WebName("pubKeyCredParams"), WebObject(kinds))
+        WebSet(options, WebName("authenticatorSelection"), WebObject(selection))
+        WebSet(options, WebName("timeout"), WebNumber(120000.0))
+        WebSet(options, WebName("extensions"), WebObject(BridgePrfExtension()))
+        bridge_answer = SignInAnswer.{}
+        bridge_pending = true
+        bridge_step = 1
+        if !BridgeRequest(credentials, "create", options) {
+            bridge_pending = false
+            return false
+        }
+        return true
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        request: [256]u8
+        at: s64 = 0
+        for byte: "passkey_create\n" { request[at] = byte; at += 1 }
+        for byte: account { request[at] = byte; at += 1 }
+        request[at] = cast(u8)10
+        at += 1
+        for byte: name { if at < 254 { request[at] = byte; at += 1 } }
+        output: [64]u8
+        answer := BridgeAndroidCall(TextUntilNul(request[:]), output[:])
+        return Json.MatchLiteral(answer, Json.FieldAt(answer, 0, "status"), "\"pending\"")
+    }
+    unused account
+    unused name
+    return false
+}
+
+// Any passkey saved for waozi.xyz may answer; the account comes back with it.
+PasskeyBridgeGet :: () -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        credentials := BridgeCredentials()
+        party: [32]u8
+        if credentials == 0 || bridge_pending { return false }
+        options := WebNewObject()
+        WebSet(options, WebName("rpId"), WebText(BridgeRelyingParty(party[:])))
+        WebSet(options, WebName("challenge"), WebObject(BridgeChallenge()))
+        WebSet(options, WebName("userVerification"), WebText("required"))
+        WebSet(options, WebName("timeout"), WebNumber(120000.0))
+        WebSet(options, WebName("extensions"), WebObject(BridgePrfExtension()))
+        bridge_answer = SignInAnswer.{}
+        bridge_pending = true
+        bridge_step = 2
+        if !BridgeRequest(credentials, "get", options) {
+            bridge_pending = false
+            return false
+        }
+        return true
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        output: [64]u8
+        answer := BridgeAndroidCall("passkey_get", output[:])
+        return Json.MatchLiteral(answer, Json.FieldAt(answer, 0, "status"), "\"pending\"")
+    }
+    return false
+}
+
+// The nonce is empty for finding an account and bound to the account for linking.
+GoogleBridgeStart :: (client: string, nonce: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        if bridge_pending || !CopyCString(client, bridge_google_client[:]) || !CopyCString(nonce, bridge_google_nonce[:]) { return false }
+        bridge_answer = SignInAnswer.{}
+        bridge_pending = true
+        if !BridgeGoogleLoad() {
+            bridge_pending = false
+            return false
+        }
+        return true
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        request: [320]u8
+        at: s64 = 0
+        for byte: "google\n" { request[at] = byte; at += 1 }
+        for byte: client { if at < 200 { request[at] = byte; at += 1 } }
+        request[at] = cast(u8)10
+        at += 1
+        for byte: nonce { if at < 318 { request[at] = byte; at += 1 } }
+        output: [64]u8
+        answer := BridgeAndroidCall(TextUntilNul(request[:]), output[:])
+        return Json.MatchLiteral(answer, Json.FieldAt(answer, 0, "status"), "\"pending\"")
+    }
+    unused client
+    unused nonce
+    return false
+}
+
+// False while the platform's prompt is still open.
+SignInBridgePoll :: (output: *SignInAnswer) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        if bridge_pending { return false }
+        output.* = bridge_answer
+        SignInAnswerClear(*bridge_answer)
+        return true
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        text: [SIGN_IN_TOKEN_MAX + 512]u8
+        answer := BridgeAndroidCall("poll", text[:])
+        defer { SecureWipe(*text[0], text.count) }
+        if answer == "" || !SignInAnswerRead(answer, output) {
+            unused CopyCString("error", output.status[:])
+            return true
+        }
+        return TextUntilNul(output.status[:]) != "pending"
+    }
+    unused CopyCString("unsupported", output.status[:])
+    return true
+}
+
+SignInBridgeCancel :: () {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        if bridge_abort != 0 { unused WebCall0(bridge_abort, WebName("abort")) }
+        if bridge_pending { BridgeFinish("cancelled") }
+        SignInAnswerClear(*bridge_answer)
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        output: [64]u8
+        unused BridgeAndroidCall("cancel", output[:])
+    }
+}
+
+// Signing out: close any prompt and drop this device's Google session, so
+// nothing signs back in by itself. Passkeys stay in their manager, which is
+// the person's own, and only ever answer a prompt they chose to open.
+SignInBridgeForget :: () {
+    SignInBridgeCancel()
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        bridge_google_client[0] = cast(u8)0
+        bridge_google_nonce[0] = cast(u8)0
+        google := WebGetObject(WebGlobal, WebName("google"))
+        if google == 0 || WebFailed() { return }
+        accounts := WebGetObject(google, WebName("accounts"))
+        identity := WebGetObject(accounts, WebName("id"))
+        if identity != 0 && !WebFailed() { unused WebCall0(identity, WebName("disableAutoSelect")) }
+    }
+    #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
+        output: [64]u8
+        unused BridgeAndroidCall("forget", output[:])
+    }
+}
