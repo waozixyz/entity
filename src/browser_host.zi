@@ -76,12 +76,10 @@ BrowserServices :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if TextFromCString(function) == "AppServiceHost" && count == 2 &&
-    AppArgumentText(arguments[0]) == "entity.profile" {
-        if AppArgumentText(arguments[1]) == "open" {
-            EntityHostReload()
-            browser_profile = true
-        }
-        result.* = EntityHostText("available")
+    AppArgumentText(arguments[0]) == "entity.profile" && !browser_mini {
+        opened := EntityHostProfileRequest(AppArgumentText(arguments[1]))
+        if opened { browser_profile = true }
+        result.* = EntityHostText(ifx opened then "queued" else "unavailable")
         return 1
     }
     return BundleAppServices(context, module, function, arguments, count, result)

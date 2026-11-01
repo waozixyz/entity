@@ -198,3 +198,9 @@ game-reward-client-test:
 	ZIRAN_BIN=$(ZIRAN) python3 scripts/game_reward_client_test.py
 
 test: game-reward-client-test
+
+# Game hosts navigate existing Profile pages without performing Dew actions.
+.PHONY: profile-routes-test
+profile-routes-test:
+	python3 scripts/profile_routes_test.py
+test: profile-routes-test

@@ -256,6 +256,15 @@ EntityHostAccount :: () -> bool {
     return AppContextRun(*portable, APP_COMMAND)
 }
 
+// Public navigation requests shared by native game hosts and the browser.
+// This selects an existing Entity page; it never performs a purchase.
+EntityHostProfileRequest :: (request: string) -> bool {
+    if request == "open" { return EntityHostPage("profile") }
+    if request == "leaderboard" { return EntityHostLeaderboard() }
+    if request == "dew" { return EntityHostPage("dew") }
+    return false
+}
+
 EntityHostLeaderboard :: () -> bool { return EntityHostPage("leaderboard") }
 EntityHostPage :: (page: string) -> bool {
     if page == "profile" { entity_host_page = "root:profile" }
