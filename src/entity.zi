@@ -209,7 +209,7 @@ PollManagement :: () {
                     ManagementHome(PAGE_ACCOUNT)
                 }
                 // There is no reset, so saving a backup comes first.
-                if created && CanManage(ACCOUNT_BACKUP) { ManagementHome(PAGE_BACKUP) }
+                if created && (CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) { ManagementHome(PAGE_BACKUP) }
                 if sign_out_after_backup && page == PAGE_BACKUP && CanManage(ACCOUNT_LOGOUT) { OpenManagement(PAGE_LOGOUT) }
                 sign_out_after_backup = false
             }
@@ -511,7 +511,7 @@ ContinueLabel :: () -> string {
 // The choices for someone without an account here.
 SignInChoices :: (x: float32, y: *float32, width: float32) {
     if CanManage(ACCOUNT_CONTINUE) && ListRow(8801, ContinueLabel(), "", x, y, width) { Manage("continue") }
-    if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE)) &&
+    if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) || CanManage(ACCOUNT_DRIVE)) &&
     ListRow(821, Label("entity.sign_in", "Sign in"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
     if CanManage(ACCOUNT_CREATE) && ListRow(820, Label("entity.create_account", "Create account"), "", x, y, width) { Manage("create") }
     if CanManage(ACCOUNT_LINK) && ListRow(822, Label("entity.link_device", "Link a device"), "", x, y, width) {
@@ -522,7 +522,7 @@ SignInChoices :: (x: float32, y: *float32, width: float32) {
 SignInChoicesHeight :: () -> float32 {
     count: s32 = 0
     if CanManage(ACCOUNT_CREATE) { count += 1 }
-    if CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) { count += 1 }
+    if CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) || CanManage(ACCOUNT_DRIVE) { count += 1 }
     if CanManage(ACCOUNT_LINK) { count += 1 }
     if CanManage(ACCOUNT_CONTINUE) { count += 1 }
     return cast(float32)count * 68.0 * scale
@@ -758,9 +758,9 @@ AccountActions :: (x: float32, y: *float32, width: float32) {
                 OpenManagement(PAGE_ALIAS)
             }
         }
-        if CanManage(ACCOUNT_BACKUP) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
+        if (CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
         if (CanManage(ACCOUNT_PASSKEY) || CanManage(ACCOUNT_GOOGLE)) && ListRow(8810, Label("entity.sign_in_methods", "Sign-in options"), "", x, y, width) { OpenManagement(PAGE_SIGN_IN_METHODS) }
-        if CanManage(ACCOUNT_IMPORT) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
+        if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_DRIVE)) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
         if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
     if management.account {
         y.* += 8.0 * scale
@@ -821,7 +821,8 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
     unused EditField(1, account_passphrase_repeat[:], Label("entity.password_repeat", "Repeat password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
     drive_backup := CanManage(ACCOUNT_DRIVE) && WideButton(848, "Google Drive", x, y, width, false)
-    if WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true) || drive_backup {
+    file_backup := CanManage(ACCOUNT_BACKUP) && WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true)
+    if file_backup || drive_backup {
         password: [512]u8
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         {
@@ -832,7 +833,7 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
         }
         for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
-    if WideButton(8803, Label("entity.save_online", "Save backup online"), x, y, width) {
+    if CanManage(ACCOUNT_BACKUP) && WideButton(8803, Label("entity.save_online", "Save backup online"), x, y, width) {
         password: [512]u8
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         {
@@ -843,7 +844,7 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
         }
         for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
-    if WideButton(8804, Label("entity.remove_online", "Remove online backup"), x, y, width, false, true) { Manage("backup_online_remove") }
+    if CanManage(ACCOUNT_BACKUP) && WideButton(8804, Label("entity.remove_online", "Remove online backup"), x, y, width, false, true) { Manage("backup_online_remove") }
     Note(842, Label("entity.security_note", "Your account signs with post-quantum ML-DSA-44 keys. A backup is encrypted with your password on this device; a node keeps only that sealed copy and never sees your password."), x, y, width)
 }
 
@@ -919,7 +920,7 @@ ConfirmPage :: (x: float32, y: *float32, width: float32) {
     if management_page == PAGE_LOGOUT {
         if ManagementSignOutWarns(*management) {
             Note(847, Label("entity.sign_out_warning", "Back up your key first. Without a backup or another signed-in device you cannot sign back in."), x, y, width)
-            if CanManage(ACCOUNT_BACKUP) && WideButton(8807, Label("entity.back_up_key", "Back up key"), x, y, width, true) {
+            if (CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) && WideButton(8807, Label("entity.back_up_key", "Back up key"), x, y, width, true) {
                 sign_out_after_backup = true
                 OpenManagement(PAGE_BACKUP)
             }

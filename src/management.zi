@@ -124,7 +124,7 @@ ManagementOperation :: (operation: string) -> s32 {
     if operation == "link_scan" { return ACCOUNT_SCAN }
     if operation == "import_paste" || operation == "link_paste" { return ACCOUNT_PASTE }
     // The second step of signing in, after either way of giving the backup.
-    if operation == "import_password" || operation == "import_cancel" { return ACCOUNT_IMPORT | ACCOUNT_PASTE }
+    if operation == "import_password" || operation == "import_cancel" { return ACCOUNT_IMPORT | ACCOUNT_PASTE | ACCOUNT_DRIVE }
     if operation == "logout" { return ACCOUNT_LOGOUT }
     if operation == "clear_remote" { return ACCOUNT_CLEAR_REMOTE }
     if operation == "switch_apply" || operation == "switch_cancel" { return ACCOUNT_SWITCH }

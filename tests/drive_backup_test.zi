@@ -28,5 +28,17 @@ main :: () -> s32 {
     queue: ManagementQueue
     if ManagementEnqueue(*queue, text, 2047) { return 6 }
     if !ManagementEnqueue(*queue, text, ACCOUNT_DRIVE) { return 7 }
+    ManagementFinish(*queue, "ok", "")
+    request.sequence = 2
+    unused CopyCString("import_password", request.operation[:])
+    password := ManagementRequestEncode(request)
+    defer { EntityFree(password) }
+    if !ManagementEnqueue(*queue, password, ACCOUNT_DRIVE) { return 8 }
+    ManagementFinish(*queue, "ok", "")
+    request.sequence = 3
+    unused CopyCString("import_cancel", request.operation[:])
+    cancelled := ManagementRequestEncode(request)
+    defer { EntityFree(cancelled) }
+    if !ManagementEnqueue(*queue, cancelled, ACCOUNT_DRIVE) { return 9 }
     return 0
 }
