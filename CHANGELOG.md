@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Seal new backups with Argon2id in a storage-independent format and ask for a password of at least 12 characters. Older backup files keep opening.
 - Restore Shovey Island purchases across devices and confirm the current Dew price before unlocking.
 
 - Sign in like any other app: choose your backup file, then enter its password, and try again without finding the file again.

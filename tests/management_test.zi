@@ -76,8 +76,8 @@ CheckBackupAndSignIn :: () -> s32 {
     if RecoveryFileName("", "", name[:]) != "account.key" { return 107 }
     tiny: [6]u8
     if RecoveryFileName("username", id, tiny[:]) != "" { return 108 }
-    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("1234567") || !ManagementPasswordAccepted("12345678") { return 109 }
-    if ManagementPasswordAccepted("ééééééé") || !ManagementPasswordAccepted("éééééééé") { return 110 }
+    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("12345678901") || !ManagementPasswordAccepted("123456789012") ||
+    ManagementPasswordAccepted("ééééééééééé") || !ManagementPasswordAccepted("éééééééééééé") { return 109 }
 
     root: [4096]u8
     if !NativeDirectory(NativeRoot(root[:])) || NativeJoin(backup_path[:], TextUntilNul(root[:]), "fixture-backup.key") == "" { return 111 }
@@ -91,7 +91,7 @@ CheckBackupAndSignIn :: () -> s32 {
 
     // A backup never goes out without a password.
     unused RemoveFile(TextUntilNul(backup_path[:]))
-    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") ||
+    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") || !Finished(provider, "backup", "elevenchars", "error") ||
     PathExists(TextUntilNul(backup_path[:])) { return 114 }
     if !Finished(provider, "backup", "fixture password", "ok") { return 115 }
     file: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -145,6 +145,58 @@ Request :: (provider: *ManagementProvider, operation: string, value: string = ""
     return ProviderEnqueue(provider, encoded)
 }
 
+// The sealed backup: its KDF, its stored layout and every way it must refuse.
+RecoverySealedCheck :: (fixture: *Recovery, text: string) -> s32 {
+    if !RecoveryNeedsPassword(text) { return 1 }
+    prefix := "waozi-account-backup-v3\nalgorithm=ML-DSA-44\nkdf=Argon2id\nmemory_kib=65536\npasses=3\nlanes=1\nsalt="
+    if text.count <= prefix.count || text[:prefix.count] != prefix { return 2 }
+
+    // Independent vector: openssl kdf ARGON2ID, 64 MiB, 3 passes, 1 lane, 64 bytes.
+    salt: [16]u8
+    for index: 0..15 { salt[index] = cast(u8)index }
+    keys: RecoveryKeys
+    defer { RecoveryKeysClear(*keys) }
+    if !RecoveryDerive("correct horse battery", *salt[0], *keys) { return 3 }
+    seal_hex: [65]u8
+    if BytesToHex(*keys.seal[0], 32, *seal_hex[0], seal_hex.count) == 0 ||
+    TextUntilNul(seal_hex[:]) != "91b1d756d2e5d66cfc48e89292d2a4f2b64c5a8e84cffe10a1d4cdc7fc7dd5cc" { return 4 }
+    // The proof and the sealing key are separate; the node keeps only the verifier.
+    expected: [32]u8
+    Sha256(*keys.proof[0], 32, *expected[0])
+    same := true
+    for index: 0..31 {
+        if keys.proof[index] != keys.seal[index] { same = false }
+        if expected[index] != keys.verifier[index] { return 5 }
+    }
+    if same { return 6 }
+
+    // A stored copy opens with its password's keys, and only with them.
+    parts := RecoverySealedParse(text)
+    if !parts.valid { return 7 }
+    opened: Recovery
+    defer { RecoveryClear(*opened) }
+    right: RecoveryKeys
+    defer { RecoveryKeysClear(*right) }
+    if !RecoveryDeriveFromHex("fixture passphrase", parts.salt, *right) ||
+    !RecoveryOpenSealed(text, *right, *opened) ||
+    TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 8 }
+    if RecoveryOpenSealed(text, *keys, *opened) || opened.keys.private_key_hex[0] != cast(u8)0 { return 9 }
+
+    // A trailing newline from storage is harmless; other edits are refused.
+    copy: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE + 2]u8
+    if !CopyCString(text, copy[:]) { return 10 }
+    copy[text.count] = cast(u8)10
+    if !RecoveryOpenSealed(TextUntilNul(copy[:]), *right, *opened) { return 11 }
+    copy[text.count] = cast(u8)0
+    // A weaker work factor is refused before any key is derived.
+    weakened := "waozi-account-backup-v3\nalgorithm=ML-DSA-44\nkdf=Argon2id\nmemory_kib=8\npasses=1\nlanes=1\nsalt=00000000000000000000000000000000\nnonce=000000000000000000000000\nciphertext=00000000000000000000000000000000000000"
+    if RecoverySealedParse(weakened).valid || RecoveryDecode(weakened, "fixture passphrase", *opened) { return 12 }
+    // Changing an authenticated field breaks the seal, even with the right keys.
+    copy[prefix.count + 32 + 7] = ifx copy[prefix.count + 32 + 7] == cast(u8)48 then cast(u8)49 else cast(u8)48
+    if RecoveryOpenSealed(TextUntilNul(copy[:]), *right, *opened) { return 13 }
+    return 0
+}
+
 #program_export
 Check :: () -> s32 {
     if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
@@ -162,7 +214,12 @@ Check :: () -> s32 {
     if RecoveryDecode(TextUntilNul(backup[:]), "wrong", *opened) { return 6 }
     if !RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) ||
     TextUntilNul(opened.context[:]) != TextUntilNul(fixture.context[:]) { return 7 }
-    if ParseEncryptedAccountKeys(TextUntilNul(backup[:]), "fixture passphrase", *legacy) == 0 { return 8 }
+    // Backups made before the sealed format still open.
+    older: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if AccountKeysEncryptedText(*fixture.keys, "fixture passphrase", *older[0], older.count) == 0 ||
+    !RecoveryNeedsPassword(TextUntilNul(older[:])) || !RecoveryDecode(TextUntilNul(older[:]), "fixture passphrase", *opened) ||
+    TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 8 }
+    if RecoverySealedCheck(*fixture, TextUntilNul(backup[:])) != 0 { return 300 + RecoverySealedCheck(*fixture, TextUntilNul(backup[:])) }
     length := TextUntilNul(backup[:]).count
     backup[length - 2] = ifx backup[length - 2] == cast(u8)48 then cast(u8)49 else cast(u8)48
     if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }

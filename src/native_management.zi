@@ -209,7 +209,7 @@ ProviderImportHeld :: (provider: *ManagementProvider, passphrase: string) {
 
 ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
     if !ManagementPasswordAccepted(passphrase) {
-        ProviderFinish(provider, "error", "Use a password of at least 8 characters")
+        ProviderFinish(provider, "error", "Use a password of at least 12 characters")
         return
     }
     recovery: Recovery

@@ -762,7 +762,7 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         {
             value := TextUntilNul(password[:])
-            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 8 characters") }
+            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 12 characters") }
             else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
             else { Manage("backup", value) }
         }

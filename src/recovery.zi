@@ -1,10 +1,118 @@
-// Native key recovery uses Daochi's existing plain and passphrase-protected
-// formats. The optional, authenticated context keeps app recovery material
-// (such as a record vault) with the key without exposing it to the UI bundle.
+// Native key recovery. New backups use the sealed format below; older plain
+// and PBKDF2 files keep opening. The optional, authenticated context keeps app
+// recovery material (such as a record vault) with the key without exposing it
+// to the UI bundle.
+//
+// The sealed format is plain text and does not depend on where it is stored:
+//
+//     waozi-account-backup-v3
+//     algorithm=ML-DSA-44
+//     kdf=Argon2id
+//     memory_kib=65536
+//     passes=3
+//     lanes=1
+//     salt=<16 bytes hex>
+//     nonce=<12 bytes hex>
+//     ciphertext=<ChaCha20-Poly1305 output hex>
+//
+// Everything before "ciphertext=" is authenticated. Argon2id gives 64 bytes:
+// the first 32 seal the backup, the last 32 make the login proof a node checks
+// before it releases a stored copy, so a node can never open what it holds.
+// The work factors are fixed: anything else is refused, so a hostile node or
+// file can neither weaken the proof it receives nor exhaust this device.
 #import "daochi_client/keys"
 #import "daochi_client/crypto"
 #import "std/c_string"
 #import "std/text_buffer"
+#import "std/byte_text_linux"
+
+recovery_c :: #system_library "c";
+RecoveryCalloc :: (count: usize, size: usize) -> *u8 #foreign recovery_c "calloc";
+RecoveryFree :: (memory: *u8) #foreign recovery_c "free";
+RecoveryArgonConfig :: struct {
+    algorithm: u32
+    blocks: u32
+    passes: u32
+    lanes: u32
+}
+RecoveryArgonInputs :: struct {
+    pass: *u8
+    salt: *u8
+    pass_size: u32
+    salt_size: u32
+}
+RecoveryArgonExtras :: struct {
+    key: *u8
+    ad: *u8
+    key_size: u32
+    ad_size: u32
+}
+RecoveryArgon :: (hash: *u8, hash_size: u32, work_area: *u8, config: RecoveryArgonConfig,
+    inputs: RecoveryArgonInputs, extras: RecoveryArgonExtras) #foreign recovery_c "crypto_argon2";
+
+RECOVERY_SEALED_HEADER :: "waozi-account-backup-v3\n"
+RECOVERY_SEALED_PREFIX :: "waozi-account-backup-v3\nalgorithm=ML-DSA-44\nkdf=Argon2id\nmemory_kib=65536\npasses=3\nlanes=1\nsalt="
+RECOVERY_SEALED_NONCE :: "\nnonce="
+RECOVERY_SEALED_CIPHERTEXT :: "\nciphertext="
+RECOVERY_ARGON_ID :: 2
+RECOVERY_ARGON_BLOCKS :: 65536
+RECOVERY_ARGON_BLOCK_BYTES :: 1024
+RECOVERY_ARGON_PASSES :: 3
+RECOVERY_ARGON_LANES :: 1
+RECOVERY_SALT_BYTES :: 16
+RECOVERY_NONCE_BYTES :: 12
+RECOVERY_KEY_BYTES :: 32
+RECOVERY_PROOF_LABEL :: "waozi-account-backup-login-v3\n"
+
+// What a password gives for one salt. The proof goes to a node once to release
+// a stored copy; only the verifier stays there.
+RecoveryKeys :: struct {
+    seal: [RECOVERY_KEY_BYTES]u8
+    proof: [RECOVERY_KEY_BYTES]u8
+    verifier: [RECOVERY_KEY_BYTES]u8
+}
+
+RecoveryBytes :: (value: string) -> *u8 {
+    descriptor := cast(*TextDescriptor)(*value)
+    return descriptor.data
+}
+
+RecoveryKeysClear :: (keys: *RecoveryKeys) {
+    SecureWipe(*keys.seal[0], keys.seal.count)
+    SecureWipe(*keys.proof[0], keys.proof.count)
+    SecureWipe(*keys.verifier[0], keys.verifier.count)
+}
+
+// Fails only when the password is empty or the memory is not available.
+RecoveryDerive :: (passphrase: string, salt: *u8, keys: *RecoveryKeys) -> bool {
+    if salt == null || keys == null || passphrase.count == 0 || passphrase.count > 511 { return false }
+    work := RecoveryCalloc(cast(usize)RECOVERY_ARGON_BLOCKS, cast(usize)RECOVERY_ARGON_BLOCK_BYTES)
+    if work == null { return false }
+    output: [64]u8
+    defer { SecureWipe(*output[0], output.count) }
+    config := RecoveryArgonConfig.{cast(u32)RECOVERY_ARGON_ID, cast(u32)RECOVERY_ARGON_BLOCKS,
+        cast(u32)RECOVERY_ARGON_PASSES, cast(u32)RECOVERY_ARGON_LANES}
+    inputs := RecoveryArgonInputs.{RecoveryBytes(passphrase), salt, cast(u32)passphrase.count, cast(u32)RECOVERY_SALT_BYTES}
+    extras := RecoveryArgonExtras.{null, null, cast(u32)0, cast(u32)0}
+    RecoveryArgon(*output[0], cast(u32)64, work, config, inputs, extras)
+    SecureWipe(work, cast(s64)RECOVERY_ARGON_BLOCKS * cast(s64)RECOVERY_ARGON_BLOCK_BYTES)
+    RecoveryFree(work)
+    for index: 0..RECOVERY_KEY_BYTES - 1 { keys.seal[index] = output[index] }
+    label := RECOVERY_PROOF_LABEL
+    input: [64]u8
+    defer { SecureWipe(*input[0], input.count) }
+    for byte, index: label { input[index] = byte }
+    for index: 0..RECOVERY_KEY_BYTES - 1 { input[label.count + index] = output[RECOVERY_KEY_BYTES + index] }
+    Sha256(*input[0], label.count + RECOVERY_KEY_BYTES, *keys.proof[0])
+    Sha256(*keys.proof[0], RECOVERY_KEY_BYTES, *keys.verifier[0])
+    return true
+}
+
+RecoveryDeriveFromHex :: (passphrase: string, salt_hex: string, keys: *RecoveryKeys) -> bool {
+    salt: [RECOVERY_SALT_BYTES]u8
+    if salt_hex.count != RECOVERY_SALT_BYTES * 2 || HexToBytes(salt_hex, *salt[0], salt.count) == 0 { return false }
+    return RecoveryDerive(passphrase, *salt[0], keys)
+}
 
 // Android providers identify .key as PGP keys or generic binary data. Recovery
 // backups can also be JSON or plain text; keep all of those visible to import.
@@ -69,7 +177,7 @@ RecoveryFileName :: (username: string, public_id: string, output: []u8) -> strin
 RecoveryNeedsPassword :: (input: string) -> bool {
     start: s64 = 0
     if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
-    return AccountStartsWith(input[start:], AccountEncryptedHeader)
+    return AccountStartsWith(input[start:], AccountEncryptedHeader) || AccountStartsWith(input[start:], RECOVERY_SEALED_HEADER)
 }
 
 RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
@@ -83,33 +191,100 @@ RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
     return true
 }
 
-RecoveryEncode :: (value: *Recovery, passphrase: string, output: []u8) -> bool {
-    if value == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase.count > 511 { return false }
+// Seals with a fresh salt. keys holds what a node needs to release this copy;
+// the caller wipes it.
+RecoverySeal :: (value: *Recovery, passphrase: string, output: []u8, keys: *RecoveryKeys) -> bool {
+    if value == null || keys == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase == "" || passphrase.count > 511 { return false }
     plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
-    salt: [AccountEncryptedSaltBytes]u8
-    nonce: [AccountEncryptedNonceBytes]u8
-    key: [32]u8
+    salt: [RECOVERY_SALT_BYTES]u8
+    nonce: [RECOVERY_NONCE_BYTES]u8
     sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
     defer {
         SecureWipe(*plaintext[0], plaintext.count)
-        SecureWipe(*key[0], key.count)
         SecureWipe(*sealed[0], sealed.count)
     }
     if !RecoveryPlain(value, plaintext[:]) { return false }
     length := TextUntilNul(plaintext[:]).count
-    if passphrase == "" { return CopyCString(TextUntilNul(plaintext[:]), output) }
-    if length + AccountEncryptedTagBytes >= sealed.count ||
-    SecureRandom(*salt[0], salt.count) == 0 || SecureRandom(*nonce[0], nonce.count) == 0 ||
-    !AccountDerivePassphraseKey(passphrase, *salt[0], *key[0], ACCOUNT_PASSPHRASE_ITERATIONS) ||
-    ChaCha20Poly1305Seal(*key[0], *nonce[0], *plaintext[0], length, null, 0, *sealed[0], sealed.count) == 0 { return false }
+    if length + AccountEncryptedTagBytes >= sealed.count || SecureRandom(*salt[0], salt.count) == 0 ||
+    SecureRandom(*nonce[0], nonce.count) == 0 || !RecoveryDerive(passphrase, *salt[0], keys) { return false }
     cursor: s64 = 0
-    return AccountTextAppend(*output[0], output.count, *cursor,
-        "ksync-account-key-v2\nalgorithm=ML-DSA-44\nkdf=PBKDF2-SHA256\niterations=600000\nsalt=") &&
-    AccountAppendHex(*output[0], output.count, *cursor, *salt[0], salt.count) &&
-    AccountTextAppend(*output[0], output.count, *cursor, "\nnonce=") &&
-    AccountAppendHex(*output[0], output.count, *cursor, *nonce[0], nonce.count) &&
-    AccountTextAppend(*output[0], output.count, *cursor, "\nciphertext=") &&
+    if !AccountTextAppend(*output[0], output.count, *cursor, RECOVERY_SEALED_PREFIX) ||
+    !AccountAppendHex(*output[0], output.count, *cursor, *salt[0], salt.count) ||
+    !AccountTextAppend(*output[0], output.count, *cursor, RECOVERY_SEALED_NONCE) ||
+    !AccountAppendHex(*output[0], output.count, *cursor, *nonce[0], nonce.count) { return false }
+    if ChaCha20Poly1305Seal(*keys.seal[0], *nonce[0], *plaintext[0], length, *output[0], cursor, *sealed[0], sealed.count) == 0 { return false }
+    return AccountTextAppend(*output[0], output.count, *cursor, RECOVERY_SEALED_CIPHERTEXT) &&
     AccountAppendHex(*output[0], output.count, *cursor, *sealed[0], length + AccountEncryptedTagBytes)
+}
+
+RecoveryEncode :: (value: *Recovery, passphrase: string, output: []u8) -> bool {
+    if value == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase.count > 511 { return false }
+    if passphrase == "" {
+        plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+        defer { SecureWipe(*plaintext[0], plaintext.count) }
+        if !RecoveryPlain(value, plaintext[:]) { return false }
+        return CopyCString(TextUntilNul(plaintext[:]), output)
+    }
+    keys: RecoveryKeys
+    defer { RecoveryKeysClear(*keys) }
+    return RecoverySeal(value, passphrase, output, *keys)
+}
+
+// The sealed format's fixed-layout fields. Anything else is not this format.
+RecoverySealedParts :: struct {
+    valid: bool
+    salt: string
+    nonce: string
+    ciphertext: string
+    // Everything before the ciphertext, which it authenticates.
+    authenticated: string
+}
+
+RecoverySealedParse :: (input: string) -> RecoverySealedParts {
+    parts: RecoverySealedParts
+    start: s64 = 0
+    if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
+    end := input.count
+    while end > start && input[end - 1] <= cast(u8)32 { end -= 1 }
+    text := input[start:end]
+    prefix := RECOVERY_SEALED_PREFIX
+    nonce_label := RECOVERY_SEALED_NONCE
+    cipher_label := RECOVERY_SEALED_CIPHERTEXT
+    salt_at := prefix.count
+    nonce_label_at := salt_at + RECOVERY_SALT_BYTES * 2
+    nonce_at := nonce_label_at + nonce_label.count
+    cipher_label_at := nonce_at + RECOVERY_NONCE_BYTES * 2
+    cipher_at := cipher_label_at + cipher_label.count
+    if text.count <= cipher_at || !AccountStartsWith(text, prefix) || text[nonce_label_at:nonce_at] != nonce_label ||
+    text[cipher_label_at:cipher_at] != cipher_label { return parts }
+    parts.salt = text[salt_at:nonce_label_at]
+    parts.nonce = text[nonce_at:cipher_label_at]
+    parts.ciphertext = text[cipher_at:]
+    parts.authenticated = text[:cipher_label_at]
+    length := parts.ciphertext.count
+    parts.valid = length % 2 == 0 && length / 2 > AccountEncryptedTagBytes && length / 2 < ACCOUNT_EXPORT_TEXT_SIZE
+    return parts
+}
+
+// Opens with keys already derived, so a stored copy costs one derivation.
+RecoveryOpenSealed :: (input: string, keys: *RecoveryKeys, output: *Recovery) -> bool {
+    if output == null || keys == null { return false }
+    output.* = Recovery.{}
+    parts := RecoverySealedParse(input)
+    if !parts.valid { return false }
+    nonce: [RECOVERY_NONCE_BYTES]u8
+    sealed: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    defer {
+        SecureWipe(*plaintext[0], plaintext.count)
+        SecureWipe(*sealed[0], sealed.count)
+    }
+    sealed_length := parts.ciphertext.count / 2
+    if HexToBytes(parts.nonce, *nonce[0], nonce.count) == 0 || HexToBytes(parts.ciphertext, *sealed[0], sealed_length) == 0 ||
+    ChaCha20Poly1305Open(*keys.seal[0], *nonce[0], *sealed[0], sealed_length, RecoveryBytes(parts.authenticated), parts.authenticated.count,
+        *plaintext[0], plaintext.count) == 0 { return false }
+    plaintext[sealed_length - AccountEncryptedTagBytes] = cast(u8)0
+    return RecoveryReadPlain(TextUntilNul(plaintext[:]), output)
 }
 
 RecoveryReadPlain :: (text: string, output: *Recovery) -> bool {
@@ -135,6 +310,12 @@ RecoveryDecode :: (input: string, passphrase: string, output: *Recovery) -> bool
     start: s64 = 0
     if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
     text := input[start:]
+    if AccountStartsWith(text, RECOVERY_SEALED_HEADER) {
+        parts := RecoverySealedParse(text)
+        keys: RecoveryKeys
+        defer { RecoveryKeysClear(*keys) }
+        return parts.valid && RecoveryDeriveFromHex(passphrase, parts.salt, *keys) && RecoveryOpenSealed(text, *keys, output)
+    }
     if !AccountStartsWith(text, AccountEncryptedHeader) { return RecoveryReadPlain(text, output) }
     if passphrase == "" { return false }
     iterations := AccountParseIterations(AccountEncryptedLineValue(text, "iterations="))

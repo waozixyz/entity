@@ -100,7 +100,7 @@ ManagementOperation :: (operation: string) -> s32 {
 
 // New backups always have a password: there is no reset, and a plain file
 // would be the account itself. Older files of any kind still open.
-MANAGEMENT_PASSWORD_MINIMUM :: 8
+MANAGEMENT_PASSWORD_MINIMUM :: 12
 
 ManagementPasswordAccepted :: (password: string) -> bool {
     characters: s64 = 0
