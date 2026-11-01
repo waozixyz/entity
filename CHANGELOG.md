@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Sign in like any other app: choose your backup file, then enter its password, and try again without finding the file again.
+- Name saved backups after your username, or your public ID when you have none.
+- Require a repeated password for every new backup, say plainly that no one can reset it, and go straight to saving one after creating an account. Older backup files still open.
 -Add the shared game daily-chest plan.
 - Buy Shovey skins and separately counted Dew coin packs.
 - Buy three Choano decorations with Dew: Pearl, Flower and Wizard.

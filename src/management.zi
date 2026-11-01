@@ -55,6 +55,8 @@ Management :: struct {
     link_code: [1024]u8
     link_message: [256]u8
     candidate_id: [65]u8
+    // A protected backup was given and waits for its password.
+    password_needed: bool
     nodes: [ENTITY_NODE_LIMIT]ManagementNode
     node_count: s32
 }
@@ -87,11 +89,23 @@ ManagementOperation :: (operation: string) -> s32 {
     operation == "link_confirm" || operation == "link_cancel" { return ACCOUNT_LINK }
     if operation == "link_scan" { return ACCOUNT_SCAN }
     if operation == "import_paste" || operation == "link_paste" { return ACCOUNT_PASTE }
+    // The second step of signing in, after either way of giving the backup.
+    if operation == "import_password" || operation == "import_cancel" { return ACCOUNT_IMPORT | ACCOUNT_PASTE }
     if operation == "logout" { return ACCOUNT_LOGOUT }
     if operation == "clear_remote" { return ACCOUNT_CLEAR_REMOTE }
     if operation == "switch_apply" || operation == "switch_cancel" { return ACCOUNT_SWITCH }
     if operation == "media" { return NODE_MEDIA }
     return 0
+}
+
+// New backups always have a password: there is no reset, and a plain file
+// would be the account itself. Older files of any kind still open.
+MANAGEMENT_PASSWORD_MINIMUM :: 8
+
+ManagementPasswordAccepted :: (password: string) -> bool {
+    characters: s64 = 0
+    for byte: password { if (byte & cast(u8)192) != cast(u8)128 { characters += 1 } }
+    return characters >= MANAGEMENT_PASSWORD_MINIMUM
 }
 
 ManagementRequestEncode :: (request: ManagementRequest) -> string {
@@ -180,7 +194,7 @@ ManagementEncode :: (state: Management) -> string {
         BuilderPrint(*out, ",\"%\":", names[index])
         EntityQuote(*out, strings[index])
     }
-    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry)
+    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"password_needed\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry, state.password_needed)
     AliasOfferAppend(*out, state.alias_offer)
     BuilderPrint(*out, ",\"nodes\":[")
     for index: 0..state.node_count - 1 {
@@ -245,6 +259,7 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     }
     state.alias_pricing = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_pricing"), "true")
     state.alias_retry = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_retry"), "true")
+    state.password_needed = Json.MatchLiteral(text, Json.FieldAt(text, 0, "password_needed"), "true")
     positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])
     if state.node_count < 0 || state.node_count > ENTITY_NODE_LIMIT { return false }

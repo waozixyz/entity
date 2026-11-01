@@ -83,9 +83,11 @@ AccountStorePath :: (name: string, output: []u8) -> string {
     return NativeJoin(output, TextUntilNul(account_root[:]), name)
 }
 AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
+    name: [128]u8
+    suggested := ifx save then ProviderBackupFileName(*account_provider, name[:]) else ""
     #if #defined(PLATFORM_WEB) || #defined(_WIN32) {
-        return PickFile(FilePickerProps.{.title = ifx save then "Back up account key" else "Import account key",
-                .filter = "Account keys | *.key *.json", .suggested_name = "entity-account.key", .save = save}, output)
+        return PickFile(FilePickerProps.{.title = ifx save then "Back up account" else "Sign in with your backup",
+                .filter = "Account backups | *.key *.json", .suggested_name = suggested, .save = save}, output)
     } else #if #defined(ANDROID_BUILD) {
         if account_picker_result != 0 {
             result := account_picker_result
@@ -96,7 +98,7 @@ AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         }
         opened := false
         if save {
-            opened = AndroidSavePickerOpen(ACCOUNT_PICKER_REQUEST, "entity-account.key", "application/octet-stream")
+            opened = AndroidSavePickerOpen(ACCOUNT_PICKER_REQUEST, suggested, "application/octet-stream")
         } else {
             opened = AndroidPickerOpen(ACCOUNT_PICKER_REQUEST, RecoveryFileMimeTypes)
         }
@@ -106,9 +108,9 @@ AccountStoreChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
         return 2
     } else {
         patterns: [2]string = .["*.key", "*.json"]
-        props := Dialog.FileDialogProps.{.title = ifx save then "Back up account key" else "Import account key",
-            .filename = ifx save then "entity-account.key" else "", .save = save,
-            .filter_name = "Account keys", .patterns = patterns[:]}
+        props := Dialog.FileDialogProps.{.title = ifx save then "Back up account" else "Sign in with your backup",
+            .filename = suggested, .save = save,
+            .filter_name = "Account backups", .patterns = patterns[:]}
         selected := Dialog.FileDialog(props, output)
         if !selected.available { return -1 }
         return ifx selected.accepted then 1 else 0
@@ -127,7 +129,8 @@ AccountStoreDeliverFile :: (context: *void, path: string) -> bool {
         document := WebGetObject(WebGlobal, WebName("document"))
         anchor := WebAsObject(WebCall1(document, WebName("createElement"), WebText("a")))
         WebSet(anchor, WebName("href"), url)
-        WebSet(anchor, WebName("download"), WebText("entity-account.key"))
+        name: [128]u8
+        WebSet(anchor, WebName("download"), WebText(ProviderBackupFileName(*account_provider, name[:])))
         unused WebCall0(anchor, WebName("click"))
         unused WebCall1(urls, WebName("revokeObjectURL"), url)
         unused RemoveFile(path)

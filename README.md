@@ -82,6 +82,14 @@ site without its own account signs in with it, and signing in, creating an
 account, linking a device or logging out is passed back through
 `Module.shareAccount`. A site keeps its own account if it already has one.
 
+Signing in takes the backup first and asks for its password only if it has one,
+keeping the still-sealed file so a mistyped password can be retried. New backups
+always have a password of at least 8 characters, and hosts offer them under
+`ProviderBackupFileName`: the username, or the public ID without one. Accounts
+sign with post-quantum ML-DSA-44; a backup itself is sealed with
+ChaCha20-Poly1305 under a key derived from the password with PBKDF2-SHA256, so
+its strength depends on that password. No server can reset it.
+
 Recovery retains the existing plain and passphrase-protected Daochi key formats.
 An optional protected native context preserves Werkzeug's record vault across
 backup/import and new shared QR transfers. Plain-key QR transfers retain Inbe's

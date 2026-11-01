@@ -48,7 +48,7 @@ AliasOpenPurchase :: (offer: AliasOffer) {
 }
 
 AliasPage :: (x: float32, y: *float32, width: float32) {
-    unused EditField(3, account_alias[:], Label("entity.alias", "Alias"),
+    unused EditField(3, account_alias[:], Label("entity.alias", "Username"),
         Rectangle.{x, y.*, width, 48.0 * scale}, 32)
     y.* += 56.0 * scale
     Muted(826, Label("entity.alias_rule", "4–32 lowercase letters, numbers or _"), x, y.*, width, 13)

@@ -70,6 +70,9 @@ management_page: s32;
 management_scroll: s32;
 account_alias: [40]u8;
 account_passphrase: [512]u8;
+account_passphrase_repeat: [512]u8;
+// A new account goes on to its backup once it exists.
+management_creating: bool;
 account_code: [1024]u8;
 account_short_id: [16]u8;
 qr_code: QrCode;
@@ -188,6 +191,8 @@ PollManagement :: () {
         notice = BuilderFinish(message)
         if management_waiting <= management.completed {
             management_waiting = 0
+            created := management_creating && TextUntilNul(management.result[:]) == "ok"
+            if TextUntilNul(management.result[:]) != "switch" { management_creating = false }
             if TextUntilNul(management.result[:]) == "switch" { OpenManagement(PAGE_SWITCH) }
             else if TextUntilNul(management.result[:]) == "ok" {
                 loaded = false
@@ -198,6 +203,8 @@ PollManagement :: () {
                 (page != PAGE_LINK || owner_changed) {
                     ManagementHome(PAGE_ACCOUNT)
                 }
+                // There is no reset, so saving a backup comes first.
+                if created && CanManage(ACCOUNT_BACKUP) { ManagementHome(PAGE_BACKUP) }
             }
         }
     }
@@ -205,6 +212,15 @@ PollManagement :: () {
 
 CanManage :: (capability: s32) -> bool {
     return management.available && (management.capabilities & capability) != 0
+}
+
+PasswordClear :: () {
+    for index: 0..account_passphrase.count - 1 {
+        account_passphrase[index] = cast(u8)0
+        account_passphrase_repeat[index] = cast(u8)0
+    }
+    fields[1] = Field.{}
+    fields[4] = Field.{}
 }
 
 Manage :: (operation: string, value: string = "", target: string = "", choice: s32 = 0) {
@@ -224,8 +240,8 @@ Manage :: (operation: string, value: string = "", target: string = "", choice: s
         management.sequence = request.sequence
         management_tick = 0
         notice = ""
-        for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
-        fields[4] = Field.{}
+        if operation == "create" { management_creating = true }
+        PasswordClear()
     } else {
         notice = Label("entity.action_error", "Could not start this action")
     }
@@ -296,6 +312,7 @@ ManagementBack :: () -> bool {
     if management_page == 0 { return false }
     // Leaving the link page ends its code and the polling behind it.
     if management_page == PAGE_LINK && management.link_stage != 0 && management.link_stage != 6 { Manage("link_cancel") }
+    if management_page == PAGE_IMPORT && management.password_needed { Manage("import_cancel") }
     management_page = 0
     if management_depth > 0 {
         management_depth -= 1
@@ -303,7 +320,7 @@ ManagementBack :: () -> bool {
     }
     management_scroll = 0
     notice = ""
-    for index: 0..account_passphrase.count - 1 { account_passphrase[index] = cast(u8)0 }
+    PasswordClear()
     fields = .{}
     return true
 }
@@ -462,10 +479,10 @@ StorageUsageLabel :: (used: s64, limit: s64) -> string {
 
 // The choices for someone without an account here.
 SignInChoices :: (x: float32, y: *float32, width: float32) {
-    if CanManage(ACCOUNT_CREATE) && ListRow(820, Label("entity.create_account", "Create account"), "", x, y, width) { Manage("create") }
     if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE)) &&
-    ListRow(821, Label("entity.import_key", "Import key"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
-    if CanManage(ACCOUNT_LINK) && ListRow(822, Label("entity.link_from_device", "Link from another device"), "", x, y, width) {
+    ListRow(821, Label("entity.sign_in", "Sign in"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
+    if CanManage(ACCOUNT_CREATE) && ListRow(820, Label("entity.create_account", "Create account"), "", x, y, width) { Manage("create") }
+    if CanManage(ACCOUNT_LINK) && ListRow(822, Label("entity.sign_in_device", "Sign in with another device"), "", x, y, width) {
         OpenManagement(PAGE_LINK)
     }
 }
@@ -658,8 +675,8 @@ DrawConnectionCode :: (text: string, x: float32, y: float32, width: float32) -> 
 }
 
 PageTitle :: () -> string {
-    if management_page == PAGE_IMPORT { return Label("entity.import_key", "Import key") }
-    if management_page == PAGE_BACKUP { return Label("entity.backup_key", "Back up key") }
+    if management_page == PAGE_IMPORT { return Label("entity.sign_in", "Sign in") }
+    if management_page == PAGE_BACKUP { return Label("entity.back_up_account", "Back up account") }
     if management_page == PAGE_LOGOUT { return Label("entity.logout", "Log out") }
     if management_page == PAGE_CLEAR { return Label("entity.clear_remote", "Clear remote data") }
     if management_page == PAGE_SWITCH { return Label("entity.switch_account", "Switch account") }
@@ -669,7 +686,7 @@ PageTitle :: () -> string {
     if management_page == PAGE_ADD_NODE { return Label("entity.add_node", "Add node") }
     if management_page == PAGE_APPEARANCE { return Label("entity.appearance", "Appearance") }
     if management_page == PAGE_FRIENDS { return Label("profile_friends_title", "Friends") }
-    if management_page == PAGE_ALIAS { return Label("entity.alias", "Alias") }
+    if management_page == PAGE_ALIAS { return Label("entity.alias", "Username") }
     return Label("entity.account", "Account")
 }
 
@@ -701,12 +718,12 @@ AccountActions :: (x: float32, y: *float32, width: float32) {
         }
         if CanManage(ACCOUNT_ALIAS) {
             alias := TextUntilNul(management.alias[:])
-            if ListRow(819, Label("entity.alias", "Alias"), ifx alias == "" then Label("entity.alias_unset", "Not set") else alias, x, y, width) {
+            if ListRow(819, Label("entity.alias", "Username"), ifx alias == "" then Label("entity.alias_unset", "Not set") else alias, x, y, width) {
                 OpenManagement(PAGE_ALIAS)
             }
         }
-        if CanManage(ACCOUNT_BACKUP) && ListRow(823, Label("entity.backup_key", "Back up key"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
-        if CanManage(ACCOUNT_IMPORT) && ListRow(832, Label("entity.import_key", "Import key"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
+        if CanManage(ACCOUNT_BACKUP) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
+        if CanManage(ACCOUNT_IMPORT) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
         if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
     if management.account {
         y.* += 8.0 * scale
@@ -722,32 +739,72 @@ AccountPage :: (x: float32, y: *float32, width: float32) {
     AccountActions(x, y, width)
 }
 
-KeyPage :: (x: float32, y: *float32, width: float32) {
-    importing := management_page == PAGE_IMPORT
-    unused EditField(4, account_passphrase[:], Label(ifx importing then "entity.passphrase_if_set" else "entity.passphrase",
-        ifx importing then "Passphrase (if set)" else "Passphrase (optional)"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
+// Text of any length: it takes the lines it needs and moves the page down.
+Note :: (key: u64, text: string, x: float32, y: *float32, width: float32) {
+    props := TextProps.{.key = key, .text = text, .bounds = Rectangle.{x, y.*, width, 0.0},
+        .font = cast(s32)(14.0 * scale), .wrap = TextWrap.TextWrapAuto}
+    height := cast(float32)TextHeight(session, props)
+    props.bounds.height = height
+    Text(session, props)
+    y.* += height + 12.0 * scale
+}
+
+// The file and its password are the login: nothing can reset them, so the page
+// says so, and a backup is never saved without a password.
+BackupPage :: (x: float32, y: *float32, width: float32) {
+    Note(841, Label("entity.backup_help", "Your backup file and password are your login. No one can reset this password. If you lose them and have no other signed-in device, your account cannot be recovered."), x, y, width)
+    unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
-    passphrase: [512]u8
-    for index: 0..account_passphrase.count - 1 { passphrase[index] = account_passphrase[index] }
-    paste := CanManage(ACCOUNT_PASTE)
-    {
-        value := TextUntilNul(passphrase[:])
-        if !importing {
-            if WideButton(803, Label("entity.save_key", "Save key file"), x, y, width, true) { Manage("backup", value) }
-        } else {
-            if paste && WideButton(804, Label("entity.paste_key", "Paste key"), x, y, width, true) { Manage("import_paste", value) }
-            if CanManage(ACCOUNT_IMPORT) && WideButton(805, Label("entity.choose_key", "Choose key file"), x, y, width, !paste) { Manage("import", value) }
+    unused EditField(1, account_passphrase_repeat[:], Label("entity.password_repeat", "Repeat password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
+    y.* += 64.0 * scale
+    if WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true) {
+        password: [512]u8
+        for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
+        {
+            value := TextUntilNul(password[:])
+            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 8 characters") }
+            else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
+            else { Manage("backup", value) }
         }
+        for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
-    for index: 0..passphrase.count - 1 { passphrase[index] = cast(u8)0 }
+    Note(842, Label("entity.security_note", "Your account signs with post-quantum ML-DSA-44 keys. This file is encrypted with your password."), x, y, width)
+}
+
+// First the backup, then its password if it has one: a mistyped password never
+// means finding the file again, and older files without a password just open.
+SignInPage :: (x: float32, y: *float32, width: float32) {
+    if management.password_needed {
+        Note(843, Label("entity.sign_in_password_help", "Enter the password you chose for this backup."), x, y, width)
+        unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
+        y.* += 64.0 * scale
+        if WideButton(844, Label("entity.sign_in", "Sign in"), x, y, width, true) {
+            password: [512]u8
+            for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
+            Manage("import_password", TextUntilNul(password[:]))
+            for index: 0..password.count - 1 { password[index] = cast(u8)0 }
+        }
+        if WideButton(845, Label("entity.different_backup", "Use a different backup"), x, y, width, false, true) { Manage("import_cancel") }
+        return
+    }
+    Note(846, Label("entity.sign_in_help", "Sign in with the backup file you saved. No server can reset your password or recover your account."), x, y, width)
+    if CanManage(ACCOUNT_IMPORT) && WideButton(805, Label("entity.choose_backup", "Choose backup file"), x, y, width, true) { Manage("import") }
+    if CanManage(ACCOUNT_PASTE) && WideButton(804, Label("entity.paste_backup", "Paste backup"), x, y, width, !CanManage(ACCOUNT_IMPORT)) { Manage("import_paste") }
+}
+
+KeyPage :: (x: float32, y: *float32, width: float32) {
+    if management_page == PAGE_IMPORT { SignInPage(x, y, width) }
+    else { BackupPage(x, y, width) }
 }
 
 ConfirmPage :: (x: float32, y: *float32, width: float32) {
     explanation := Label("entity.logout_help", "Your records stay on this device.")
     if management_page == PAGE_CLEAR { explanation = Label("entity.clear_remote_help", "Removes this account's data from its node.") }
     if management_page == PAGE_SWITCH { explanation = Label("entity.switch_help", "Keep this device's records with the new account?") }
-    Paragraph(806, explanation, x, y.*, width, 48.0)
-    y.* += 60.0 * scale
+    Note(806, explanation, x, y, width)
+    if management_page == PAGE_LOGOUT {
+        Note(847, Label("entity.logout_warning", "To sign in again you need your backup file and password, or another signed-in device."), x, y, width)
+    }
     if management_page == PAGE_SWITCH {
         if WideButton(807, Label("entity.merge", "Keep and merge"), x, y, width, true) { Manage("switch_apply", "", "", 1) }
         if WideButton(808, Label("entity.replace", "Replace them"), x, y, width, false, false, true) { Manage("switch_apply", "", "", 2) }

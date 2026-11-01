@@ -18,18 +18,23 @@ Auth :: #import "daochi_client/auth";
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
+#import "std/file"
 
 fixture: Recovery;
 current_id: [65]u8;
 action_count: s32;
 apply_count: s32;
 choose_result: s32;
+backup_alias: string;
+backup_path: [4096]u8;
+backup_provider: ManagementProvider;
 
 Snapshot :: (context: *void, output: *Management) {
     output.available = true
     output.account = current_id[0] != cast(u8)0
     output.public_id = current_id
     output.capabilities = 2047
+    unused CopyCString(backup_alias, output.alias[:])
 }
 Apply :: (context: *void, incoming: *Recovery, choice: s32) -> s32 {
     apply_count += 1
@@ -43,6 +48,90 @@ Action :: (context: *void, request: *ManagementRequest) -> s32 {
 }
 Choose :: (context: *void, save: bool, output: []u8) -> s32 {
     return choose_result
+}
+ChooseBackup :: (context: *void, save: bool, output: []u8) -> s32 {
+    return ifx CopyCString(TextUntilNul(backup_path[:]), output) then 1 else -1
+}
+LoadFixture :: (context: *void, output: *Recovery) -> bool {
+    output.* = fixture
+    return true
+}
+Finished :: (provider: *ManagementProvider, operation: string, value: string, result: string) -> bool {
+    if !Request(provider, operation, value) { return false }
+    ProviderPump(provider)
+    return !provider.queue.pending && TextUntilNul(provider.queue.result[:]) == result
+}
+// Default backup names, password rules and the two steps of signing in.
+CheckBackupAndSignIn :: () -> s32 {
+    name: [128]u8
+    id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    if RecoveryFileName("Live_Tester", id, name[:]) != "Live_Tester.key" { return 100 }
+    if RecoveryFileName("", id, name[:]) != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.key" { return 101 }
+    if RecoveryFileName("../../etc/pass wd", id, name[:]) != "etcpasswd.key" { return 102 }
+    if RecoveryFileName("..", id, name[:]) != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.key" { return 103 }
+    if RecoveryFileName("CON", id, name[:]) == "CON.key" || RecoveryFileName("lpt1", id, name[:]) == "lpt1.key" { return 104 }
+    if RecoveryFileName("cones", id, name[:]) != "cones.key" { return 105 }
+    long := "a123456789a123456789a123456789a123456789a123456789a123456789a123456789a123456789"
+    if RecoveryFileName(long, id, name[:]) != "a123456789a123456789a123456789a123456789a123456789a123456789a123.key" { return 106 }
+    if RecoveryFileName("", "", name[:]) != "account.key" { return 107 }
+    tiny: [6]u8
+    if RecoveryFileName("username", id, tiny[:]) != "" { return 108 }
+    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("1234567") || !ManagementPasswordAccepted("12345678") { return 109 }
+    if ManagementPasswordAccepted("ééééééé") || !ManagementPasswordAccepted("éééééééé") { return 110 }
+
+    root: [4096]u8
+    if !NativeDirectory(NativeRoot(root[:])) || NativeJoin(backup_path[:], TextUntilNul(root[:]), "fixture-backup.key") == "" { return 111 }
+    provider := *backup_provider
+    provider.* = ManagementProvider.{.snapshot = Snapshot, .apply = Apply, .action = Action, .choose_file = ChooseBackup, .load = LoadFixture}
+    backup_alias = "Fixture_Name"
+    if ProviderBackupFileName(provider, name[:]) != "Fixture_Name.key" { return 112 }
+    backup_alias = ""
+    expected: [128]u8
+    if ProviderBackupFileName(provider, name[:]) != RecoveryFileName("", TextUntilNul(current_id[:]), expected[:]) { return 113 }
+
+    // A backup never goes out without a password.
+    unused RemoveFile(TextUntilNul(backup_path[:]))
+    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") ||
+    PathExists(TextUntilNul(backup_path[:])) { return 114 }
+    if !Finished(provider, "backup", "fixture password", "ok") { return 115 }
+    file: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if NativeRead(TextUntilNul(backup_path[:]), file[:]) <= 0 || !RecoveryNeedsPassword(TextUntilNul(file[:])) { return 116 }
+
+    // The file comes first; a wrong password keeps it for another try.
+    applied := apply_count
+    if !Finished(provider, "import", "", "password") || !ProviderState(provider).password_needed || apply_count != applied { return 117 }
+    if !Finished(provider, "import_password", "wrong password", "password") || !ProviderState(provider).password_needed ||
+    apply_count != applied || TextUntilNul(provider.queue.message[:]) == "" { return 118 }
+    if !Finished(provider, "import_password", "fixture password", "switch") || ProviderState(provider).password_needed ||
+    apply_count != applied + 1 || !provider.has_incoming { return 119 }
+    if TextUntilNul(provider.incoming.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) ||
+    TextUntilNul(provider.incoming.context[:]) != TextUntilNul(fixture.context[:]) { return 120 }
+    if !Finished(provider, "switch_cancel", "", "cancelled") { return 121 }
+
+    // Leaving forgets the held file.
+    if !Finished(provider, "import", "", "password") || !Finished(provider, "import_cancel", "", "cancelled") ||
+    ProviderState(provider).password_needed || provider.held_backup[0] != cast(u8)0 { return 122 }
+    if !Finished(provider, "import_password", "fixture password", "error") { return 123 }
+
+    // Files from before this flow: a plain key opens with no password, and a
+    // password given with the file still works.
+    if !Finished(provider, "import", "fixture password", "switch") || !Finished(provider, "switch_cancel", "", "cancelled") { return 124 }
+    plain: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if !RecoveryEncode(*fixture, "", plain[:]) || !NativeWrite(TextUntilNul(backup_path[:]), TextUntilNul(plain[:])) { return 125 }
+    if !Finished(provider, "import", "", "switch") || ProviderState(provider).password_needed || !Finished(provider, "switch_cancel", "", "cancelled") { return 126 }
+    if !NativeWrite(TextUntilNul(backup_path[:]), "not a backup") || !Finished(provider, "import", "", "error") ||
+    ProviderState(provider).password_needed { return 127 }
+    unused RemoveFile(TextUntilNul(backup_path[:]))
+
+    // The status reaches the profile bundle.
+    state: Management
+    state.password_needed = true
+    state.available = true
+    document := ManagementEncode(state)
+    defer { EntityFree(document) }
+    decoded: Management
+    if !ManagementDecode(document, *decoded) || !decoded.password_needed { return 128 }
+    return 0
 }
 Request :: (provider: *ManagementProvider, operation: string, value: string = "", choice: s32 = 0) -> bool {
     request: ManagementRequest
@@ -126,6 +215,9 @@ Check :: () -> s32 {
     current_id = fixture.keys.public_id
     ProviderPump(*provider)
     if provider.queue.pending || TextUntilNul(provider.queue.result[:]) != "error" || apply_count != 1 { return 25 }
+
+    backup_checks := CheckBackupAndSignIn()
+    if backup_checks != 0 { return backup_checks }
 
     // Shared preferences only meet at the same verified identity.
     state := EntityDefault()
@@ -257,7 +349,7 @@ Check :: () -> s32 {
         alias := ProviderNormalizeAlias(accepted[index], normalized[:])
         if alias != expected[index] || !ProviderAliasValid(alias) { return 62 }
     }
-    refused: [7]string = .["Ana", "@@waozi", "wao zi", "wa-ozi", "José1", "", "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_q"]
+    refused: [6]string = .["@@waozi", "wao zi", "wa-ozi", "José1", "", "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_q"]
     for text: refused {
         if ProviderAliasValid(ProviderNormalizeAlias(text, normalized[:])) { return 63 }
     }

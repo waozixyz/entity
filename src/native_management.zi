@@ -63,6 +63,18 @@ ManagementProvider :: struct {
     alias_node: [512]u8
     alias_retry: bool
     alias_purchase: AliasPurchase
+    // Still sealed; kept so a mistyped password does not mean choosing the file again.
+    held_backup: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+}
+
+// The name to offer when saving this account's backup.
+ProviderBackupFileName :: (provider: *ManagementProvider, output: []u8) -> string {
+    state := ProviderState(provider)
+    return RecoveryFileName(TextUntilNul(state.alias[:]), TextUntilNul(state.public_id[:]), output)
+}
+
+ProviderForgetBackup :: (provider: *ManagementProvider) {
+    SecureWipe(*provider.held_backup[0], provider.held_backup.count)
 }
 
 ProviderState :: (provider: *ManagementProvider) -> Management {
@@ -71,6 +83,7 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     state.alias_pricing = true
     state.busy = state.busy || provider.asynchronous
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
+    state.password_needed = provider.held_backup[0] != cast(u8)0
     client: Client
     if provider.client != null && provider.client(provider.context, *client) &&
     TextUntilNul(state.public_id[:]) == TextUntilNul(provider.alias_owner[:]) &&
@@ -110,7 +123,7 @@ ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
     if TextUntilNul(provider.incoming_owner[:]) != TextUntilNul(state.public_id[:]) {
         RecoveryClear(*provider.incoming)
         provider.has_incoming = false
-        ProviderFinish(provider, "error", "The account changed; import the key again")
+        ProviderFinish(provider, "error", "The account changed; sign in again")
         return
     }
     result := provider.apply(provider.context, *provider.incoming, choice)
@@ -118,7 +131,7 @@ ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
     if result != 1 { ProviderFinish(provider, "error", "Could not save the account"); return }
     RecoveryClear(*provider.incoming)
     provider.has_incoming = false
-    ProviderFinish(provider, "ok", "Account connected")
+    ProviderFinish(provider, "ok", ifx TextUntilNul(provider.queue.request.operation[:]) == "create" then "Account created" else "Signed in")
 }
 
 ProviderSelectFile :: (provider: *ManagementProvider, save: bool, output: []u8) -> s32 {
@@ -130,11 +143,11 @@ ProviderImport :: (provider: *ManagementProvider, passphrase: string) {
     path: [4096]u8
     chosen := ProviderSelectFile(provider, false, path[:])
     if chosen == 2 { provider.delegated = true; return }
-    if chosen == 0 { ProviderFinish(provider, "cancelled", "Import cancelled"); return }
-    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the key file chooser"); return }
+    if chosen == 0 { ProviderFinish(provider, "cancelled", "Sign-in cancelled"); return }
+    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the file chooser"); return }
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
-    if NativeRead(TextUntilNul(path[:]), text[:]) <= 0 { ProviderFinish(provider, "error", "Could not read the account key"); return }
+    if NativeRead(TextUntilNul(path[:]), text[:]) <= 0 { ProviderFinish(provider, "error", "Could not read the backup file"); return }
     ProviderImportText(provider, TextUntilNul(text[:]), passphrase)
 }
 
@@ -144,7 +157,7 @@ ProviderImportPaste :: (provider: *ManagementProvider, passphrase: string) {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     if provider.paste == null || !provider.paste(provider.context, text[:]) || ProviderTrim(TextUntilNul(text[:])) == "" {
-        ProviderFinish(provider, "error", "Copy your key, then paste it here")
+        ProviderFinish(provider, "error", "Copy your backup, then paste it here")
         return
     }
     ProviderImportText(provider, ProviderTrim(TextUntilNul(text[:])), passphrase)
@@ -159,12 +172,24 @@ ProviderTrim :: (text: string) -> string {
 }
 
 ProviderImportText :: (provider: *ManagementProvider, text: string, passphrase: string) {
+    protected := RecoveryNeedsPassword(text)
+    if protected && passphrase == "" {
+        if !CopyCString(text, provider.held_backup[:]) { ProviderFinish(provider, "error", "That is not an account backup"); return }
+        ProviderFinish(provider, "password", "")
+        return
+    }
     incoming: Recovery
     defer { RecoveryClear(*incoming) }
     if !RecoveryDecode(text, passphrase, *incoming) {
-        ProviderFinish(provider, "error", ifx passphrase == "" then "That is not an account key, or it needs its passphrase" else "The key or passphrase is not valid")
+        // Authentication cannot tell a wrong password from a damaged file.
+        if protected && CopyCString(text, provider.held_backup[:]) {
+            ProviderFinish(provider, "password", "Wrong password, or the backup file is damaged")
+            return
+        }
+        ProviderFinish(provider, "error", "That is not an account backup")
         return
     }
+    ProviderForgetBackup(provider)
     RecoveryClear(*provider.incoming)
     provider.incoming = incoming
     provider.has_incoming = true
@@ -173,29 +198,42 @@ ProviderImportText :: (provider: *ManagementProvider, text: string, passphrase: 
     ProviderApplyIncoming(provider, 0)
 }
 
+// The password for a backup given earlier; the file is not chosen again.
+ProviderImportHeld :: (provider: *ManagementProvider, passphrase: string) {
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    text = provider.held_backup
+    if text[0] == cast(u8)0 { ProviderFinish(provider, "error", "Choose your backup first"); return }
+    ProviderImportText(provider, TextUntilNul(text[:]), passphrase)
+}
+
 ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
+    if !ManagementPasswordAccepted(passphrase) {
+        ProviderFinish(provider, "error", "Use a password of at least 8 characters")
+        return
+    }
     recovery: Recovery
     defer { RecoveryClear(*recovery) }
     if provider.load == null || !provider.load(provider.context, *recovery) {
-        ProviderFinish(provider, "error", "No account key is available on this device")
+        ProviderFinish(provider, "error", "No account is signed in on this device")
         return
     }
     path: [4096]u8
     chosen := ProviderSelectFile(provider, true, path[:])
     if chosen == 2 { provider.delegated = true; return }
     if chosen == 0 { ProviderFinish(provider, "cancelled", "Backup cancelled"); return }
-    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the backup chooser"); return }
+    if chosen < 0 { ProviderFinish(provider, "error", "Could not open the file chooser"); return }
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     if !RecoveryEncode(*recovery, passphrase, text[:]) || !NativeWrite(TextUntilNul(path[:]), TextUntilNul(text[:])) {
-        ProviderFinish(provider, "error", "Could not save the account key backup")
+        ProviderFinish(provider, "error", "Could not save the backup")
         return
     }
     if provider.deliver_file != null && !provider.deliver_file(provider.context, TextUntilNul(path[:])) {
-        ProviderFinish(provider, "error", "Could not deliver the account key backup")
+        ProviderFinish(provider, "error", "Could not save the backup")
         return
     }
-    ProviderFinish(provider, "ok", "Account key backup saved")
+    ProviderFinish(provider, "ok", "Backup saved. Keep the file and your password safe.")
 }
 
 ProviderStartTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -561,6 +599,14 @@ ProviderPump :: (provider: *ManagementProvider) {
         for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
         ProviderImportPaste(provider, TextUntilNul(passphrase[:]))
         SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "import_password" {
+        passphrase: [1024]u8
+        for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
+        ProviderImportHeld(provider, TextUntilNul(passphrase[:]))
+        SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "import_cancel" {
+        ProviderForgetBackup(provider)
+        ProviderFinish(provider, "cancelled", "")
     } else if operation == "link_paste" {
         // A pasted connection code joins like a typed one.
         code: [1024]u8

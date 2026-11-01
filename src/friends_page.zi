@@ -56,7 +56,7 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
     TextUntilNul(owner[:]) != TextUntilNul(management.public_id[:]) { return }
     busy := MatchLiteral(document, FieldAt(document, 0, "busy"), "true")
     if !busy && notice == Label("entity.working", "Working…") { notice = "" }
-    unused EditField(2, friends_target[:], Label("profile_friend_target", "Alias or public ID"), Rectangle.{x, y.*, width, 48.0 * scale}, 128)
+    unused EditField(2, friends_target[:], Label("profile_friend_target", "Username or public ID"), Rectangle.{x, y.*, width, 48.0 * scale}, 128)
     y.* += 60.0 * scale
     typed_target := friends_target
     if !busy && WideButton(60000, Label("profile_add_friend", "Add friend"), x, y, width, true) { FriendAction("add", TextUntilNul(typed_target[:])) }

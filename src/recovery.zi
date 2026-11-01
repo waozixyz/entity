@@ -21,6 +21,57 @@ RecoveryClear :: (value: *Recovery) {
     value.* = Recovery.{}
 }
 
+// The name a saved backup is offered under: the username when it survives
+// cleaning, otherwise the public ID. Only letters, digits, _ and - remain, so
+// no name can leave the chosen folder or hide its extension on any system.
+RECOVERY_NAME_LIMIT :: 64
+
+RecoveryNameClean :: (value: string, output: []u8) -> string {
+    count: s64 = 0
+    for byte: value {
+        keep := (byte >= cast(u8)97 && byte <= cast(u8)122) || (byte >= cast(u8)65 && byte <= cast(u8)90) ||
+        (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)95 || byte == cast(u8)45
+        if keep && count < RECOVERY_NAME_LIMIT && count + 1 < output.count {
+            output[count] = byte
+            count += 1
+        }
+    }
+    if output.count > 0 { output[count] = cast(u8)0 }
+    return TextUntilNul(output)
+}
+
+// Windows refuses these as file names whatever their extension.
+RecoveryNameReserved :: (name: string) -> bool {
+    lower: [8]u8
+    if name.count < 3 || name.count > 4 { return false }
+    for byte, index: name { lower[index] = ifx byte >= cast(u8)65 && byte <= cast(u8)90 then byte + cast(u8)32 else byte }
+    text := TextUntilNul(lower[:])
+    if text == "con" || text == "prn" || text == "aux" || text == "nul" { return true }
+    if name.count != 4 || lower[3] < cast(u8)49 || lower[3] > cast(u8)57 { return false }
+    return text[:3] == "com" || text[:3] == "lpt"
+}
+
+RecoveryFileName :: (username: string, public_id: string, output: []u8) -> string {
+    stem: [RECOVERY_NAME_LIMIT + 1]u8
+    identity: [RECOVERY_NAME_LIMIT + 1]u8
+    name := RecoveryNameClean(username, stem[:])
+    if name == "" || RecoveryNameReserved(name) { name = RecoveryNameClean(public_id, identity[:]) }
+    if name == "" { name = "account" }
+    if name.count + 5 > output.count { return "" }
+    for byte, index: name { output[index] = byte }
+    extension := ".key"
+    for byte, index: extension { output[name.count + index] = byte }
+    output[name.count + extension.count] = cast(u8)0
+    return TextUntilNul(output)
+}
+
+// A backup sealed with a password, as opposed to an older plain key file.
+RecoveryNeedsPassword :: (input: string) -> bool {
+    start: s64 = 0
+    if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
+    return AccountStartsWith(input[start:], AccountEncryptedHeader)
+}
+
 RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
     if output.count < ACCOUNT_EXPORT_TEXT_SIZE || AccountKeysText(*value.keys, *output[0], output.count) == 0 { return false }
     context := TextUntilNul(value.context[:])
