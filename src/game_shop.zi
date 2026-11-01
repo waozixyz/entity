@@ -8,12 +8,17 @@
 GAME_SHOP_SERVICE :: "entity.game-shop"
 // Product IDs double as ownership bits. Wurm reads `owned` and rejects any value
 // above its own bits, so other games' products are reported separately.
-GAME_SHOP_PRODUCTS: [8]s32 = .[1, 2, 3, 7, 9, 10, 11, 12];
+GAME_SHOP_PRODUCTS: [10]s32 = .[1, 2, 3, 7, 9, 10, 11, 12, 13, 14];
 GAME_SHOP_WURM_BITS :: 1023;
+GAME_SHOP_CHOANO_BITS :: 7168;
+GAME_SHOP_SHOVEY_BITS :: 24576;
 GameShopWurmOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_WURM_BITS }
-GameShopDecorations :: (owned: s32) -> s32 { return owned & ~GAME_SHOP_WURM_BITS }
+GameShopDecorations :: (owned: s32) -> s32 { return owned & GAME_SHOP_CHOANO_BITS }
+GameShopShoveyOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_SHOVEY_BITS }
 GameShopPrice :: (product: s32) -> s64 {
     if product >= 10 && product <= 12 { return cast(s64)(product - 9) * 10000000 }
+    if product == 13 { return 10000000 }
+    if product == 14 { return 30000000 }
     if product == 9 { return 20000000 }
     if product == 7 { return 50000000 }
     if product < 1 || product > 3 { return 0 }
@@ -28,6 +33,8 @@ GameShopProduct :: (product: s32) -> string {
     if product == 10 { return "choano.pearl" }
     if product == 11 { return "choano.flower" }
     if product == 12 { return "choano.wizard" }
+    if product == 13 { return "shovey.night" }
+    if product == 14 { return "shovey.crystal" }
     return ""
 }
 GameShopKey :: (product: s32) -> string {
@@ -39,6 +46,8 @@ GameShopKey :: (product: s32) -> string {
     if product == 10 { return "decoration-choano-pearl-v1" }
     if product == 11 { return "decoration-choano-flower-v1" }
     if product == 12 { return "decoration-choano-wizard-v1" }
+    if product == 13 { return "skin-shovey-night-v1" }
+    if product == 14 { return "skin-shovey-crystal-v1" }
     return ""
 }
 GameShopReference :: (product: s32) -> string {
@@ -50,6 +59,8 @@ GameShopReference :: (product: s32) -> string {
     if product == 10 { return "choano.pearl:decoration-choano-pearl-v1" }
     if product == 11 { return "choano.flower:decoration-choano-flower-v1" }
     if product == 12 { return "choano.wizard:decoration-choano-wizard-v1" }
+    if product == 13 { return "shovey.night:skin-shovey-night-v1" }
+    if product == 14 { return "shovey.crystal:skin-shovey-crystal-v1" }
     return ""
 }
 GameShopLegacyReference :: (product: s32) -> string {
@@ -115,6 +126,45 @@ CoinPackReceipt :: (text: string, owner: string) -> s32 {
         start := BuilderFinish(prefix)
         matched := ref.count > start.count && ref[:start.count] == start
         if matched && amount.valid && amount.value == -cast(float64)CoinPackPrice(pack) { return CoinPackCoins(pack) }
+    }
+    return 0
+}
+
+SHOVEY_COIN_PACKS :: 3;
+SHOVEY_COIN_PACK_ACTION :: "shovey.coins";
+ShoveyCoinPackCoins :: (pack: s32) -> s32 {
+    if pack == 1 { return 150 }
+    if pack == 2 { return 400 }
+    if pack == 3 { return 900 }
+    return 0
+}
+ShoveyCoinPackPrice :: (pack: s32) -> s64 {
+    if pack == 1 { return 2000000 }
+    if pack == 2 { return 5000000 }
+    if pack == 3 { return 10000000 }
+    return 0
+}
+ShoveyCoinPackKey :: (pack: s32, number: s32, output: []u8) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "coins-shovey-%-%-v1", pack, number)
+    text := BuilderFinish(out)
+    unused CopyCString(text, output)
+    return TextUntilNul(output)
+}
+ShoveyCoinPackReceipt :: (text: string, owner: string) -> s32 {
+    if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
+    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
+    amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
+    reference: [128]u8
+    if ReadStringText(text, FieldAt(text, 0, "source_ref"), reference[:]) < 0 { return 0 }
+    ref := TextUntilNul(reference[:])
+    for pack: cast(s32)1..SHOVEY_COIN_PACKS {
+        prefix: Vec(u8)
+        BuilderPrint(*prefix, "%:coins-shovey-%-", SHOVEY_COIN_PACK_ACTION, pack)
+        start := BuilderFinish(prefix)
+        matched := ref.count > start.count && ref[:start.count] == start
+        if matched && amount.valid && amount.value == -cast(float64)ShoveyCoinPackPrice(pack) { return ShoveyCoinPackCoins(pack) }
     }
     return 0
 }

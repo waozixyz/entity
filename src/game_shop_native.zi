@@ -28,7 +28,7 @@ shop_request: PendingRequest;
 shop_session: Auth.Session;
 shop_transfer: HttpTransfer;
 shop_response: [131072]u8;
-shop_answer: [512]u8;
+shop_answer: [640]u8;
 // Native hosts may supply their platform transport; bundles never see it.
 shop_transport: AsyncTransport;
 shop_visit: bool;
@@ -37,6 +37,10 @@ shop_coins: s32;
 shop_coin_receipts: s32;
 shop_pack: s32;
 shop_pack_key: [64]u8;
+shop_shovey_coins: s32;
+shop_shovey_coin_receipts: s32;
+shop_shovey_pack: s32;
+shop_shovey_pack_key: [64]u8;
 
 ShopOwner :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
@@ -53,6 +57,9 @@ ShopOwner :: () {
     shop_coins = 0
     shop_coin_receipts = 0
     shop_pack = 0
+    shop_shovey_coins = 0
+    shop_shovey_coin_receipts = 0
+    shop_shovey_pack = 0
     shop_status = "idle"
 }
 ShopStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -79,12 +86,19 @@ EntityGameShopAnswer :: (request: string) -> string {
         unused ShopChristmasClaim(UnixNow())
     }
     if request == "visit" { shop_visit = true; return "queued" }
-    if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0; shop_pack = 0 }
+    if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0; shop_pack = 0; shop_shovey_pack = 0 }
     if request.count == 7 && request[:6] == "coins:" && !shop_active && !shop_requested {
         pack := cast(s32)(request[6] - #char "0")
         if CoinPackPrice(pack) <= 0 { shop_status = "failed" }
         else if !shop_loaded { shop_status = "failed"; shop_requested = true }
-        else if DewReady() { shop_pack = pack; shop_product = 0; shop_requested = true }
+        else if DewReady() { shop_pack = pack; shop_product = 0; shop_shovey_pack = 0; shop_requested = true }
+        else { shop_status = "signin" }
+    }
+    if request.count == 14 && request[:13] == "shovey-coins:" && !shop_active && !shop_requested {
+        pack := cast(s32)(request[13] - #char "0")
+        if ShoveyCoinPackPrice(pack) <= 0 { shop_status = "failed" }
+        else if !shop_loaded { shop_status = "failed"; shop_requested = true }
+        else if DewReady() { shop_shovey_pack = pack; shop_product = 0; shop_pack = 0; shop_requested = true }
         else { shop_status = "signin" }
     }
     for product: GAME_SHOP_PRODUCTS {
@@ -99,8 +113,9 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "status" && !shop_loaded && !shop_active && shop_status == "idle" { shop_requested = true }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"decorations\":%,\"coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
+    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"decorations\":%,\"coins\":%,\"shovey_owned\":%,\"shovey_coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
         TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), GameShopWurmOwned(shop_owned), GameShopDecorations(shop_owned), shop_coins,
+        GameShopShoveyOwned(shop_owned), shop_shovey_coins,
         ChristmasClaimWindow(UnixNow()),
         ifx shop_active || shop_requested then "pending" else shop_status)
     text := BuilderFinish(out)
@@ -126,16 +141,27 @@ EntityGameShopPump :: () {
         shop_status = "failed"
         if shop_request.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK { return }
         response := TextUntilNul(shop_response[:])
-        if shop_pack > 0 {
+        if shop_pack > 0 || shop_shovey_pack > 0 {
             at := FieldAt(response, 0, "receipt")
             end := ValueEnd(response, at, 0)
-            coins := ifx at >= 0 && end > at then CoinPackReceipt(response[at:end], TextUntilNul(shop_owner[:])) else 0
+            wurm_pack := shop_pack > 0
+            coins: s32 = 0
+            if at >= 0 && end > at {
+                if wurm_pack { coins = CoinPackReceipt(response[at:end], TextUntilNul(shop_owner[:])) }
+                else { coins = ShoveyCoinPackReceipt(response[at:end], TextUntilNul(shop_owner[:])) }
+            }
             shop_pack = 0
+            shop_shovey_pack = 0
             if shop_request.status == 409 { shop_status = "insufficient" }
             if coins <= 0 { return }
             // A confirmed receipt is the purchase; the next pack has a new number.
-            shop_coins += coins
-            shop_coin_receipts += 1
+            if wurm_pack {
+                shop_coins += coins
+                shop_coin_receipts += 1
+            } else {
+                shop_shovey_coins += coins
+                shop_shovey_coin_receipts += 1
+            }
             shop_status = "done"
             if !dew_active && dew_queued[0] == cast(u8)0 { unused CopyCString("refresh", dew_queued[:]) }
         } else if shop_product > 0 {
@@ -159,6 +185,8 @@ EntityGameShopPump :: () {
             index: s32 = 0
             coins: s32 = 0
             packs: s32 = 0
+            shovey_coins: s32 = 0
+            shovey_packs: s32 = 0
             while true {
                 item := ElementAt(response, at, index)
                 if item < 0 { break }
@@ -168,11 +196,15 @@ EntityGameShopPump :: () {
                 if product > 0 { shop_owned |= 1 << product }
                 bought := CoinPackReceipt(response[item:end], TextUntilNul(shop_owner[:]))
                 if bought > 0 { coins += bought; packs += 1 }
+                shovey_bought := ShoveyCoinPackReceipt(response[item:end], TextUntilNul(shop_owner[:]))
+                if shovey_bought > 0 { shovey_coins += shovey_bought; shovey_packs += 1 }
                 index += 1
             }
             // The whole ledger was read, so its coin packs replace the count.
             shop_coins = coins
             shop_coin_receipts = packs
+            shop_shovey_coins = shovey_coins
+            shop_shovey_coin_receipts = shovey_packs
             shop_loaded = true
             shop_status = "done"
         }
@@ -182,10 +214,13 @@ EntityGameShopPump :: () {
     shop_requested = false
     client: Client
     body: Vec(u8)
-    purchase := shop_product > 0 || shop_pack > 0
+    purchase := shop_product > 0 || shop_pack > 0 || shop_shovey_pack > 0
     if shop_pack > 0 {
         BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
             CoinPackPrice(shop_pack), COIN_PACK_ACTION, CoinPackKey(shop_pack, shop_coin_receipts + 1, shop_pack_key[:]))
+    } else if shop_shovey_pack > 0 {
+        BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
+            ShoveyCoinPackPrice(shop_shovey_pack), SHOVEY_COIN_PACK_ACTION, ShoveyCoinPackKey(shop_shovey_pack, shop_shovey_coin_receipts + 1, shop_shovey_pack_key[:]))
     } else if purchase {
         BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
             GameShopPrice(shop_product), GameShopProduct(shop_product), GameShopKey(shop_product))

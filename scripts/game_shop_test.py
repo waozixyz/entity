@@ -90,7 +90,7 @@ def main():
             step('other', 'local')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 190000000,
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 245000000,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -109,14 +109,18 @@ def main():
             step('other', 'insufficient')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
-                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000], events
-                assert [row[1] for row in events[5:]] == ['choano.pearl:decoration-choano-pearl-v1', 'choano.flower:decoration-choano-flower-v1', 'choano.wizard:decoration-choano-wizard-v1'], events
+                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000, -10000000, -30000000, -5000000, -10000000], events
+                assert [row[1] for row in events[5:]] == [
+                    'choano.pearl:decoration-choano-pearl-v1', 'choano.flower:decoration-choano-flower-v1',
+                    'choano.wizard:decoration-choano-wizard-v1', 'shovey.night:skin-shovey-night-v1',
+                    'shovey.crystal:skin-shovey-crystal-v1', 'wurm.coins:coins-wurm-2-1-v1',
+                    'shovey.coins:coins-shovey-3-1-v1'], events
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
-            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 8,
+            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 12,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
-                              'receipt restore on a fresh device', 'unfunded account cannot acquire paid skins',
-                              'different accounts have separate ownership']}, indent=2))
-            print('Game shop integration local tests: eight private-node debits including 20 Dew Mountains and three Choano decorations, cross-device restore, retries, account isolation and December claim persistence passed.')
+                              'receipt restore on a fresh device', 'separate Wurm and Shovey coin packs',
+                              'unfunded account cannot acquire paid skins', 'different accounts have separate ownership']}, indent=2))
+            print('Game shop integration local tests: twelve private-node debits including Choano and Shovey products, separate coin packs, cross-device restore, retries, account isolation and December claim persistence passed.')
         finally:
             node.terminate()
             node.wait(timeout=10)

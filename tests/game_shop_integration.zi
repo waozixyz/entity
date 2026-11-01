@@ -68,14 +68,26 @@ Check :: () -> s32 {
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
     if step == "restored" {
-        if shop_owned != 7822 { return 8 }
-        // Wurm keeps its own mask; decorations arrive in their own field.
+        if shop_owned != 32398 { return 8 }
+        // Each game keeps its own ownership mask and coin total.
         reply := EntityGameShopAnswer("status")
         owned := ReadNumber(reply, FieldAt(reply, 0, "owned"))
         decorations := ReadNumber(reply, FieldAt(reply, 0, "decorations"))
-        return ifx owned.valid && owned.value == 654.0 && decorations.valid && decorations.value == 7168.0 then 0 else 18
+        shovey_owned := ReadNumber(reply, FieldAt(reply, 0, "shovey_owned"))
+        coins := ReadNumber(reply, FieldAt(reply, 0, "coins"))
+        shovey_coins := ReadNumber(reply, FieldAt(reply, 0, "shovey_coins"))
+        return ifx owned.valid && owned.value == 654.0 && decorations.valid && decorations.value == 7168.0 &&
+        shovey_owned.valid && shovey_owned.value == 24576.0 && coins.valid && coins.value == 400.0 &&
+        shovey_coins.valid && shovey_coins.value == 900.0 then 0 else 18
     }
     if step == "buy" {
+        if shop_coin_receipts == 1 && shop_shovey_coin_receipts == 1 {
+            // An uncertain confirmed response has no local count; its retry reuses number one.
+            shop_coins = 0
+            shop_shovey_coins = 0
+            shop_coin_receipts = 0
+            shop_shovey_coin_receipts = 0
+        }
         for product: GAME_SHOP_PRODUCTS {
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() || (shop_owned & (1 << product)) == 0 { print("purchase % failed: %\n", product, shop_status); return 9 }
@@ -86,6 +98,10 @@ Check :: () -> s32 {
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() { return 10 }
         }
+        unused EntityGameShopAnswer("coins:2")
+        if !Wait() || shop_coins != 400 || shop_shovey_coins != 0 || shop_coin_receipts != 1 || shop_shovey_coin_receipts != 0 { return 21 }
+        unused EntityGameShopAnswer("shovey-coins:3")
+        if !Wait() || shop_coins != 400 || shop_shovey_coins != 900 || shop_coin_receipts != 1 || shop_shovey_coin_receipts != 1 { return 22 }
         return 0
     }
     if step == "insufficient" {
@@ -93,6 +109,8 @@ Check :: () -> s32 {
         if Wait() || shop_owned != 0 { return 11 }
         unused EntityGameShopAnswer("choano.pearl")
         if Wait() || shop_owned != 0 { return 19 }
+        unused EntityGameShopAnswer("shovey.night")
+        if Wait() || shop_owned != 0 { return 23 }
         return 0
     }
     if step == "holiday_early" {

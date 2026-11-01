@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+-Add the shared game daily-chest plan.
+- Buy Shovey skins and separately counted Dew coin packs.
 - Buy three Choano decorations with Dew: Pearl, Flower and Wizard.
 
 - Preserve the surrounding game theme when nested controls finish drawing.
