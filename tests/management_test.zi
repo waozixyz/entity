@@ -145,6 +145,78 @@ Request :: (provider: *ManagementProvider, operation: string, value: string = ""
     return ProviderEnqueue(provider, encoded)
 }
 
+// A hybrid link in both directions, and everything a relay could try against it.
+HybridLinkCheck :: (fixture: *Recovery) -> s32 {
+    shower: DeviceLinkKeys
+    scanner: DeviceLinkKeys
+    if !DeviceLinkNewKeys(*shower) || !DeviceLinkNewKeys(*scanner) { return 1 }
+    defer { DeviceLinkForget(*shower); DeviceLinkForget(*scanner) }
+    id := "0123456789abcdef0123456789abcdef"
+    server := "https://api.waozi.xyz"
+
+    // The code stays short enough to scan and carries no full key.
+    receiving := DeviceLinkHybridCodeText(id, *shower, false, server)
+    sending := DeviceLinkHybridCodeText(id, *shower, true, server)
+    defer { EntityFree(receiving); EntityFree(sending) }
+    if receiving.count > 170 || sending.count > 170 { return 2 }
+    code := DeviceLinkParse(receiving)
+    code_sends := DeviceLinkParse(sending)
+    if !code.valid || !code.hybrid || code.sends || !code_sends.valid || !code_sends.hybrid || !code_sends.sends { return 3 }
+
+    // The scanner seals to the shower's keys only after checking the hash.
+    shower_text := DeviceLinkBundleText(*shower)
+    scanner_text := DeviceLinkBundleText(*scanner)
+    defer { EntityFree(shower_text); EntityFree(scanner_text) }
+    shower_bundle: [DEVICE_LINK_BUNDLE]u8
+    scanner_bundle: [DEVICE_LINK_BUNDLE]u8
+    if !DeviceLinkBundleRead(shower_text, *code.public[0], *shower_bundle[0]) { return 4 }
+    if DeviceLinkBundleRead(scanner_text, *code.public[0], *scanner_bundle[0]) { return 5 }
+    if !DeviceLinkBundleRead(scanner_text, null, *scanner_bundle[0]) { return 6 }
+
+    to_shower := DeviceLinkHybridSeal(*fixture.keys, server, id, *scanner, *shower_bundle[0], false, TextUntilNul(fixture.context[:]))
+    defer { EntityFree(to_shower) }
+    arrived := DeviceLinkHybridOpen(to_shower, id, *shower, true, null)
+    if !arrived.valid || TextUntilNul(arrived.account.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) ||
+    TextUntilNul(arrived.server[:]) != server || TextUntilNul(arrived.context[:]) != TextUntilNul(fixture.context[:]) { return 7 }
+    SecureWipe(*arrived.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+
+    // The other way: the shower seals, the scanner checks the sender against the code.
+    to_scanner := DeviceLinkHybridSeal(*fixture.keys, server, id, *shower, *scanner_bundle[0], true)
+    defer { EntityFree(to_scanner) }
+    received := DeviceLinkHybridOpen(to_scanner, id, *scanner, false, *code_sends.public[0])
+    if !received.valid || TextUntilNul(received.account.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 8 }
+    SecureWipe(*received.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
+
+    // A sender the code did not commit to, another link, or a tampered message.
+    if DeviceLinkHybridOpen(to_shower, id, *scanner, false, *code_sends.public[0]).valid { return 9 }
+    if DeviceLinkHybridOpen(to_scanner, "fedcba9876543210fedcba9876543210", *scanner, false, *code_sends.public[0]).valid { return 10 }
+    // Swapped KEM ciphertext: X25519 alone must not open it.
+    copy: [DEVICE_LINK_MESSAGE_MAX]u8
+    if !CopyCString(to_scanner, copy[:]) { return 11 }
+    at := DEVICE_LINK_KEY * 2 + 40
+    copy[at] = ifx copy[at] == cast(u8)48 then cast(u8)49 else cast(u8)48
+    if DeviceLinkHybridOpen(TextUntilNul(copy[:]), id, *scanner, false, *code_sends.public[0]).valid { return 12 }
+    // A hybrid session never opens an older, X25519-only message.
+    older := DeviceLinkSeal(*fixture.keys, server, id, *shower, *scanner.public[0], true)
+    defer { EntityFree(older) }
+    if DeviceLinkHybridOpen(older, id, *scanner, false, *code_sends.public[0]).valid { return 13 }
+
+    // A relay that replaces the scanner's keys changes the number both show.
+    third: DeviceLinkKeys
+    if !DeviceLinkNewKeys(*third) { return 14 }
+    defer { DeviceLinkForget(*third) }
+    third_bundle: [DEVICE_LINK_BUNDLE]u8
+    DeviceLinkBundleBytes(*third, *third_bundle[0])
+    if DeviceLinkHybridConfirmation(*code_sends.public[0], *scanner_bundle[0]) ==
+    DeviceLinkHybridConfirmation(*code_sends.public[0], *third_bundle[0]) { return 15 }
+
+    // Malformed input is refused without crashing.
+    if DeviceLinkHybridOpen("", id, *scanner, false, null).valid || DeviceLinkHybridOpen("zz", id, *scanner, false, null).valid { return 16 }
+    if DeviceLinkBundleRead("abc", null, *scanner_bundle[0]) { return 17 }
+    if DeviceLinkParse("inbe-link:2:short:hash:s:https://api.waozi.xyz").valid { return 18 }
+    return 0
+}
+
 // The sealed backup: its KDF, its stored layout and every way it must refuse.
 RecoverySealedCheck :: (fixture: *Recovery, text: string) -> s32 {
     if !RecoveryNeedsPassword(text) { return 1 }
@@ -225,7 +297,10 @@ Check :: () -> s32 {
     if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }
     if opened.keys.private_key_hex[0] != cast(u8)0 { return 10 }
 
-    // The existing QR wire format transfers verified keys in either direction.
+    hybrid_result := HybridLinkCheck(*fixture)
+    if hybrid_result != 0 { return 400 + hybrid_result }
+
+    // The older QR wire format keeps working in either direction.
     first: DeviceLinkKeys
     second: DeviceLinkKeys
     if !DeviceLinkNewKeys(*first) || !DeviceLinkNewKeys(*second) { return 11 }

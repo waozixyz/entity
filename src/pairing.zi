@@ -1,15 +1,25 @@
-// Connecting a device by QR code. The device showing the code holds a fresh
-// X25519 key whose public half travels only in the code. When the showing
-// device has no account, the scanning device seals its account to that key.
-// When the showing device holds the account, the scanning device sends its
-// own key, both screens show a code to compare, and the showing device seals
-// the account to the scanner. Daochi relays the sealed messages unread.
+// Connecting a device by QR code. The code carries a relay ID and a hash of
+// the showing device's keys; the keys themselves travel through the relay
+// because an ML-KEM key would make the code too dense to scan.
+//
+// Every account is sealed with both X25519 and ML-KEM-768, so it stays safe
+// unless both are broken. When the showing device has no account, it posts its
+// keys and the scanning device, having checked them against the code, seals
+// its account to them. When the showing device holds the account, the scanning
+// device posts its keys, both screens show a number to compare, and the showing
+// device seals the account to the scanner, which checks the sender against the
+// code. Daochi relays the sealed messages unread.
+//
+// Codes from older apps (inbe-link:1) carry an X25519 key and stay readable;
+// those links are sealed with X25519 alone because the other app has nothing
+// else. New codes are always hybrid, and a hybrid link never accepts anything less.
 #import "std/byte_text_linux"
 #import "std/text"
 #import "std/vec"
 #import "std/text_buffer"
 #import "daochi_client/keys"
 #import "daochi_client/crypto"
+#import "oqs/Oqs"
 #import "model"
 #import "node_url"
 
@@ -36,20 +46,30 @@ DEVICE_LINK_PRIVATE_KEY :: 2560
 // server address.
 DEVICE_LINK_ACCOUNT :: 1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY + DEVICE_LINK_PRIVATE_KEY
 DEVICE_LINK_PLAIN_MAX :: DEVICE_LINK_ACCOUNT + DEVICE_LINK_SERVER_MAX + 130
-DEVICE_LINK_SEALED_MAX :: DEVICE_LINK_KEY + DEVICE_LINK_NONCE + DEVICE_LINK_MAC + DEVICE_LINK_PLAIN_MAX
+DEVICE_LINK_KEM_PUBLIC :: 1184
+DEVICE_LINK_KEM_SECRET :: 2400
+DEVICE_LINK_KEM_CIPHERTEXT :: 1088
+// A device's public keys as they cross the relay.
+DEVICE_LINK_BUNDLE :: DEVICE_LINK_KEY + DEVICE_LINK_KEM_PUBLIC
+DEVICE_LINK_HYBRID_HEADER :: DEVICE_LINK_KEY + DEVICE_LINK_KEM_CIPHERTEXT + DEVICE_LINK_NONCE + DEVICE_LINK_MAC
+DEVICE_LINK_SEALED_MAX :: DEVICE_LINK_HYBRID_HEADER + DEVICE_LINK_PLAIN_MAX
 DEVICE_LINK_MESSAGE_MAX :: DEVICE_LINK_SEALED_MAX * 2 + 1
 DEVICE_LINK_CODE_MAX :: 640
 
 DeviceLinkKeys :: struct {
     secret: [DEVICE_LINK_KEY]u8
     public: [DEVICE_LINK_KEY]u8
+    kem_secret: [DEVICE_LINK_KEM_SECRET]u8
+    kem_public: [DEVICE_LINK_KEM_PUBLIC]u8
 }
 
 // What a scanned code says.
 DeviceLinkCode :: struct {
     valid: bool
     id: [DEVICE_LINK_ID_HEX + 1]u8
+    // An older code's X25519 key, or a hybrid code's key hash.
     public: [DEVICE_LINK_KEY]u8
+    hybrid: bool
     // The showing device holds the account and will send it.
     sends: bool
     server: [DEVICE_LINK_SERVER_MAX + 1]u8
@@ -76,11 +96,12 @@ DeviceLinkNewKeys :: (keys: *DeviceLinkKeys) -> bool {
         return false
     }
     LinkPublicKey(*keys.public[0], *keys.secret[0])
-    return true
+    return MlKem768KeyPair(keys.kem_public[:], keys.kem_secret[:])
 }
 
 DeviceLinkForget :: (keys: *DeviceLinkKeys) {
     LinkWipe(cast(*void)*keys.secret[0], cast(usize)DEVICE_LINK_KEY)
+    LinkWipe(cast(*void)*keys.kem_secret[0], cast(usize)DEVICE_LINK_KEM_SECRET)
 }
 
 // A random 128-bit link ID as 32 lowercase hex characters.
@@ -125,6 +146,8 @@ DeviceLinkServerValid :: (server: string) -> bool {
 DeviceLinkParse :: (text: string) -> DeviceLinkCode {
     code: DeviceLinkCode
     prefix := "inbe-link:1:"
+    hybrid := text.count > prefix.count && text[:prefix.count] == "inbe-link:2:"
+    if hybrid { prefix = "inbe-link:2:" }
     // ID, colon, public key, colon, mode, colon.
     fixed := prefix.count + DEVICE_LINK_ID_HEX + 1 + DEVICE_LINK_KEY * 2 + 1 + 2
     if text.count <= fixed || text.count > DEVICE_LINK_CODE_MAX || text[:prefix.count] != prefix {
@@ -149,6 +172,7 @@ DeviceLinkParse :: (text: string) -> DeviceLinkCode {
     for byte, index: id { code.id[index] = byte }
     for byte, index: server { code.server[index] = byte }
     code.sends = mode == cast(u8)115
+    code.hybrid = hybrid
     code.valid = true
     return code
 }
@@ -309,5 +333,202 @@ DeviceLinkOpen :: (message: string, id: string, receiver: *DeviceLinkKeys, recei
     if !result.valid {
         LinkWipe(cast(*void)*result.account.private_key_hex[0], cast(usize)ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     }
+    return result
+}
+
+// The keys a hybrid code commits to. A device that sends its account proves
+// only its X25519 key, inside the sealed message; a device that receives one
+// commits to both keys, which it posts to the relay.
+DeviceLinkKeyHash :: (keys: *u8, size: s32, output: *u8) {
+    input: [16 + DEVICE_LINK_BUNDLE]u8
+    label := "inbe-link-hash-2"
+    for byte, index: label { input[index] = byte }
+    for index: cast(s32)0..size - 1 { input[16 + index] = keys[index] }
+    LinkHash(output, cast(usize)DEVICE_LINK_KEY, *input[0], cast(usize)(16 + size))
+}
+
+DeviceLinkBundleBytes :: (keys: *DeviceLinkKeys, output: *u8) {
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) { output[index] = keys.public[index] }
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEM_PUBLIC - 1) { output[DEVICE_LINK_KEY + index] = keys.kem_public[index] }
+}
+
+// What goes to the relay: the X25519 key, then the ML-KEM key, as hex.
+DeviceLinkBundleText :: (keys: *DeviceLinkKeys) -> string {
+    bytes: [DEVICE_LINK_BUNDLE]u8
+    text: [DEVICE_LINK_BUNDLE * 2 + 1]u8
+    DeviceLinkBundleBytes(keys, *bytes[0])
+    if BytesToHex(*bytes[0], DEVICE_LINK_BUNDLE, *text[0], text.count) == 0 { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextUntilNul(text[:]))
+    return BuilderFinish(out)
+}
+
+// inbe-link:2:<link ID>:<key hash>:<s or r>:<server>
+DeviceLinkHybridCodeText :: (id: string, keys: *DeviceLinkKeys, sends: bool, server: string) -> string {
+    hash: [DEVICE_LINK_KEY]u8
+    if sends {
+        DeviceLinkKeyHash(*keys.public[0], cast(s32)DEVICE_LINK_KEY, *hash[0])
+    } else {
+        bytes: [DEVICE_LINK_BUNDLE]u8
+        DeviceLinkBundleBytes(keys, *bytes[0])
+        DeviceLinkKeyHash(*bytes[0], cast(s32)DEVICE_LINK_BUNDLE, *hash[0])
+    }
+    hash_text: [DEVICE_LINK_KEY * 2 + 1]u8
+    if BytesToHex(*hash[0], DEVICE_LINK_KEY, *hash_text[0], hash_text.count) == 0 { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "inbe-link:2:%:%:%:%", id, TextUntilNul(hash_text[:]),
+        ifx sends then "s" else "r", server)
+    return BuilderFinish(out)
+}
+
+// Reads the keys a showing device posted, refusing any the code did not commit to.
+DeviceLinkBundleRead :: (text: string, expected_hash: *u8, output: *u8) -> bool {
+    if !DeviceLinkHexValid(text, DEVICE_LINK_BUNDLE * 2) || HexToBytes(text, output, DEVICE_LINK_BUNDLE) == 0 { return false }
+    if expected_hash == null { return true }
+    hash: [DEVICE_LINK_KEY]u8
+    DeviceLinkKeyHash(output, cast(s32)DEVICE_LINK_BUNDLE, *hash[0])
+    return DeviceLinkSame(*hash[0], expected_hash, cast(s32)DEVICE_LINK_KEY)
+}
+
+DeviceLinkSame :: (first: *u8, second: *u8, size: s32) -> bool {
+    difference: u8 = cast(u8)0
+    for index: cast(s32)0..size - 1 { difference = difference | (first[index] ^ second[index]) }
+    return difference == cast(u8)0
+}
+
+// Six digits both screens show when the showing device sends its account, so
+// a relay that replaced the scanner's keys would show a different number.
+DeviceLinkHybridConfirmation :: (key_hash: *u8, scanner_bundle: *u8) -> s32 {
+    input: [16 + DEVICE_LINK_KEY + DEVICE_LINK_BUNDLE]u8
+    label := "inbe-link-code-2"
+    for byte, index: label { input[index] = byte }
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) { input[16 + index] = key_hash[index] }
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_BUNDLE - 1) { input[16 + DEVICE_LINK_KEY + index] = scanner_bundle[index] }
+    hash: [32]u8
+    LinkHash(*hash[0], 32, *input[0], cast(usize)input.count)
+    value := (cast(u32)hash[0] << 24) | (cast(u32)hash[1] << 16) | (cast(u32)hash[2] << 8) | cast(u32)hash[3]
+    return cast(s32)(value % cast(u32)1000000)
+}
+
+// Mixes both shared secrets with everything that was exchanged, so changing
+// any key or the KEM ciphertext gives a different sealing key.
+DeviceLinkHybridKey :: (classical: *u8, quantum: *u8, shower: *u8, scanner: *u8, kem_public: *u8, ciphertext: *u8, key: *u8) {
+    input: [16 + DEVICE_LINK_KEY * 4 + DEVICE_LINK_KEM_PUBLIC + DEVICE_LINK_KEM_CIPHERTEXT]u8
+    label := "inbe-link-key-2\n"
+    for byte, index: label { input[index] = byte }
+    at: s32 = 16
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEY - 1) {
+        input[at + index] = classical[index]
+        input[at + DEVICE_LINK_KEY + index] = quantum[index]
+        input[at + DEVICE_LINK_KEY * 2 + index] = shower[index]
+        input[at + DEVICE_LINK_KEY * 3 + index] = scanner[index]
+    }
+    at += DEVICE_LINK_KEY * 4
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEM_PUBLIC - 1) { input[at + index] = kem_public[index] }
+    at += DEVICE_LINK_KEM_PUBLIC
+    for index: cast(s32)0..cast(s32)(DEVICE_LINK_KEM_CIPHERTEXT - 1) { input[at + index] = ciphertext[index] }
+    LinkHash(key, cast(usize)DEVICE_LINK_KEY, *input[0], cast(usize)input.count)
+    LinkWipe(cast(*void)*input[0], cast(usize)input.count)
+}
+
+// Seals to the receiver's posted keys. The message is the sender's X25519 key,
+// the KEM ciphertext, the nonce, the MAC and the sealed account, as hex.
+DeviceLinkHybridSeal :: (account: *AccountKeys, server: string, id: string, sender: *DeviceLinkKeys,
+    receiver: *u8, sender_shows: bool, context: string = "") -> string {
+    if !DeviceLinkServerValid(server) || context.count > 127 { return "" }
+    plain := *device_link_plain[0]
+    defer { LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX) }
+    plain[0] = cast(u8)3
+    if HexToBytes(TextUntilNul(account.public_id[:]), *plain[1], DEVICE_LINK_PUBLIC_ID) == 0 ||
+    HexToBytes(TextUntilNul(account.public_key_hex[:]), *plain[1 + DEVICE_LINK_PUBLIC_ID], DEVICE_LINK_PUBLIC_KEY) == 0 ||
+    HexToBytes(TextUntilNul(account.private_key_hex[:]), *plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY) == 0 {
+        return ""
+    }
+    plain[DEVICE_LINK_ACCOUNT] = cast(u8)(server.count >> 8)
+    plain[DEVICE_LINK_ACCOUNT + 1] = cast(u8)(server.count & 255)
+    for byte, index: server { plain[DEVICE_LINK_ACCOUNT + 2 + index] = byte }
+    for byte, index: context { plain[DEVICE_LINK_ACCOUNT + 2 + server.count + index] = byte }
+    size := DEVICE_LINK_ACCOUNT + 2 + cast(s32)server.count + cast(s32)context.count
+
+    sealed := *device_link_sealed[0]
+    for index: 0..DEVICE_LINK_KEY - 1 { sealed[index] = sender.public[index] }
+    ciphertext := *sealed[DEVICE_LINK_KEY]
+    nonce := *sealed[DEVICE_LINK_KEY + DEVICE_LINK_KEM_CIPHERTEXT]
+    mac := *nonce[DEVICE_LINK_NONCE]
+    cipher := *sealed[DEVICE_LINK_HYBRID_HEADER]
+    classical: [DEVICE_LINK_KEY]u8
+    quantum: [DEVICE_LINK_KEY]u8
+    key: [DEVICE_LINK_KEY]u8
+    defer {
+        LinkWipe(cast(*void)*classical[0], cast(usize)DEVICE_LINK_KEY)
+        LinkWipe(cast(*void)*quantum[0], cast(usize)DEVICE_LINK_KEY)
+        LinkWipe(cast(*void)*key[0], cast(usize)DEVICE_LINK_KEY)
+    }
+    kem_public: [DEVICE_LINK_KEM_PUBLIC]u8
+    for index: 0..DEVICE_LINK_KEM_PUBLIC - 1 { kem_public[index] = receiver[DEVICE_LINK_KEY + index] }
+    kem_ciphertext: [DEVICE_LINK_KEM_CIPHERTEXT]u8
+    if SecureRandom(nonce, DEVICE_LINK_NONCE) == 0 || !MlKem768Encapsulate(kem_ciphertext[:], quantum[:], kem_public[:]) { return "" }
+    for index: 0..DEVICE_LINK_KEM_CIPHERTEXT - 1 { ciphertext[index] = kem_ciphertext[index] }
+    LinkSharedSecret(*classical[0], *sender.secret[0], receiver)
+    shower := ifx sender_shows then *sender.public[0] else receiver
+    scanner := ifx sender_shows then receiver else *sender.public[0]
+    DeviceLinkHybridKey(*classical[0], *quantum[0], shower, scanner, *receiver[DEVICE_LINK_KEY], ciphertext, *key[0])
+    LinkLock(cipher, mac, *key[0], nonce, DeviceLinkBytes(id), cast(usize)id.count, plain, cast(usize)size)
+    if BytesToHex(sealed, DEVICE_LINK_HYBRID_HEADER + size, *device_link_message[0], DEVICE_LINK_MESSAGE_MAX) == 0 { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextUntilNul(device_link_message[:]))
+    return BuilderFinish(out)
+}
+
+// Opens a hybrid message. sender_hash, when not null, is the code's commitment
+// to the sender: the scanner knows it; the showing device has only its own keys.
+DeviceLinkHybridOpen :: (message: string, id: string, receiver: *DeviceLinkKeys, receiver_shows: bool,
+    sender_hash: *u8) -> DeviceLinkAccount {
+    result: DeviceLinkAccount
+    if message.count % 2 != 0 || message.count < (DEVICE_LINK_HYBRID_HEADER + DEVICE_LINK_ACCOUNT + 2) * 2 ||
+    message.count > DEVICE_LINK_SEALED_MAX * 2 { return result }
+    total := cast(s32)message.count / 2
+    sealed := *device_link_sealed[0]
+    if HexToBytes(message, sealed, total) == 0 { return result }
+    sender := sealed
+    if sender_hash != null {
+        hash: [DEVICE_LINK_KEY]u8
+        DeviceLinkKeyHash(sender, cast(s32)DEVICE_LINK_KEY, *hash[0])
+        if !DeviceLinkSame(*hash[0], sender_hash, cast(s32)DEVICE_LINK_KEY) { return result }
+    }
+    ciphertext := *sealed[DEVICE_LINK_KEY]
+    nonce := *sealed[DEVICE_LINK_KEY + DEVICE_LINK_KEM_CIPHERTEXT]
+    classical: [DEVICE_LINK_KEY]u8
+    quantum: [DEVICE_LINK_KEY]u8
+    key: [DEVICE_LINK_KEY]u8
+    plain := *device_link_plain[0]
+    defer {
+        LinkWipe(cast(*void)*classical[0], cast(usize)DEVICE_LINK_KEY)
+        LinkWipe(cast(*void)*quantum[0], cast(usize)DEVICE_LINK_KEY)
+        LinkWipe(cast(*void)*key[0], cast(usize)DEVICE_LINK_KEY)
+        LinkWipe(cast(*void)plain, cast(usize)DEVICE_LINK_PLAIN_MAX)
+    }
+    kem_ciphertext: [DEVICE_LINK_KEM_CIPHERTEXT]u8
+    for index: 0..DEVICE_LINK_KEM_CIPHERTEXT - 1 { kem_ciphertext[index] = ciphertext[index] }
+    if !MlKem768Decapsulate(quantum[:], kem_ciphertext[:], receiver.kem_secret[:]) { return result }
+    LinkSharedSecret(*classical[0], *receiver.secret[0], sender)
+    shower := ifx receiver_shows then *receiver.public[0] else sender
+    scanner := ifx receiver_shows then sender else *receiver.public[0]
+    DeviceLinkHybridKey(*classical[0], *quantum[0], shower, scanner, *receiver.kem_public[0], ciphertext, *key[0])
+    size := total - DEVICE_LINK_HYBRID_HEADER
+    if LinkUnlock(plain, *nonce[DEVICE_LINK_NONCE], *key[0], nonce, DeviceLinkBytes(id), cast(usize)id.count,
+        *sealed[DEVICE_LINK_HYBRID_HEADER], cast(usize)size) != 0 || plain[0] != cast(u8)3 { return result }
+    server_size := (cast(s32)plain[DEVICE_LINK_ACCOUNT] << 8) | cast(s32)plain[DEVICE_LINK_ACCOUNT + 1]
+    context_at := DEVICE_LINK_ACCOUNT + 2 + server_size
+    context_size := size - context_at
+    if server_size > DEVICE_LINK_SERVER_MAX || context_size < 0 || context_size > 127 { return result }
+    ok := BytesToHex(*plain[1], DEVICE_LINK_PUBLIC_ID, *result.account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE) != 0 &&
+    BytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID], DEVICE_LINK_PUBLIC_KEY, *result.account.public_key_hex[0], ACCOUNT_PUBLIC_KEY_HEX_SIZE) != 0 &&
+    BytesToHex(*plain[1 + DEVICE_LINK_PUBLIC_ID + DEVICE_LINK_PUBLIC_KEY], DEVICE_LINK_PRIVATE_KEY, *result.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) != 0
+    for index: 0..server_size - 1 { result.server[index] = plain[DEVICE_LINK_ACCOUNT + 2 + index] }
+    for index: 0..context_size - 1 { result.context[index] = plain[context_at + index] }
+    result.valid = ok && ValidateAccountKeys(*result.account) != 0 &&
+    (server_size == 0 || DeviceLinkServerValid(TextUntilNul(result.server[:])))
+    if !result.valid { LinkWipe(cast(*void)*result.account.private_key_hex[0], cast(usize)ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
     return result
 }

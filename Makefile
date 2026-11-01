@@ -82,9 +82,9 @@ achievement-view-test:
 	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
 	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/achievement-view-test $$(rg --files build/achievement-view-test -g '*.c') -lm -o build/achievement-view-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/achievement-view-test/test
-build/liboqs/lib/liboqs.a: ziran.lock
+build/liboqs/lib/liboqs.a: ziran.lock Makefile
 	cmake -S $(LIBOQS_DIR) -B build/liboqs -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=OFF \
-		-DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF -DOQS_DIST_BUILD=OFF -DOQS_OPT_TARGET=generic -DOQS_MINIMAL_BUILD=SIG_ml_dsa_44
+		-DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF -DOQS_DIST_BUILD=OFF -DOQS_OPT_TARGET=generic '-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44;KEM_ml_kem_768'
 	cmake --build build/liboqs --target oqs
 build/ziran/libziran.a: ziran.lock $(RUNTIME_SOURCES)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(MAKE) -C $(ZIRAN_ROOT) BUILD_DIR=$(abspath build/ziran) $(abspath $@)

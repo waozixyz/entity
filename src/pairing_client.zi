@@ -64,9 +64,17 @@ DeviceLinkSession :: struct {
     stage: DeviceLinkStage
     shows: bool
     sends: bool
+    // New codes are hybrid; false only after scanning an older app's code.
+    hybrid: bool
+    // The scanner is waiting for the keys it will seal its account to.
+    fetching: bool
+    respond_next: bool
     keys: DeviceLinkKeys
     id: [DEVICE_LINK_ID_HEX + 1]u8
+    // An older code's X25519 key, or a hybrid code's key hash.
     other: [DEVICE_LINK_KEY]u8
+    // The other device's posted keys, read from the relay on a hybrid link.
+    other_bundle: [DEVICE_LINK_BUNDLE]u8
     server: [DEVICE_LINK_SERVER_MAX + 1]u8
     code: [DEVICE_LINK_CODE_MAX + 1]u8
     confirmation: s32
@@ -138,12 +146,13 @@ DeviceLinkShow :: () -> bool {
     defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
     device_link.sends = PairingLoadKeys(*account) != 0
     device_link.shows = true
+    device_link.hybrid = true
     if !DeviceLinkServer(device_link.server[:]) || !DeviceLinkNewKeys(*device_link.keys) ||
     !DeviceLinkNewID(device_link.id[:]) {
         DeviceLinkFail("device_link_failed")
         return false
     }
-    text := DeviceLinkCodeText(TextUntilNul(device_link.id[:]), *device_link.keys, device_link.sends,
+    text := DeviceLinkHybridCodeText(TextUntilNul(device_link.id[:]), *device_link.keys, device_link.sends,
         TextUntilNul(device_link.server[:]))
     defer { EntityFree(text) }
     if text.count == 0 || text.count > DEVICE_LINK_CODE_MAX {
@@ -154,7 +163,9 @@ DeviceLinkShow :: () -> bool {
     device_link.stage = cast(DeviceLinkStage)DeviceLinkShowing
     device_link.expires_at = DeviceLinkClock() + DEVICE_LINK_LIFETIME
     device_link.next_poll = DeviceLinkClock()
-    return true
+    // The scanning device needs these keys before it can seal its account here.
+    if !device_link.sends { DeviceLinkSend(DEVICE_LINK_PUT_REQUEST) }
+    return device_link.stage == cast(DeviceLinkStage)DeviceLinkShowing
 }
 
 // Starts from a scanned code.
@@ -167,6 +178,7 @@ DeviceLinkScan :: (text: string) -> bool {
     }
     device_link.shows = false
     device_link.sends = code.sends
+    device_link.hybrid = code.hybrid
     for byte, index: code.id { device_link.id[index] = byte }
     for byte, index: code.public { device_link.other[index] = byte }
     for byte, index: code.server { device_link.server[index] = byte }
@@ -178,7 +190,13 @@ DeviceLinkScan :: (text: string) -> bool {
     if code.sends {
         // The other device holds the account: send our key and show the
         // digits it must match before it sends anything.
-        device_link.confirmation = DeviceLinkConfirmation(*device_link.other[0], *device_link.keys.public[0])
+        if code.hybrid {
+            bundle: [DEVICE_LINK_BUNDLE]u8
+            DeviceLinkBundleBytes(*device_link.keys, *bundle[0])
+            device_link.confirmation = DeviceLinkHybridConfirmation(*device_link.other[0], *bundle[0])
+        } else {
+            device_link.confirmation = DeviceLinkConfirmation(*device_link.other[0], *device_link.keys.public[0])
+        }
         device_link.stage = cast(DeviceLinkStage)DeviceLinkWaiting
         DeviceLinkSend(DEVICE_LINK_PUT_REQUEST)
         return true
@@ -200,6 +218,12 @@ DeviceLinkAccept :: () {
         return
     }
     device_link.stage = cast(DeviceLinkStage)DeviceLinkWorking
+    if device_link.hybrid && stage == cast(DeviceLinkStage)DeviceLinkAsk {
+        // Fetch the keys the code committed to before sealing anything.
+        device_link.fetching = true
+        device_link.next_poll = DeviceLinkClock()
+        return
+    }
     DeviceLinkSend(DEVICE_LINK_PUT_RESPONSE)
 }
 
@@ -225,7 +249,12 @@ DeviceLinkSend :: (request: s32) {
     id := TextUntilNul(device_link.id[:])
     out: Vec(u8)
     path := "/api/v1/link/get"
-    if request == DEVICE_LINK_PUT_REQUEST {
+    if request == DEVICE_LINK_PUT_REQUEST && device_link.hybrid {
+        bundle := DeviceLinkBundleText(*device_link.keys)
+        defer { EntityFree(bundle) }
+        BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"request\",\"data\":\"%\"}", id, bundle)
+        path = "/api/v1/link/put"
+    } else if request == DEVICE_LINK_PUT_REQUEST {
         public: [DEVICE_LINK_KEY * 2 + 1]u8
         unused BytesToHex(*device_link.keys.public[0], DEVICE_LINK_KEY, *public[0], public.count)
         BuilderPrint(*out, "{\"id\":\"%\",\"slot\":\"request\",\"data\":\"%\"}", id, TextUntilNul(public[:]))
@@ -239,8 +268,14 @@ DeviceLinkSend :: (request: s32) {
         }
         server: [DEVICE_LINK_SERVER_MAX + 1]u8
         unused DeviceLinkServer(server[:])
-        sealed := DeviceLinkSeal(*recovery.keys, TextUntilNul(server[:]), id, *device_link.keys,
-            *device_link.other[0], device_link.shows, TextUntilNul(recovery.context[:]))
+        sealed := ""
+        if device_link.hybrid {
+            sealed = DeviceLinkHybridSeal(*recovery.keys, TextUntilNul(server[:]), id, *device_link.keys,
+                *device_link.other_bundle[0], device_link.shows, TextUntilNul(recovery.context[:]))
+        } else {
+            sealed = DeviceLinkSeal(*recovery.keys, TextUntilNul(server[:]), id, *device_link.keys,
+                *device_link.other[0], device_link.shows, TextUntilNul(recovery.context[:]))
+        }
         defer { EntityFree(sealed) }
         if sealed.count == 0 {
             DeviceLinkFail("device_link_failed")
@@ -323,7 +358,29 @@ DeviceLinkFinished :: (status: s32) {
         DeviceLinkFail("device_link_failed")
         return
     }
+    if request == DEVICE_LINK_GET_REQUEST && device_link.fetching {
+        // The showing device's keys: only those the code committed to.
+        if !DeviceLinkBundleRead(TextFromBytes(device_link_message_in[:length]), *device_link.other[0], *device_link.other_bundle[0]) {
+            DeviceLinkFailAt("device_link_failed", "checking the keys", status)
+            return
+        }
+        device_link.fetching = false
+        device_link.respond_next = true
+        return
+    }
     message := TextFromBytes(device_link_message_in[:length])
+    if request == DEVICE_LINK_GET_REQUEST && device_link.hybrid {
+        // The scanner's keys: compare digits before sending the account.
+        if !DeviceLinkBundleRead(message, null, *device_link.other_bundle[0]) {
+            DeviceLinkFailAt("device_link_failed", "reading the keys", status)
+            return
+        }
+        hash: [DEVICE_LINK_KEY]u8
+        DeviceLinkKeyHash(*device_link.keys.public[0], cast(s32)DEVICE_LINK_KEY, *hash[0])
+        device_link.confirmation = DeviceLinkHybridConfirmation(*hash[0], *device_link.other_bundle[0])
+        device_link.stage = cast(DeviceLinkStage)DeviceLinkConfirm
+        return
+    }
     if request == DEVICE_LINK_GET_REQUEST {
         // The scanner's key: compare digits before sending the account.
         if length != DEVICE_LINK_KEY * 2 || HexToBytes(message, *device_link.other[0], DEVICE_LINK_KEY) == 0 {
@@ -337,8 +394,13 @@ DeviceLinkFinished :: (status: s32) {
     // The sealed account. A scanner accepts only the key from the code.
     expected: *u8 = null
     if !device_link.shows { expected = *device_link.other[0] }
-    device_link_pending = DeviceLinkOpen(message, TextUntilNul(device_link.id[:]), *device_link.keys,
-        device_link.shows, expected)
+    if device_link.hybrid {
+        device_link_pending = DeviceLinkHybridOpen(message, TextUntilNul(device_link.id[:]), *device_link.keys,
+            device_link.shows, expected)
+    } else {
+        device_link_pending = DeviceLinkOpen(message, TextUntilNul(device_link.id[:]), *device_link.keys,
+            device_link.shows, expected)
+    }
     DeviceLinkForget(*device_link.keys)
     if !device_link_pending.valid {
         DeviceLinkFailAt("device_link_failed", "opening the account", status)
@@ -380,13 +442,18 @@ DeviceLinkPump :: () {
         }
         return
     }
+    if device_link.respond_next {
+        device_link.respond_next = false
+        DeviceLinkSend(DEVICE_LINK_PUT_RESPONSE)
+        return
+    }
     if device_link.close_next {
         device_link.close_next = false
         DeviceLinkSend(DEVICE_LINK_CLOSE)
         return
     }
     stage := device_link.stage
-    waiting := stage == cast(DeviceLinkStage)DeviceLinkShowing || stage == cast(DeviceLinkStage)DeviceLinkWaiting
+    waiting := stage == cast(DeviceLinkStage)DeviceLinkShowing || stage == cast(DeviceLinkStage)DeviceLinkWaiting || device_link.fetching
     if !waiting {
         return
     }
@@ -399,7 +466,7 @@ DeviceLinkPump :: () {
         return
     }
     device_link.next_poll = now + DEVICE_LINK_POLL
-    if stage == cast(DeviceLinkStage)DeviceLinkShowing && device_link.sends {
+    if (stage == cast(DeviceLinkStage)DeviceLinkShowing && device_link.sends) || device_link.fetching {
         DeviceLinkSend(DEVICE_LINK_GET_REQUEST)
     } else {
         DeviceLinkSend(DEVICE_LINK_GET_RESPONSE)

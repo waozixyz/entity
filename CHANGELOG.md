@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Link devices with X25519 and ML-KEM-768 together; the code carries a relay ID and key hash so it stays easy to scan. Older codes keep working.
 - Seal new backups with Argon2id in a storage-independent format and ask for a password of at least 12 characters. Older backup files keep opening.
 - Restore Shovey Island purchases across devices and confirm the current Dew price before unlocking.
 

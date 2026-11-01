@@ -152,7 +152,7 @@ Crypto :: () -> bool {
     oqs := Package("liboqs"); mono := Package("monocypher")
     if oqs.count == 0 || mono.count == 0 { return false }
     build := Out("oqs")
-    options: [7]string = .["-DCMAKE_BUILD_TYPE=MinSizeRel", "-DOQS_BUILD_ONLY_LIB=ON", "-DOQS_USE_OPENSSL=OFF", "-DOQS_DIST_BUILD=OFF", "-DOQS_OPT_TARGET=generic", "-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"]
+    options: [7]string = .["-DCMAKE_BUILD_TYPE=MinSizeRel", "-DOQS_BUILD_ONLY_LIB=ON", "-DOQS_USE_OPENSSL=OFF", "-DOQS_DIST_BUILD=OFF", "-DOQS_OPT_TARGET=generic", "-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44;KEM_ml_kem_768", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"]
     if !Configure(oqs, build, options[:]) { return false }
     if !Step("cmake", "--build", build, "--target", "oqs", "-j1") || !CopyFile(JoinPath(build, "lib/liboqs.a"), Out("liboqs.a")) { return false }
     generated := Out("mono")
