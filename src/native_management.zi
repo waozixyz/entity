@@ -5,7 +5,12 @@
 #import "dew_model"
 #import "model"
 #import "recovery"
+#import "account_backup"
+#import "shared_account"
 #import "native_files"
+#import "drive_backup"
+#import "passkey"
+#import "sign_in_bridge"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/date_time_linux"
@@ -56,6 +61,7 @@ ManagementProvider :: struct {
     request_body: [512]u8
     request_node: [512]u8
     network_operation: s32
+    drive_pending: bool
     asynchronous: bool
     delegated: bool
     alias_offer: AliasOffer
@@ -65,6 +71,38 @@ ManagementProvider :: struct {
     alias_purchase: AliasPurchase
     // Still sealed; kept so a mistyped password does not mean choosing the file again.
     held_backup: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    // Signing in online: the password waits for the node's salt, then is wiped.
+    online_password: [512]u8
+    online_account: [ACCOUNT_BACKUP_REFERENCE_MAX]u8
+    online_keys: RecoveryKeys
+    online_url: [640]u8
+    online_body: [ACCOUNT_BACKUP_BODY_MAX]u8
+    online_reply: [ACCOUNT_BACKUP_BODY_MAX]u8
+    // The account shared with the other waozi apps on this device.
+    shared_name: [SHARED_ACCOUNT_NAME_MAX]u8
+    shared_owner: [65]u8
+    shared_alias: [40]u8
+    shared_next: s64
+    backed_up: bool
+    backed_up_owner: [65]u8
+    // Passkey and Google sign-in. Nothing here is kept after the request ends.
+    bridge_known: bool
+    bridge_passkey: bool
+    bridge_google: bool
+    bridge_operation: s32
+    sign_in_message: [160]u8
+    passkey_keys: RecoveryKeys
+    passkey_credential: [65]u8
+    passkey_count: s32
+    passkeys: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
+    google_client: [256]u8
+    google_linked: bool
+    found_account: [65]u8
+    methods_transfer: HttpTransfer
+    methods_asked: bool
+    methods_next: s64
+    methods_url: [640]u8
+    methods_reply: [512]u8
 }
 
 // The name to offer when saving this account's backup.
@@ -80,10 +118,17 @@ ProviderForgetBackup :: (provider: *ManagementProvider) {
 ProviderState :: (provider: *ManagementProvider) -> Management {
     state: Management
     if provider.snapshot != null { provider.snapshot(provider.context, *state) }
+    if DriveBackupAvailable() { state.capabilities |= ACCOUNT_DRIVE }
+    ProviderBridgeState(provider, *state)
     state.alias_pricing = true
-    state.busy = state.busy || provider.asynchronous
+    state.busy = state.busy || provider.asynchronous || provider.drive_pending || provider.bridge_operation != 0
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     state.password_needed = provider.held_backup[0] != cast(u8)0
+    state.backed_up = state.account && provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
+    if !state.account && provider.shared_name[0] != cast(u8)0 {
+        state.shared_name = provider.shared_name
+        state.capabilities |= ACCOUNT_CONTINUE
+    }
     client: Client
     if provider.client != null && provider.client(provider.context, *client) &&
     TextUntilNul(state.public_id[:]) == TextUntilNul(provider.alias_owner[:]) &&
@@ -109,6 +154,7 @@ ProviderEnqueue :: (provider: *ManagementProvider, text: string) -> bool {
     request: ManagementRequest
     if !ManagementRequestDecode(text, *request) || !ProviderOwnerMatches(provider, *request) { return false }
     state := ProviderState(provider)
+    if TextUntilNul(request.operation[:]) == "logout" { ProviderSignOutFirst(provider) }
     return ManagementEnqueue(*provider.queue, text, state.capabilities)
 }
 
@@ -233,7 +279,587 @@ ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
         ProviderFinish(provider, "error", "Could not save the backup")
         return
     }
+    ProviderBackedUpSet(provider, true)
     ProviderFinish(provider, "ok", "Backup saved. Keep the file and your password safe.")
+}
+
+// Drive is optional: local file saves never call this path.
+ProviderDriveStart :: (provider: *ManagementProvider, saving: bool) {
+    if !DriveBackupAvailable() { ProviderFinish(provider, "error", "Google Drive"); return }
+    if !saving {
+        provider.drive_pending = DriveImportStart()
+    } else {
+        recovery: Recovery
+        defer { RecoveryClear(*recovery) }
+        password: [1024]u8
+        password = provider.queue.request.value
+        defer { SecureWipe(*password[0], password.count) }
+        passphrase := TextUntilNul(password[:])
+        if !ManagementPasswordAccepted(passphrase) {
+            ProviderFinish(provider, "error", "Use a password of at least 12 characters")
+            return
+        }
+        if provider.load == null || !provider.load(provider.context, *recovery) {
+            ProviderFinish(provider, "error", "No account is signed in on this device")
+            return
+        }
+        provider.drive_pending = DriveBackupStart(*recovery, passphrase)
+    }
+    // Only the sealed file is retained while Android handles authorization.
+    SecureWipe(*provider.queue.request.value[0], provider.queue.request.value.count)
+    if !provider.drive_pending { ProviderFinish(provider, "error", "Google Drive") }
+}
+
+ProviderDrivePoll :: (provider: *ManagementProvider) {
+    status: [32]u8
+    content: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*content[0], content.count) }
+    if !DriveBackupPoll(status[:], content[:]) { return }
+    provider.drive_pending = false
+    result := TextUntilNul(status[:])
+    if result == "restored" {
+        // Existing password, validation and account-switch flow; no Drive login proof.
+        ProviderImportText(provider, TextUntilNul(content[:]), "")
+    } else if result == "saved" {
+        ProviderBackedUpSet(provider, true)
+        ProviderFinish(provider, "ok", "Google Drive")
+    } else if result == "cancelled" {
+        ProviderFinish(provider, "cancelled", "")
+    } else {
+        // Android has already shown a localized, specific failure explanation.
+        ProviderFinish(provider, "error", "Google Drive")
+    }
+}
+
+// Keeps the shared account current: an account signed in here is offered to the
+// other apps, and a device with none signed in here sees what they offer.
+ProviderSharedPump :: (provider: *ManagementProvider) {
+    now := UnixNow()
+    if now < provider.shared_next { return }
+    provider.shared_next = now + 2
+    root_buffer: [4096]u8
+    root := SharedAccountRoot(root_buffer[:])
+    if root == "" { return }
+    state := ProviderState(provider)
+    if !state.account {
+        provider.shared_owner = .{}
+        unused SharedAccountName(root, provider.shared_name[:])
+        return
+    }
+    provider.shared_name = .{}
+    if TextUntilNul(state.public_id[:]) == TextUntilNul(provider.shared_owner[:]) &&
+    TextUntilNul(state.alias[:]) == TextUntilNul(provider.shared_alias[:]) { return }
+    provider.shared_owner = state.public_id
+    provider.shared_alias = state.alias
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    if provider.load != null && provider.load(provider.context, *recovery) {
+        unused SharedAccountOffer(root, *recovery, TextUntilNul(state.alias[:]))
+    }
+}
+
+ProviderContinue :: (provider: *ManagementProvider) {
+    root_buffer: [4096]u8
+    incoming: Recovery
+    defer { RecoveryClear(*incoming) }
+    if !SharedAccountRead(SharedAccountRoot(root_buffer[:]), *incoming) {
+        provider.shared_name = .{}
+        ProviderFinish(provider, "error", "That account is no longer signed in on this device")
+        return
+    }
+    RecoveryClear(*provider.incoming)
+    provider.incoming = incoming
+    provider.has_incoming = true
+    state := ProviderState(provider)
+    provider.incoming_owner = state.public_id
+    ProviderApplyIncoming(provider, 0)
+}
+
+// Host storage answers per account; a host without it means unknown, which warns.
+ProviderBackedUpAction :: (provider: *ManagementProvider, owner: string, operation: string) -> bool {
+    if provider.action == null { return false }
+    request: ManagementRequest
+    unused CopyCString(owner, request.owner_id[:])
+    unused CopyCString(operation, request.operation[:])
+    return provider.action(provider.context, *request) == 1
+}
+
+ProviderBackedUpPump :: (provider: *ManagementProvider) {
+    state := ProviderState(provider)
+    if TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:]) { return }
+    provider.backed_up_owner = state.public_id
+    provider.backed_up = state.account && ProviderBackedUpAction(provider, TextUntilNul(state.public_id[:]), "backup_marked")
+}
+
+ProviderBackedUpSet :: (provider: *ManagementProvider, value: bool) {
+    state := ProviderState(provider)
+    provider.backed_up_owner = state.public_id
+    provider.backed_up = value
+    unused ProviderBackedUpAction(provider, TextUntilNul(state.public_id[:]), ifx value then "backup_mark" else "backup_unmark")
+}
+
+// Signing out goes ahead whatever else is in flight; that work is abandoned.
+ProviderSignOutFirst :: (provider: *ManagementProvider) {
+    if !provider.queue.pending { return }
+    if provider.drive_pending { DriveBackupCancel() }
+    provider.drive_pending = false
+    if provider.asynchronous { ProviderCancelTransfer(cast(*void)provider) }
+    provider.asynchronous = false
+    ProviderOnlineForget(provider)
+    ProviderFinish(provider, "cancelled", "")
+}
+
+// Nothing of the account stays in memory once it is signed out here.
+ProviderSignOutClear :: (provider: *ManagementProvider, owner: string) {
+    root_buffer: [4096]u8
+    unused SharedAccountRemove(SharedAccountRoot(root_buffer[:]), owner)
+    provider.shared_owner = .{}
+    provider.shared_next = 0
+    provider.session = .{}
+    provider.backed_up = false
+    provider.backed_up_owner = .{}
+    ProviderForgetBackup(provider)
+    RecoveryClear(*provider.incoming)
+    provider.has_incoming = false
+}
+
+ProviderOnlineForget :: (provider: *ManagementProvider) {
+    SecureWipe(*provider.online_password[0], provider.online_password.count)
+    SecureWipe(*provider.online_body[0], provider.online_body.count)
+    SecureWipe(*provider.online_reply[0], provider.online_reply.count)
+    RecoveryKeysClear(*provider.online_keys)
+}
+
+ProviderOnlineFinish :: (provider: *ManagementProvider, result: string, message: string) {
+    ProviderOnlineForget(provider)
+    provider.asynchronous = false
+    ProviderFinish(provider, result, message)
+}
+
+// The node to ask before any account is signed in here.
+ProviderOnlineNode :: (provider: *ManagementProvider, output: []u8) -> bool {
+    state := ProviderState(provider)
+    for index: 0..state.node_count - 1 {
+        if state.nodes[index].active { return CopyCString(TextUntilNul(state.nodes[index].address[:]), output) }
+    }
+    if state.node_count > 0 { return CopyCString(TextUntilNul(state.nodes[0].address[:]), output) }
+    fallback := EntityDefault()
+    return CopyCString(TextUntilNul(fallback.nodes[fallback.preferred][:]), output)
+}
+
+ProviderOnlinePost :: (provider: *ManagementProvider, path: string, operation: s32) -> bool {
+    node: [512]u8
+    if !ProviderOnlineNode(provider, node[:]) { return false }
+    address: [640]u8
+    at: s64 = 0
+    if !AccountBackupAppend(address[:], *at, TextUntilNul(node[:])) || !AccountBackupAppend(address[:], *at, path) { return false }
+    provider.online_url = address
+    provider.online_reply[0] = cast(u8)0
+    provider.network_operation = operation
+    provider.asynchronous = HttpTransferStart(*provider.transfer, HttpRequest.{.method = "POST",
+            .url = TextUntilNul(provider.online_url[:]), .content_type = "application/json",
+            .accept = "application/json", .body = TextUntilNul(provider.online_body[:])},
+        provider.online_reply[:], 15000)
+    return provider.asynchronous
+}
+
+ProviderOnlineSignIn :: (provider: *ManagementProvider) {
+    reference := AccountBackupReference(TextUntilNul(provider.queue.request.target[:]), provider.online_account[:])
+    if reference == "" {
+        ProviderOnlineFinish(provider, "error", "Enter your username or public ID")
+        return
+    }
+    if provider.queue.request.value[0] == cast(u8)0 || !CopyCString(TextUntilNul(provider.queue.request.value[:]), provider.online_password[:]) {
+        ProviderOnlineFinish(provider, "error", "Enter your password")
+        return
+    }
+    if !AccountBackupSaltBody(reference, provider.online_body[:]) || !ProviderOnlinePost(provider, ACCOUNT_BACKUP_SALT_PATH, 10) {
+        ProviderOnlineFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
+    }
+}
+
+ProviderOnlineSignInPump :: (provider: *ManagementProvider) {
+    status: s32 = 0
+    state := HttpTransferPoll(*provider.transfer, *status)
+    if state < 0 { return }
+    if state == 0 { status = 0 }
+    if status == 404 || status == 405 {
+        ProviderOnlineFinish(provider, "error", "This node does not keep online backups. Use a backup file or link a device.")
+        return
+    }
+    if status == 429 {
+        out: Vec(u8)
+        BuilderPrint(*out, "Too many attempts. Try again in % min.", AccountBackupWaitMinutes(TextUntilNul(provider.online_reply[:])))
+        message := BuilderFinish(out)
+        defer { EntityFree(message) }
+        ProviderOnlineFinish(provider, "error", message)
+        return
+    }
+    if status == 403 {
+        ProviderOnlineFinish(provider, "error", "Wrong username or password")
+        return
+    }
+    if status != 200 {
+        ProviderOnlineFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
+        return
+    }
+    if provider.network_operation == 10 {
+        salt_text: [RECOVERY_SALT_BYTES * 2 + 1]u8
+        salt := AccountBackupSalt(TextUntilNul(provider.online_reply[:]), salt_text[:])
+        if salt == "" || !RecoveryDeriveFromHex(TextUntilNul(provider.online_password[:]), salt, *provider.online_keys) ||
+        !AccountBackupOpenBody(TextUntilNul(provider.online_account[:]), *provider.online_keys, provider.online_body[:]) ||
+        !ProviderOnlinePost(provider, ACCOUNT_BACKUP_OPEN_PATH, 11) {
+            ProviderOnlineFinish(provider, "error", "Could not sign in. Try again, use a backup file or link a device.")
+        }
+        return
+    }
+    incoming: Recovery
+    defer { RecoveryClear(*incoming) }
+    if !AccountBackupOpen(TextUntilNul(provider.online_reply[:]), *provider.online_keys, *incoming) {
+        ProviderOnlineFinish(provider, "error", "The node returned a backup this password cannot open")
+        return
+    }
+    ProviderOnlineForget(provider)
+    provider.asynchronous = false
+    RecoveryClear(*provider.incoming)
+    provider.incoming = incoming
+    provider.has_incoming = true
+    current := ProviderState(provider)
+    provider.incoming_owner = current.public_id
+    ProviderApplyIncoming(provider, 0)
+}
+
+// Seals on this device and sends only the sealed copy. Local saves never wait
+// for this: it is its own action and its failure changes nothing here.
+ProviderBackupOnline :: (provider: *ManagementProvider, passphrase: string) {
+    if !ManagementPasswordAccepted(passphrase) {
+        ProviderOnlineFinish(provider, "error", "Use a password of at least 12 characters")
+        return
+    }
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    client: Client
+    if provider.load == null || !provider.load(provider.context, *recovery) ||
+    provider.client == null || !provider.client(provider.context, *client) {
+        ProviderOnlineFinish(provider, "error", "No account is signed in on this device")
+        return
+    }
+    if !CopyCString(client.server_url, provider.request_node[:]) {
+        ProviderOnlineFinish(provider, "error", "The node address is not valid")
+        return
+    }
+    client.server_url = TextUntilNul(provider.request_node[:])
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if !RecoverySeal(*recovery, passphrase, text[:], *provider.online_keys) ||
+    !AccountBackupUploadBody(TextUntilNul(text[:]), *provider.online_keys, provider.online_body[:]) {
+        ProviderOnlineFinish(provider, "error", "Could not prepare the backup")
+        return
+    }
+    RecoveryKeysClear(*provider.online_keys)
+    headers: [0]HttpHeader
+    provider.network_operation = 5
+    provider.asynchronous = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+        ProviderTransport(provider), "POST", ACCOUNT_BACKUP_PATH, TextUntilNul(provider.online_body[:]), provider.response[:], headers[:])
+    if !provider.asynchronous { ProviderOnlineFinish(provider, "error", "Could not reach the node. Save a backup file instead.") }
+}
+
+ProviderBackupOnlineRemove :: (provider: *ManagementProvider) {
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) || !CopyCString(client.server_url, provider.request_node[:]) {
+        ProviderOnlineFinish(provider, "error", "No account is signed in on this device")
+        return
+    }
+    client.server_url = TextUntilNul(provider.request_node[:])
+    headers: [0]HttpHeader
+    provider.network_operation = 6
+    provider.asynchronous = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+        ProviderTransport(provider), "DELETE", ACCOUNT_BACKUP_PATH, "", provider.response[:], headers[:])
+    if !provider.asynchronous { ProviderOnlineFinish(provider, "error", "Could not reach the node") }
+}
+
+ProviderBackupOnlineFinished :: (provider: *ManagementProvider) {
+    status := provider.pending_request.status
+    if provider.pending_request.result == Auth.AuthResult.AUTH_OK {
+        ProviderBackedUpSet(provider, provider.network_operation == 5)
+        message := ifx provider.network_operation == 5 then "Backup saved online. Sign in with your username or public ID and this password." else "Online backup removed"
+        ProviderOnlineFinish(provider, "ok", message)
+        return
+    }
+    if status == 404 || status == 405 {
+        ProviderOnlineFinish(provider, "error", "This node does not keep online backups. Save a backup file instead.")
+        return
+    }
+    ProviderOnlineFinish(provider, "error", "Could not reach the node. Your account here is unchanged.")
+}
+
+// What the platform can ask for is settled once; it does not change while running.
+ProviderBridgeState :: (provider: *ManagementProvider, state: *Management) {
+    if !provider.bridge_known {
+        provider.bridge_known = true
+        provider.bridge_passkey = PasskeyBridgeAvailable()
+        provider.bridge_google = GoogleBridgeAvailable()
+    }
+    if provider.bridge_passkey { state.capabilities |= ACCOUNT_PASSKEY }
+    if provider.bridge_google && provider.google_client[0] != cast(u8)0 { state.capabilities |= ACCOUNT_GOOGLE }
+    state.found_account = provider.found_account
+    state.google_linked = provider.google_linked
+    state.passkeys = provider.passkeys
+    state.passkey_count = provider.passkey_count
+}
+
+// Asks the node once which Google client it accepts, beside everything else:
+// nothing waits for this, and a node without the route means no Google button.
+ProviderMethodsPump :: (provider: *ManagementProvider) {
+    if !provider.bridge_known || !provider.bridge_google || provider.google_client[0] != cast(u8)0 { return }
+    if provider.methods_asked {
+        status: s32 = 0
+        state := HttpTransferPoll(*provider.methods_transfer, *status)
+        if state < 0 { return }
+        provider.methods_asked = false
+        provider.methods_next = UnixNow() + 60
+        if state != 0 && status == 200 {
+            unused SignInGoogleClient(TextUntilNul(provider.methods_reply[:]), provider.google_client[:])
+        }
+        return
+    }
+    if UnixNow() < provider.methods_next { return }
+    provider.methods_next = UnixNow() + 60
+    node: [512]u8
+    if !ProviderOnlineNode(provider, node[:]) { return }
+    address: [640]u8
+    at: s64 = 0
+    if !AccountBackupAppend(address[:], *at, TextUntilNul(node[:])) || !AccountBackupAppend(address[:], *at, SIGN_IN_METHODS_PATH) { return }
+    provider.methods_url = address
+    provider.methods_reply[0] = cast(u8)0
+    provider.methods_asked = HttpTransferStart(*provider.methods_transfer, HttpRequest.{.method = "GET",
+            .url = TextUntilNul(provider.methods_url[:]), .accept = "application/json"},
+        provider.methods_reply[:], 15000)
+}
+
+ProviderPasskeyForget :: (provider: *ManagementProvider) {
+    RecoveryKeysClear(*provider.passkey_keys)
+    provider.passkey_credential = .{}
+}
+
+ProviderBridgeFinish :: (provider: *ManagementProvider, result: string, message: string) {
+    ProviderPasskeyForget(provider)
+    provider.bridge_operation = 0
+    ProviderOnlineFinish(provider, result, message)
+}
+
+// Signing out needs nothing from Google or a passkey manager, and leaves nothing
+// of theirs behind that could sign this device back in.
+ProviderBridgeSignOut :: (provider: *ManagementProvider) {
+    SignInBridgeForget()
+    ProviderPasskeyForget(provider)
+    provider.bridge_operation = 0
+    provider.found_account = .{}
+    provider.google_linked = false
+    provider.passkey_count = 0
+    provider.passkeys = .{}
+}
+
+ProviderPasskeyStart :: (provider: *ManagementProvider, adding: bool) {
+    started := false
+    if adding {
+        state := ProviderState(provider)
+        name := TextUntilNul(state.alias[:])
+        if name == "" { name = TextUntilNul(state.public_id[:]) }
+        started = PasskeyBridgeCreate(TextUntilNul(state.public_id[:]), name)
+        provider.bridge_operation = 1
+    } else {
+        started = PasskeyBridgeGet()
+        provider.bridge_operation = 2
+    }
+    if !started { ProviderBridgeFinish(provider, "error", SIGN_IN_NO_PASSKEY) }
+}
+
+ProviderGoogleStart :: (provider: *ManagementProvider, linking: bool) {
+    client := TextUntilNul(provider.google_client[:])
+    nonce: [65]u8
+    if linking {
+        state := ProviderState(provider)
+        if !SignInGoogleNonce(TextUntilNul(state.public_id[:]), nonce[:]) {
+            ProviderBridgeFinish(provider, "error", "No account is signed in on this device")
+            return
+        }
+    }
+    provider.bridge_operation = ifx linking then 4 else 3
+    if client == "" || !GoogleBridgeStart(client, TextUntilNul(nonce[:])) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_NO_GOOGLE)
+    }
+}
+
+ProviderSignedRequest :: (provider: *ManagementProvider, method: string, path: string, body: string, operation: s32) -> bool {
+    client: Client
+    if provider.client == null || !provider.client(provider.context, *client) || !CopyCString(client.server_url, provider.request_node[:]) { return false }
+    client.server_url = TextUntilNul(provider.request_node[:])
+    headers: [0]HttpHeader
+    provider.response[0] = cast(u8)0
+    provider.network_operation = operation
+    provider.asynchronous = BeginRequest(*provider.pending_request, client, *provider.session, UnixNow(),
+        ProviderTransport(provider), method, path, body, provider.response[:], headers[:])
+    return provider.asynchronous
+}
+
+// Seals on this device, so the node receives only the wrapper and the verifier.
+ProviderPasskeyUpload :: (provider: *ManagementProvider, answer: *SignInAnswer) {
+    credential := TextUntilNul(answer.credential[:])
+    recovery: Recovery
+    defer { RecoveryClear(*recovery) }
+    if provider.load == null || !provider.load(provider.context, *recovery) {
+        ProviderBridgeFinish(provider, "error", "No account is signed in on this device")
+        return
+    }
+    wrapper: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*wrapper[0], wrapper.count) }
+    label: [64]u8
+    if !PasskeyDeriveFromHex(TextUntilNul(answer.prf[:]), *provider.passkey_keys) ||
+    !PasskeySeal(*recovery, credential, *provider.passkey_keys, wrapper[:]) ||
+    !PasskeyUploadBody(TextUntilNul(wrapper[:]), credential, *provider.passkey_keys, SignInDeviceLabel(label[:]), provider.online_body[:]) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_NO_PRF)
+        return
+    }
+    RecoveryKeysClear(*provider.passkey_keys)
+    if !ProviderSignedRequest(provider, "POST", PASSKEY_PATH, TextUntilNul(provider.online_body[:]), 22) {
+        ProviderBridgeFinish(provider, "error", "Could not reach the node. Your account here is unchanged.")
+    }
+}
+
+ProviderPasskeySignIn :: (provider: *ManagementProvider, answer: *SignInAnswer) {
+    account := TextUntilNul(answer.account[:])
+    credential := TextUntilNul(answer.credential[:])
+    if !CopyCString(account, provider.online_account[:]) || !CopyCString(credential, provider.passkey_credential[:]) ||
+    !PasskeyDeriveFromHex(TextUntilNul(answer.prf[:]), *provider.passkey_keys) ||
+    !PasskeyOpenBody(account, credential, *provider.passkey_keys, provider.online_body[:]) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_WRONG_PASSKEY)
+        return
+    }
+    provider.bridge_operation = 0
+    if !ProviderOnlinePost(provider, PASSKEY_OPEN_PATH, 20) {
+        ProviderBridgeFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
+    }
+}
+
+ProviderBridgePoll :: (provider: *ManagementProvider) {
+    answer: SignInAnswer
+    defer { SignInAnswerClear(*answer) }
+    if !SignInBridgePoll(*answer) { return }
+    operation := provider.bridge_operation
+    google := operation >= 3
+    if TextUntilNul(answer.status[:]) == "cancelled" { ProviderBridgeFinish(provider, "cancelled", ""); return }
+    if TextUntilNul(answer.status[:]) == "no_prf" { ProviderBridgeFinish(provider, "error", SIGN_IN_NO_PRF); return }
+    if TextUntilNul(answer.status[:]) != "ok" {
+        ProviderBridgeFinish(provider, "error", ifx google then SIGN_IN_NO_GOOGLE else SIGN_IN_NO_PASSKEY)
+        return
+    }
+    if operation == 1 { ProviderPasskeyUpload(provider, *answer); return }
+    if operation == 2 { ProviderPasskeySignIn(provider, *answer); return }
+    if !SignInTokenBody(TextUntilNul(answer.token[:]), provider.online_body[:]) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_NO_GOOGLE)
+        return
+    }
+    provider.bridge_operation = 0
+    started := ifx operation == 3 then ProviderOnlinePost(provider, SIGN_IN_GOOGLE_FIND_PATH, 21) else ProviderSignedRequest(provider, "POST", SIGN_IN_GOOGLE_PATH, TextUntilNul(provider.online_body[:]), 25)
+    if !started { ProviderBridgeFinish(provider, "error", "Could not reach the node. Your account here is unchanged.") }
+}
+
+// The public routes: a passkey's sealed copy and Google's account lookup.
+ProviderSignInPump :: (provider: *ManagementProvider) {
+    status: s32 = 0
+    state := HttpTransferPoll(*provider.transfer, *status)
+    if state < 0 { return }
+    if state == 0 { status = 0 }
+    reply := TextUntilNul(provider.online_reply[:])
+    operation := provider.network_operation
+    if status == 429 {
+        ProviderBridgeFinish(provider, "error", "Too many attempts. Try again in a minute.")
+        return
+    }
+    if operation == 21 {
+        if status == 200 && SignInFoundAccount(reply, provider.found_account[:]) {
+            ProviderBridgeFinish(provider, "ok", SIGN_IN_GOOGLE_FOUND)
+        } else if status == 404 {
+            ProviderBridgeFinish(provider, "error", SIGN_IN_GOOGLE_UNLINKED)
+        } else if status == 401 {
+            ProviderBridgeFinish(provider, "error", SIGN_IN_GOOGLE_REFUSED)
+        } else {
+            ProviderBridgeFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
+        }
+        return
+    }
+    if status == 404 || status == 405 {
+        ProviderBridgeFinish(provider, "error", "This node does not keep passkey copies. Use your password.")
+        return
+    }
+    if status == 403 {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_WRONG_PASSKEY)
+        return
+    }
+    if status != 200 {
+        ProviderBridgeFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
+        return
+    }
+    incoming: Recovery
+    defer { RecoveryClear(*incoming) }
+    if !PasskeyOpenReply(reply, TextUntilNul(provider.online_account[:]), TextUntilNul(provider.passkey_credential[:]), *provider.passkey_keys, *incoming) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_WRONG_PASSKEY)
+        return
+    }
+    ProviderPasskeyForget(provider)
+    ProviderOnlineForget(provider)
+    provider.asynchronous = false
+    RecoveryClear(*provider.incoming)
+    provider.incoming = incoming
+    provider.has_incoming = true
+    current := ProviderState(provider)
+    provider.incoming_owner = current.public_id
+    ProviderApplyIncoming(provider, 0)
+}
+
+// The signed routes finish here. A list runs passkeys then Google, and adding,
+// removing or linking refreshes that list before it reports.
+ProviderSignInRequestFinished :: (provider: *ManagementProvider) {
+    status := provider.pending_request.status
+    operation := provider.network_operation
+    succeeded := provider.pending_request.result == Auth.AuthResult.AUTH_OK
+    provider.asynchronous = false
+    if operation == 24 {
+        if succeeded { provider.passkey_count = SignInPasskeyList(TextUntilNul(provider.response[:]), provider.passkeys[:]) }
+        if ProviderSignedRequest(provider, "GET", SIGN_IN_GOOGLE_PATH, "", 27) { return }
+        ProviderBridgeFinish(provider, "ok", "")
+        return
+    }
+    if operation == 27 {
+        if succeeded { provider.google_linked = SignInGoogleLinked(TextUntilNul(provider.response[:])) }
+        message := provider.sign_in_message
+        provider.sign_in_message = .{}
+        ProviderBridgeFinish(provider, "ok", TextUntilNul(message[:]))
+        return
+    }
+    if !succeeded {
+        message := "Could not reach the node. Your account here is unchanged."
+        if status == 404 || status == 405 { message = "This node does not offer this yet. Your account here is unchanged." }
+        if operation == 25 && status == 409 { message = SIGN_IN_GOOGLE_TAKEN }
+        if operation == 25 && status == 401 { message = SIGN_IN_GOOGLE_REFUSED }
+        ProviderBridgeFinish(provider, "error", message)
+        return
+    }
+    done := "Google link removed"
+    if operation == 22 { done = "Passkey added" }
+    if operation == 23 { done = "Passkey removed" }
+    if operation == 25 { done = "Google can now find this account" }
+    unused CopyCString(done, provider.sign_in_message[:])
+    if !ProviderSignedRequest(provider, "GET", PASSKEY_PATH, "", 24) { ProviderBridgeFinish(provider, "ok", done) }
+}
+
+ProviderPasskeyRemove :: (provider: *ManagementProvider) {
+    credential := TextUntilNul(provider.queue.request.target[:])
+    if !PasskeyCredentialValid(credential) || !SignInRemoveBody(credential, provider.online_body[:]) ||
+    !ProviderSignedRequest(provider, "POST", SIGN_IN_PASSKEY_REMOVE_PATH, TextUntilNul(provider.online_body[:]), 23) {
+        ProviderBridgeFinish(provider, "error", "Could not reach the node. Your account here is unchanged.")
+    }
 }
 
 ProviderStartTransfer :: (context: *void, request: HttpRequest, output: []u8) -> bool {
@@ -548,17 +1174,42 @@ ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
 }
 
 ProviderPump :: (provider: *ManagementProvider) {
+    ProviderBackedUpPump(provider)
+    ProviderSharedPump(provider)
+    ProviderMethodsPump(provider)
     if !provider.queue.pending { return }
     if !ProviderOwnerMatches(provider, *provider.queue.request) {
+        if provider.drive_pending { DriveBackupCancel(); provider.drive_pending = false }
+        if provider.bridge_operation != 0 { SignInBridgeCancel(); provider.bridge_operation = 0 }
+        ProviderPasskeyForget(provider)
         if provider.asynchronous { ProviderCancelTransfer(cast(*void)provider) }
         provider.asynchronous = false
+        ProviderOnlineForget(provider)
         ProviderFinish(provider, "error", "The account changed; open its current profile again")
         return
     }
+    if provider.drive_pending { ProviderDrivePoll(provider); return }
+    if provider.bridge_operation != 0 { ProviderBridgePoll(provider); return }
     if provider.delegated { return }
+    if provider.asynchronous && (provider.network_operation == 20 || provider.network_operation == 21) {
+        ProviderSignInPump(provider)
+        return
+    }
+    if provider.asynchronous && provider.network_operation >= 10 && provider.network_operation < 20 {
+        ProviderOnlineSignInPump(provider)
+        return
+    }
     if provider.asynchronous {
         finished := ifx provider.network_operation == 2 then PollDeletion(*provider.pending_deletion) else PollRequest(*provider.pending_request)
         if !finished { return }
+        if provider.network_operation == 5 || provider.network_operation == 6 {
+            ProviderBackupOnlineFinished(provider)
+            return
+        }
+        if provider.network_operation >= 22 {
+            ProviderSignInRequestFinished(provider)
+            return
+        }
         succeeded := ifx provider.network_operation == 2 then provider.pending_deletion.result == Auth.AuthResult.AUTH_OK else provider.pending_request.result == Auth.AuthResult.AUTH_OK
         provider.asynchronous = false
         current: Client
@@ -620,11 +1271,37 @@ ProviderPump :: (provider: *ManagementProvider) {
         result := ifx provider.action == null then 0 else provider.action(provider.context, *request)
         if result == 1 { ProviderFinish(provider, "ok", "") }
         else { ProviderFinish(provider, "error", "That is not a connection code") }
+    } else if operation == "drive_backup" || operation == "drive_import" {
+        ProviderDriveStart(provider, operation == "drive_backup")
     } else if operation == "backup" {
         passphrase: [1024]u8
         for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
         ProviderBackup(provider, TextUntilNul(passphrase[:]))
         SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "backup_online" {
+        passphrase: [1024]u8
+        for index: 0..passphrase.count - 1 { passphrase[index] = provider.queue.request.value[index] }
+        ProviderBackupOnline(provider, TextUntilNul(passphrase[:]))
+        SecureWipe(*passphrase[0], passphrase.count)
+    } else if operation == "backup_online_remove" {
+        ProviderBackupOnlineRemove(provider)
+    } else if operation == "sign_in_online" {
+        ProviderOnlineSignIn(provider)
+    } else if operation == "continue" {
+        ProviderContinue(provider)
+    } else if operation == "passkey_add" || operation == "passkey_sign_in" {
+        ProviderPasskeyStart(provider, operation == "passkey_add")
+    } else if operation == "passkey_remove" {
+        ProviderPasskeyRemove(provider)
+    } else if operation == "sign_in_methods" {
+        provider.sign_in_message = .{}
+        if !ProviderSignedRequest(provider, "GET", PASSKEY_PATH, "", 24) { ProviderBridgeFinish(provider, "ok", "") }
+    } else if operation == "google_sign_in" || operation == "google_link" {
+        ProviderGoogleStart(provider, operation == "google_link")
+    } else if operation == "google_unlink" {
+        if !ProviderSignedRequest(provider, "POST", SIGN_IN_GOOGLE_UNLINK_PATH, "", 26) {
+            ProviderBridgeFinish(provider, "error", "Could not reach the node. Your account here is unchanged.")
+        }
     } else if operation == "switch_apply" {
         ProviderApplyIncoming(provider, provider.queue.request.choice)
     } else if operation == "switch_cancel" {
@@ -636,7 +1313,16 @@ ProviderPump :: (provider: *ManagementProvider) {
     } else if operation == "alias" || operation == "clear_remote" {
         ProviderStartNetwork(provider, operation == "clear_remote")
     } else {
+        leaving: [65]u8
+        if operation == "logout" {
+            current := ProviderState(provider)
+            leaving = current.public_id
+        }
         result := ifx provider.action == null then 0 else provider.action(provider.context, *provider.queue.request)
+        if result == 1 && leaving[0] != cast(u8)0 {
+            ProviderBridgeSignOut(provider)
+            ProviderSignOutClear(provider, TextUntilNul(leaving[:]))
+        }
         if result == 1 { ProviderFinish(provider, "ok", "") }
         else if result == 2 { provider.delegated = true; return }
         else { ProviderFinish(provider, "error", "Could not complete this action") }

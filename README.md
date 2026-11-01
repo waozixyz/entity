@@ -84,11 +84,33 @@ account, linking a device or logging out is passed back through
 
 Signing in takes the backup first and asks for its password only if it has one,
 keeping the still-sealed file so a mistyped password can be retried. New backups
-always have a password of at least 8 characters, and hosts offer them under
+always have a password of at least 12 characters, and hosts offer them under
 `ProviderBackupFileName`: the username, or the public ID without one. Accounts
-sign with post-quantum ML-DSA-44; a backup itself is sealed with
-ChaCha20-Poly1305 under a key derived from the password with PBKDF2-SHA256, so
-its strength depends on that password. No server can reset it.
+sign with post-quantum ML-DSA-44; a new backup is sealed with ChaCha20-Poly1305
+under a key derived from the password with Argon2id (64 MiB, 3 passes), so its
+strength depends on that password. No server can reset it. Older files keep
+opening.
+
+A backup can also be saved on the account's Daochi node (`account_backup`). The
+node keeps only the sealed text and a verifier; a new device gets the salt,
+derives its proof from the password and receives the text only for that proof,
+under per-account attempt limits. Signing in with a username or public ID needs
+that node to be reachable; files and device links work without it. Saving online
+is its own action, so its failure never touches anything local.
+
+On a desktop, a signed-in app offers its account to the other apps through a
+private file in `$XDG_DATA_HOME/waozi` (`shared_account`), shown as "Continue as
+@name". It never replaces a different shared account. The file is protected like
+each app's own key: other users cannot read it, programs this person runs can,
+and sandboxed apps cannot see it, so they keep their own sign-in.
+
+Signing out cannot be blocked: it needs no network and no backup, and work in
+flight is abandoned. It warns once to back up, with "Back up key" and "Sign out",
+unless this device already saved a backup of this account (`ManagementSignOutWarns`).
+
+Device links seal the account with X25519 and ML-KEM-768 together. The QR code
+carries the relay ID and a key hash, and the keys travel through the relay. Older
+`inbe-link:1` codes keep working.
 
 Recovery retains the existing plain and passphrase-protected Daochi key formats.
 An optional protected native context preserves Werkzeug's record vault across

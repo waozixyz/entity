@@ -52,7 +52,7 @@
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: EntityState;
 loaded: bool;
-fields: [7]Field;
+fields: [8]Field;
 node_text: [256]u8;
 scroll_offset: s32;
 choosing_picture: bool;
@@ -71,6 +71,11 @@ management_scroll: s32;
 account_alias: [40]u8;
 account_passphrase: [512]u8;
 account_passphrase_repeat: [512]u8;
+sign_in_account: [80]u8;
+// The account Google last found, so the field fills once and can then be edited.
+sign_in_found: [65]u8;
+// "Back up key" on the sign-out warning comes back to it.
+sign_out_after_backup: bool;
 // A new account goes on to its backup once it exists.
 management_creating: bool;
 account_code: [1024]u8;
@@ -205,6 +210,8 @@ PollManagement :: () {
                 }
                 // There is no reset, so saving a backup comes first.
                 if created && CanManage(ACCOUNT_BACKUP) { ManagementHome(PAGE_BACKUP) }
+                if sign_out_after_backup && page == PAGE_BACKUP && CanManage(ACCOUNT_LOGOUT) { OpenManagement(PAGE_LOGOUT) }
+                sign_out_after_backup = false
             }
         }
     }
@@ -221,16 +228,20 @@ PasswordClear :: () {
     }
     fields[1] = Field.{}
     fields[4] = Field.{}
+    for index: 0..sign_in_account.count - 1 { sign_in_account[index] = cast(u8)0 }
+    fields[7] = Field.{}
 }
 
 Manage :: (operation: string, value: string = "", target: string = "", choice: s32 = 0) {
-    if management_waiting > management.completed || !CanManage(ManagementOperation(operation)) { return }
-    if TextUntilNul(state.owner_id[:]) != TextUntilNul(management.public_id[:]) {
+    // Signing out is never held up by other work or by unsaved preferences.
+    signing_out := operation == "logout"
+    if (!signing_out && management_waiting > management.completed) || !CanManage(ManagementOperation(operation)) { return }
+    if !signing_out && TextUntilNul(state.owner_id[:]) != TextUntilNul(management.public_id[:]) {
         loaded = false
         notice = Label("entity.account_changed", "The account changed; open its current profile again")
         return
     }
-    if !Save() { return }
+    if !signing_out && !Save() { return }
     request := ManagementRequest.{.sequence = management.sequence + 1, .choice = choice}
     request.owner_id = management.public_id
     if !CopyCString(operation, request.operation[:]) || !CopyCString(value, request.value[:]) || !CopyCString(target, request.target[:]) { return }
@@ -262,6 +273,7 @@ PAGE_ADD_NODE :: 10
 PAGE_ALIAS :: 11
 PAGE_FRIENDS :: 12
 PAGE_APPEARANCE :: 13
+PAGE_SIGN_IN_METHODS :: 20
 root_page: string;
 #load "friends_page.zi";
 
@@ -279,6 +291,7 @@ OpenManagement :: (page: s32) {
         AliasViewReset()
     }
     if page == PAGE_FRIENDS { friends_refresh = true; friends_remove = .{} }
+    if page == PAGE_SIGN_IN_METHODS { Manage("sign_in_methods") }
     if page == PAGE_ACCOUNT { ManagementHome(0); return }
     if !Save() { return }
     if management_depth < cast(s32)management_stack.count {
@@ -477,12 +490,31 @@ StorageUsageLabel :: (used: s64, limit: s64) -> string {
     return BuilderFinish(out)
 }
 
+ContinueLabel :: () -> string {
+    name := TextUntilNul(management.shared_name[:])
+    out: Vec(u8)
+    template := Label("entity.continue_as", "Continue as %s")
+    at: s64 = 0
+    start: s64 = 0
+    while at + 1 < template.count {
+        if template[at] == #char "%" && template[at + 1] == #char "s" { break }
+        at += 1
+    }
+    if at + 1 >= template.count { return template }
+    BuilderPrint(*out, "%", template[start:at])
+    if name.count == 64 { BuilderPrint(*out, "%", ShortId(name)) }
+    else { BuilderPrint(*out, "@%", name) }
+    BuilderPrint(*out, "%", template[at + 2:])
+    return BuilderFinish(out)
+}
+
 // The choices for someone without an account here.
 SignInChoices :: (x: float32, y: *float32, width: float32) {
+    if CanManage(ACCOUNT_CONTINUE) && ListRow(8801, ContinueLabel(), "", x, y, width) { Manage("continue") }
     if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE)) &&
     ListRow(821, Label("entity.sign_in", "Sign in"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
     if CanManage(ACCOUNT_CREATE) && ListRow(820, Label("entity.create_account", "Create account"), "", x, y, width) { Manage("create") }
-    if CanManage(ACCOUNT_LINK) && ListRow(822, Label("entity.sign_in_device", "Sign in with another device"), "", x, y, width) {
+    if CanManage(ACCOUNT_LINK) && ListRow(822, Label("entity.link_device", "Link a device"), "", x, y, width) {
         OpenManagement(PAGE_LINK)
     }
 }
@@ -492,6 +524,7 @@ SignInChoicesHeight :: () -> float32 {
     if CanManage(ACCOUNT_CREATE) { count += 1 }
     if CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) { count += 1 }
     if CanManage(ACCOUNT_LINK) { count += 1 }
+    if CanManage(ACCOUNT_CONTINUE) { count += 1 }
     return cast(float32)count * 68.0 * scale
 }
 
@@ -677,7 +710,8 @@ DrawConnectionCode :: (text: string, x: float32, y: float32, width: float32) -> 
 PageTitle :: () -> string {
     if management_page == PAGE_IMPORT { return Label("entity.sign_in", "Sign in") }
     if management_page == PAGE_BACKUP { return Label("entity.back_up_account", "Back up account") }
-    if management_page == PAGE_LOGOUT { return Label("entity.logout", "Log out") }
+    if management_page == PAGE_SIGN_IN_METHODS { return Label("entity.sign_in_methods", "Sign-in options") }
+    if management_page == PAGE_LOGOUT { return Label("entity.logout", "Sign out") }
     if management_page == PAGE_CLEAR { return Label("entity.clear_remote", "Clear remote data") }
     if management_page == PAGE_SWITCH { return Label("entity.switch_account", "Switch account") }
     if management_page == PAGE_LINK { return Label("entity.link_device", "Link a device") }
@@ -723,11 +757,12 @@ AccountActions :: (x: float32, y: *float32, width: float32) {
             }
         }
         if CanManage(ACCOUNT_BACKUP) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
+        if (CanManage(ACCOUNT_PASSKEY) || CanManage(ACCOUNT_GOOGLE)) && ListRow(8810, Label("entity.sign_in_methods", "Sign-in options"), "", x, y, width) { OpenManagement(PAGE_SIGN_IN_METHODS) }
         if CanManage(ACCOUNT_IMPORT) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
         if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
     if management.account {
         y.* += 8.0 * scale
-        if CanManage(ACCOUNT_LOGOUT) && ListRow(830, Label("entity.logout", "Log out"), "", x, y, width, 0, "", "", true) { OpenManagement(PAGE_LOGOUT) }
+        if CanManage(ACCOUNT_LOGOUT) && ListRow(830, Label("entity.logout", "Sign out"), "", x, y, width, 0, "", "", true) { SignOutPressed() }
         if CanManage(ACCOUNT_CLEAR_REMOTE) && ListRow(831, Label("entity.clear_remote", "Clear remote data"), "", x, y, width, 0, "", "", true) {
             OpenManagement(PAGE_CLEAR)
         }
@@ -749,26 +784,65 @@ Note :: (key: u64, text: string, x: float32, y: *float32, width: float32) {
     y.* += height + 12.0 * scale
 }
 
+// A passkey, a password and Google are easier ways in; the .key backup stays the
+// master key, so nothing here holds a person back from removing one.
+SignInMethodsPage :: (x: float32, y: *float32, width: float32) {
+    Note(8811, Label("entity.master_key", "Your .key backup is your master key. Keep it safe."), x, y, width)
+    Note(8812, Label("entity.easier_ways", "A passkey, password or Google are only easier ways in."), x, y, width)
+    if CanManage(ACCOUNT_PASSKEY) {
+        for index: 0..management.passkey_count - 1 {
+            entry := *management.passkeys[index]
+            label := TextUntilNul(entry.label[:])
+            if ListRow(cast(s32)(8820 + index), ifx label == "" then Label("entity.passkey", "Passkey") else label, Label("entity.remove", "Remove"), x, y, width) {
+                Manage("passkey_remove", "", TextUntilNul(entry.credential[:]))
+            }
+        }
+        if WideButton(8813, Label("entity.passkey_add", "Add a passkey"), x, y, width, true) { Manage("passkey_add") }
+        Note(8814, Label("entity.passkey_help", "A passkey unlocks a sealed copy of your key kept on this node. The node never sees it unlocked."), x, y, width)
+    }
+    if CanManage(ACCOUNT_GOOGLE) {
+        if management.google_linked {
+            if WideButton(8815, Label("entity.google_unlink", "Unlink Google"), x, y, width, false, true) { Manage("google_unlink") }
+        } else if WideButton(8816, Label("entity.google_link", "Link Google"), x, y, width) { Manage("google_link") }
+        Note(8817, Label("entity.google_help", "Google only finds your account. Your password or passkey still unlocks it."), x, y, width)
+    }
+}
+
 // The file and its password are the login: nothing can reset them, so the page
 // says so, and a backup is never saved without a password.
 BackupPage :: (x: float32, y: *float32, width: float32) {
-    Note(841, Label("entity.backup_help", "Your backup file and password are your login. No one can reset this password. If you lose them and have no other signed-in device, your account cannot be recovered."), x, y, width)
+    Note(8818, Label("entity.master_key", "Your .key backup is your master key. Keep it safe."), x, y, width)
+    Note(841, Label("entity.no_reset", "No one can reset your password, so keep a backup."), x, y, width)
+    Note(8802, Label("entity.backup_help", "If you lose your backup and password and have no other signed-in device, your account cannot be recovered."), x, y, width)
     unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
     unused EditField(1, account_passphrase_repeat[:], Label("entity.password_repeat", "Repeat password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
-    if WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true) {
+    drive_backup := CanManage(ACCOUNT_DRIVE) && WideButton(848, "Google Drive", x, y, width, false)
+    if WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true) || drive_backup {
         password: [512]u8
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         {
             value := TextUntilNul(password[:])
             if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 12 characters") }
             else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
-            else { Manage("backup", value) }
+            else { Manage(ifx drive_backup then "drive_backup" else "backup", value) }
         }
         for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
-    Note(842, Label("entity.security_note", "Your account signs with post-quantum ML-DSA-44 keys. This file is encrypted with your password."), x, y, width)
+    if WideButton(8803, Label("entity.save_online", "Save backup online"), x, y, width) {
+        password: [512]u8
+        for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
+        {
+            value := TextUntilNul(password[:])
+            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 12 characters") }
+            else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
+            else { Manage("backup_online", value) }
+        }
+        for index: 0..password.count - 1 { password[index] = cast(u8)0 }
+    }
+    if WideButton(8804, Label("entity.remove_online", "Remove online backup"), x, y, width, false, true) { Manage("backup_online_remove") }
+    Note(842, Label("entity.security_note", "Your account signs with post-quantum ML-DSA-44 keys. A backup is encrypted with your password on this device; a node keeps only that sealed copy and never sees your password."), x, y, width)
 }
 
 // First the backup, then its password if it has one: a mistyped password never
@@ -787,14 +861,52 @@ SignInPage :: (x: float32, y: *float32, width: float32) {
         if WideButton(845, Label("entity.different_backup", "Use a different backup"), x, y, width, false, true) { Manage("import_cancel") }
         return
     }
-    Note(846, Label("entity.sign_in_help", "Sign in with the backup file you saved. No server can reset your password or recover your account."), x, y, width)
+    Note(846, Label("entity.no_reset", "No one can reset your password, so keep a backup."), x, y, width)
+    if CanManage(ACCOUNT_PASSKEY) {
+        if WideButton(8830, Label("entity.passkey_sign_in", "Sign in with a passkey"), x, y, width, true) { Manage("passkey_sign_in") }
+    } else {
+        Note(8831, Label("entity.passkey_unavailable", "Passkeys are not available here. Use your password."), x, y, width)
+    }
+    if CanManage(ACCOUNT_GOOGLE) {
+        if WideButton(8832, Label("entity.google_sign_in", "Sign in with Google"), x, y, width) { Manage("google_sign_in") }
+        Note(8833, Label("entity.google_help", "Google only finds your account. Your password or passkey still unlocks it."), x, y, width)
+    }
+    found := TextUntilNul(management.found_account[:])
+    if found != "" && found != TextUntilNul(sign_in_found[:]) {
+        sign_in_found = management.found_account
+        unused CopyCString(found, sign_in_account[:])
+    }
+    unused EditField(7, sign_in_account[:], Label("entity.sign_in_account", "Username or public ID"), Rectangle.{x, y.*, width, 48.0 * scale}, 70)
+    y.* += 64.0 * scale
+    unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
+    y.* += 64.0 * scale
+    if WideButton(8805, Label("entity.sign_in", "Sign in"), x, y, width, true) {
+        password: [512]u8
+        for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
+        account: [80]u8
+        account = sign_in_account
+        {
+            Manage("sign_in_online", TextUntilNul(password[:]), TextUntilNul(account[:]))
+        }
+        for index: 0..password.count - 1 { password[index] = cast(u8)0 }
+        for index: 0..account.count - 1 { account[index] = cast(u8)0 }
+    }
+    Note(8806, Label("entity.sign_in_online_help", "This works if you saved a backup online. Otherwise use your backup file or link a device."), x, y, width)
+    if CanManage(ACCOUNT_DRIVE) && WideButton(849, "Google Drive", x, y, width, false) { Manage("drive_import") }
     if CanManage(ACCOUNT_IMPORT) && WideButton(805, Label("entity.choose_backup", "Choose backup file"), x, y, width, true) { Manage("import") }
     if CanManage(ACCOUNT_PASTE) && WideButton(804, Label("entity.paste_backup", "Paste backup"), x, y, width, !CanManage(ACCOUNT_IMPORT)) { Manage("import_paste") }
 }
 
 KeyPage :: (x: float32, y: *float32, width: float32) {
-    if management_page == PAGE_IMPORT { SignInPage(x, y, width) }
+    if management_page == PAGE_SIGN_IN_METHODS { SignInMethodsPage(x, y, width) }
+    else if management_page == PAGE_IMPORT { SignInPage(x, y, width) }
     else { BackupPage(x, y, width) }
+}
+
+// One reminder to back up, unless this device already did. Never a block.
+SignOutPressed :: () {
+    if !ManagementSignOutWarns(*management) { Manage("logout"); return }
+    OpenManagement(PAGE_LOGOUT)
 }
 
 ConfirmPage :: (x: float32, y: *float32, width: float32) {
@@ -803,7 +915,15 @@ ConfirmPage :: (x: float32, y: *float32, width: float32) {
     if management_page == PAGE_SWITCH { explanation = Label("entity.switch_help", "Keep this device's records with the new account?") }
     Note(806, explanation, x, y, width)
     if management_page == PAGE_LOGOUT {
-        Note(847, Label("entity.logout_warning", "To sign in again you need your backup file and password, or another signed-in device."), x, y, width)
+        if ManagementSignOutWarns(*management) {
+            Note(847, Label("entity.sign_out_warning", "Back up your key first. Without a backup or another signed-in device you cannot sign back in."), x, y, width)
+            if CanManage(ACCOUNT_BACKUP) && WideButton(8807, Label("entity.back_up_key", "Back up key"), x, y, width, true) {
+                sign_out_after_backup = true
+                OpenManagement(PAGE_BACKUP)
+            }
+        }
+        if WideButton(8808, Label("entity.logout", "Sign out"), x, y, width, false, false, true) { Manage("logout") }
+        return
     }
     if management_page == PAGE_SWITCH {
         if WideButton(807, Label("entity.merge", "Keep and merge"), x, y, width, true) { Manage("switch_apply", "", "", 1) }
@@ -976,7 +1096,7 @@ DrawAccount :: () {
         y += 52.0 * scale
     }
     page := management_page
-    if page == PAGE_IMPORT || page == PAGE_BACKUP { KeyPage(x, *y, width) }
+    if page == PAGE_IMPORT || page == PAGE_BACKUP || page == PAGE_SIGN_IN_METHODS { KeyPage(x, *y, width) }
     else if page == PAGE_LOGOUT || page == PAGE_CLEAR || page == PAGE_SWITCH { ConfirmPage(x, *y, width) }
     else if page == PAGE_LINK { LinkPage(x, *y, width) }
     else if page == PAGE_NODES { NodesPage(x, *y, width) }

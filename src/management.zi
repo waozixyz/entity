@@ -21,6 +21,19 @@ ACCOUNT_SWITCH :: 512
 NODE_MEDIA :: 1024
 // The host reads a key or connection code from the system clipboard itself.
 ACCOUNT_PASTE :: 2048
+// Another waozi app on this device is signed in and can share its account.
+ACCOUNT_CONTINUE :: 8192
+// Optional Play-only platform transport for already sealed account backups.
+ACCOUNT_DRIVE :: 4096
+// The platform can ask for a passkey, and Google can find an account.
+ACCOUNT_PASSKEY :: 16384
+ACCOUNT_GOOGLE :: 32768
+MANAGEMENT_PASSKEY_LIMIT :: 8
+
+ManagementPasskey :: struct {
+    credential: [65]u8
+    label: [41]u8
+}
 
 ManagementNode :: struct {
     address: [256]u8
@@ -57,6 +70,15 @@ Management :: struct {
     candidate_id: [65]u8
     // A protected backup was given and waits for its password.
     password_needed: bool
+    // The username or public ID "Continue as" offers.
+    shared_name: [80]u8
+    // Which account a Google sign-in found; it still needs a password or passkey.
+    found_account: [65]u8
+    google_linked: bool
+    passkey_count: s32
+    passkeys: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
+    // This device saved a backup of the account, so signing out need not warn.
+    backed_up: bool
     nodes: [ENTITY_NODE_LIMIT]ManagementNode
     node_count: s32
 }
@@ -79,10 +101,22 @@ ManagementQueue :: struct {
     message: [256]u8
 }
 
+// Signing out reminds once to back up unless this device already did. Either
+// way "Sign out" goes ahead immediately: this is a reminder, never a block.
+ManagementSignOutWarns :: (state: *Management) -> bool {
+    return !state.backed_up
+}
+
 ManagementOperation :: (operation: string) -> s32 {
     if operation == "create" { return ACCOUNT_CREATE }
     if operation == "import" { return ACCOUNT_IMPORT }
-    if operation == "backup" { return ACCOUNT_BACKUP }
+    if operation == "backup" || operation == "backup_online" || operation == "backup_online_remove" { return ACCOUNT_BACKUP }
+    if operation == "sign_in_online" { return ACCOUNT_IMPORT | ACCOUNT_PASTE }
+    if operation == "continue" { return ACCOUNT_CONTINUE }
+    if operation == "passkey_sign_in" || operation == "passkey_add" || operation == "passkey_remove" { return ACCOUNT_PASSKEY }
+    if operation == "sign_in_methods" { return ACCOUNT_PASSKEY | ACCOUNT_GOOGLE }
+    if operation == "google_sign_in" || operation == "google_link" || operation == "google_unlink" { return ACCOUNT_GOOGLE }
+    if operation == "drive_backup" || operation == "drive_import" { return ACCOUNT_DRIVE }
     if operation == "alias" || operation == "alias_quote" || operation == "alias_purchase" { return ACCOUNT_ALIAS }
     if operation == "sync" || operation == "set_sync" { return ACCOUNT_SYNC }
     if operation == "link_show" || operation == "link_join" ||
@@ -186,16 +220,26 @@ ManagementEncode :: (state: Management) -> string {
         ifx state.available then 1 else 0, ifx state.account then 1 else 0,
         ifx state.busy then 1 else 0, ifx state.enabled then 1 else 0,
         state.capabilities, state.sequence, state.completed, state.queued, state.link_stage)
-    strings: [8]string = .[TextUntilNul(state.result[:]), TextUntilNul(state.message[:]),
+    strings: [10]string = .[TextUntilNul(state.result[:]), TextUntilNul(state.message[:]),
     TextUntilNul(state.public_id[:]), TextUntilNul(state.alias[:]), TextUntilNul(state.status[:]),
-    TextUntilNul(state.link_code[:]), TextUntilNul(state.link_message[:]), TextUntilNul(state.candidate_id[:])]
-    names: [8]string = .["result", "message", "public_id", "alias", "status", "link_code", "link_message", "candidate_id"]
-    for index: 0..7 {
+    TextUntilNul(state.link_code[:]), TextUntilNul(state.link_message[:]), TextUntilNul(state.candidate_id[:]), TextUntilNul(state.shared_name[:]), TextUntilNul(state.found_account[:])]
+    names: [10]string = .["result", "message", "public_id", "alias", "status", "link_code", "link_message", "candidate_id", "shared_name", "found_account"]
+    for index: 0..9 {
         BuilderPrint(*out, ",\"%\":", names[index])
         EntityQuote(*out, strings[index])
     }
-    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"password_needed\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry, state.password_needed)
+    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"password_needed\":%,\"backed_up\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry, state.password_needed, state.backed_up)
     AliasOfferAppend(*out, state.alias_offer)
+    BuilderPrint(*out, ",\"google_linked\":%,\"passkeys\":[", state.google_linked)
+    for index: 0..state.passkey_count - 1 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "{\"credential\":")
+        EntityQuote(*out, TextUntilNul(state.passkeys[index].credential[:]))
+        BuilderPrint(*out, ",\"label\":")
+        EntityQuote(*out, TextUntilNul(state.passkeys[index].label[:]))
+        BuilderPrint(*out, "}")
+    }
+    BuilderPrint(*out, "]")
     BuilderPrint(*out, ",\"nodes\":[")
     for index: 0..state.node_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
@@ -237,7 +281,7 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     account := ManagementReadNumber(text, "account", 0, 1)
     busy := ManagementReadNumber(text, "busy", 0, 1)
     enabled := ManagementReadNumber(text, "enabled", 0, 1)
-    state.capabilities = ManagementReadNumber(text, "capabilities", 0, 4095)
+    state.capabilities = ManagementReadNumber(text, "capabilities", 0, 65535)
     state.sequence = ManagementReadNumber(text, "sequence", 0, 2147483646)
     state.completed = ManagementReadNumber(text, "completed", 0, 2147483646)
     state.queued = ManagementReadNumber(text, "queued", 0, 2147483646)
@@ -260,6 +304,17 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     state.alias_pricing = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_pricing"), "true")
     state.alias_retry = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_retry"), "true")
     state.password_needed = Json.MatchLiteral(text, Json.FieldAt(text, 0, "password_needed"), "true")
+    state.backed_up = Json.MatchLiteral(text, Json.FieldAt(text, 0, "backed_up"), "true")
+    if Json.ReadStringText(text, Json.FieldAt(text, 0, "shared_name"), state.shared_name[:]) < 0 { state.shared_name = .{} }
+    if Json.ReadStringText(text, Json.FieldAt(text, 0, "found_account"), state.found_account[:]) < 0 { state.found_account = .{} }
+    state.google_linked = Json.MatchLiteral(text, Json.FieldAt(text, 0, "google_linked"), "true")
+    passkey_positions: [MANAGEMENT_PASSKEY_LIMIT]s32
+    state.passkey_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "passkeys"), passkey_positions[:])
+    if state.passkey_count < 0 || state.passkey_count > MANAGEMENT_PASSKEY_LIMIT { state.passkey_count = 0 }
+    for index: 0..state.passkey_count - 1 {
+        if Json.ReadStringText(text, Json.FieldAt(text, passkey_positions[index], "credential"), state.passkeys[index].credential[:]) < 0 ||
+        Json.ReadStringText(text, Json.FieldAt(text, passkey_positions[index], "label"), state.passkeys[index].label[:]) < 0 { return false }
+    }
     positions: [ENTITY_NODE_LIMIT]s32
     state.node_count = Json.ArrayPositions(text, Json.FieldAt(text, 0, "nodes"), positions[:])
     if state.node_count < 0 || state.node_count > ENTITY_NODE_LIMIT { return false }

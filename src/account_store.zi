@@ -7,6 +7,7 @@
 #import "recovery"
 #import "pairing"
 #import "pairing_client"
+#import "shared_account"
 #import "picture_publish"
 #import "daochi_client/keys"
 #import "daochi_client/crypto"
@@ -440,7 +441,13 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
         account_standalone_ready = false
         account_alias = .{}
         account_profile.owner_id = .{}
-        return ifx AccountStoreSaveProfile(account_profile) then 1 else 0
+        // The key is gone. Display preferences that cannot be saved do not undo that.
+        unused AccountStoreSaveProfile(account_profile)
+        return 1
+    }
+    if operation == "backup_marked" { return ifx AccountBackedUpRead(TextUntilNul(account_root[:]), TextUntilNul(request.owner_id[:])) then 1 else 0 }
+    if operation == "backup_mark" || operation == "backup_unmark" {
+        return ifx AccountBackedUpWrite(TextUntilNul(account_root[:]), TextUntilNul(request.owner_id[:]), operation == "backup_mark") then 1 else 0
     }
     if operation == "alias_saved" {
         path: [4096]u8

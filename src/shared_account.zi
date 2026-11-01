@@ -1,0 +1,121 @@
+// One account for the waozi apps on this computer. The key sits in a private
+// file under the person's data folder, protected as each app's own key already
+// is: other accounts on the computer cannot read it; programs this person runs
+// can. Android and the web have their own routes, and sandboxed desktop apps
+// cannot see the file, so they keep using their own sign-in.
+#import "recovery"
+#import "native_files"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/file"
+#import "std/byte_text_linux"
+
+SHARED_ACCOUNT_NAME_MAX :: 80
+
+// Follows the same folder rules as NativeRoot. WAOZI_ACCOUNT_DATA gives tests
+// and separated profiles their own place.
+SharedAccountRoot :: (output: []u8) -> string {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        return ""
+    }
+    override := NativeEnvironment("WAOZI_ACCOUNT_DATA")
+    if override != "" { return ifx CopyCString(override, output) then TextUntilNul(output) else "" }
+    // A separated data folder, as in tests and test profiles, stays separated.
+    separated := NativeEnvironment("ENTITY_DATA")
+    if separated != "" { return NativeJoin(output, separated, "shared-account") }
+    base := NativeEnvironment("XDG_DATA_HOME")
+    fallback: [4096]u8
+    if base == "" { base = NativeJoin(fallback[:], NativeEnvironment("HOME"), ".local/share") }
+    return NativeJoin(output, base, "waozi")
+}
+
+SharedAccountRead :: (root: string, output: *Recovery) -> bool {
+    output.* = Recovery.{}
+    if root == "" { return false }
+    path: [4096]u8
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if NativeRead(NativeJoin(path[:], root, "account.key"), text[:]) <= 0 { return false }
+    return RecoveryDecode(TextUntilNul(text[:]), "", output)
+}
+
+// The name to offer: the username, or the public ID without one. "" with no
+// shared account. The account itself is read only when the person chooses it.
+SharedAccountName :: (root: string, output: []u8) -> string {
+    if output.count > 0 { output[0] = cast(u8)0 }
+    if root == "" { return "" }
+    path: [4096]u8
+    if !PathExists(NativeJoin(path[:], root, "account.key")) { return "" }
+    name: [4096]u8
+    if NativeRead(NativeJoin(name[:], root, "account.name"), output) <= 0 { return "" }
+    return TextUntilNul(output)
+}
+
+// Shares an account signed in here. A different account already shared is
+// left alone: this never quietly changes what the other apps offer.
+SharedAccountOffer :: (root: string, value: *Recovery, alias: string) -> bool {
+    if root == "" || value == null || value.keys.public_id[0] == cast(u8)0 || !NativeDirectory(root) { return false }
+    existing: Recovery
+    defer { RecoveryClear(*existing) }
+    path: [4096]u8
+    key := NativeJoin(path[:], root, "account.key")
+    if PathExists(key) {
+        if !SharedAccountRead(root, *existing) { return false }
+        if TextUntilNul(existing.keys.public_id[:]) != TextUntilNul(value.keys.public_id[:]) { return false }
+    } else {
+        text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+        defer { SecureWipe(*text[0], text.count) }
+        if !RecoveryEncode(value, "", text[:]) || !NativeWrite(key, TextUntilNul(text[:])) { return false }
+    }
+    name: [4096]u8
+    return NativeWrite(NativeJoin(name[:], root, "account.name"), ifx alias == "" then TextUntilNul(value.keys.public_id[:]) else alias)
+}
+
+// Logging out takes this account off the shared file too, and no other.
+SharedAccountRemove :: (root: string, owner: string) -> bool {
+    if root == "" || owner == "" { return false }
+    existing: Recovery
+    defer { RecoveryClear(*existing) }
+    if !SharedAccountRead(root, *existing) || TextUntilNul(existing.keys.public_id[:]) != owner { return false }
+    path: [4096]u8
+    name: [4096]u8
+    removed := RemoveFile(NativeJoin(path[:], root, "account.key"))
+    unused RemoveFile(NativeJoin(name[:], root, "account.name"))
+    return removed
+}
+
+// Whether this device saved a backup of this account, so signing out need not
+// warn. An unknown answer warns: it is a reminder, never a block.
+AccountBackedUpPath :: (root: string, owner: string, output: []u8) -> string {
+    name: [128]u8
+    at: s64 = 0
+    if owner.count != 64 || !AccountBackedUpAppend(name[:], *at, "backup.") ||
+    !AccountBackedUpAppend(name[:], *at, owner) || !AccountBackedUpAppend(name[:], *at, ".done") { return "" }
+    return NativeJoin(output, root, TextUntilNul(name[:]))
+}
+
+AccountBackedUpAppend :: (output: []u8, at: *s64, text: string) -> bool {
+    if at.* + text.count >= output.count { return false }
+    for byte: text {
+        output[at.*] = byte
+        at.* += 1
+    }
+    output[at.*] = cast(u8)0
+    return true
+}
+
+AccountBackedUpRead :: (root: string, owner: string) -> bool {
+    path: [4096]u8
+    address := AccountBackedUpPath(root, owner, path[:])
+    return address != "" && PathExists(address)
+}
+
+AccountBackedUpWrite :: (root: string, owner: string, value: bool) -> bool {
+    path: [4096]u8
+    address := AccountBackedUpPath(root, owner, path[:])
+    if address == "" { return false }
+    if value { return NativeWrite(address, "1") }
+    return !PathExists(address) || RemoveFile(address)
+}

@@ -1,0 +1,134 @@
+// The optional backup a Daochi node keeps. The node holds only text sealed on
+// this device, so it cannot read the account or reset the password. It hands
+// the text back to whoever presents the proof derived from the password.
+#import "recovery"
+#import "alias_model"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+Json :: #import "std/json_scan";
+
+ACCOUNT_BACKUP_REFERENCE_MAX :: 65
+// A sealed backup plus the JSON around it, with its line breaks escaped.
+ACCOUNT_BACKUP_BODY_MAX :: ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE + 512
+ACCOUNT_BACKUP_SALT_PATH :: "/api/v1/account-backup/salt"
+ACCOUNT_BACKUP_OPEN_PATH :: "/api/v1/account-backup/open"
+ACCOUNT_BACKUP_PATH :: "/api/v1/account/backup"
+
+AccountBackupPublicId :: (value: string) -> bool {
+    if value.count != 64 { return false }
+    for byte: value {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+// What the person typed as the account: a username or a public ID. Spaces, a
+// leading @ and capital letters do not matter. Returns "" when it is neither.
+AccountBackupReference :: (value: string, output: []u8) -> string {
+    start: s64 = 0
+    end := value.count
+    while start < end && value[start] <= cast(u8)32 { start += 1 }
+    while end > start && value[end - 1] <= cast(u8)32 { end -= 1 }
+    if start < end && value[start] == #char "@" { start += 1 }
+    if end - start >= output.count { return "" }
+    count: s64 = 0
+    while start < end {
+        byte := value[start]
+        if byte >= #char "A" && byte <= #char "Z" { byte = byte - #char "A" + #char "a" }
+        output[count] = byte
+        count += 1
+        start += 1
+    }
+    output[count] = cast(u8)0
+    reference := TextUntilNul(output)
+    return ifx AliasValid(reference) || AccountBackupPublicId(reference) then reference else ""
+}
+
+AccountBackupAppend :: (output: []u8, at: *s64, text: string) -> bool {
+    if at.* + text.count >= output.count { return false }
+    for byte: text {
+        output[at.*] = byte
+        at.* += 1
+    }
+    output[at.*] = cast(u8)0
+    return true
+}
+
+// A reference and a proof are letters, digits and underscores only.
+AccountBackupSaltBody :: (reference: string, output: []u8) -> bool {
+    at: s64 = 0
+    return AccountBackupAppend(output, *at, "{\"account\":\"") && AccountBackupAppend(output, *at, reference) &&
+    AccountBackupAppend(output, *at, "\"}")
+}
+
+AccountBackupOpenBody :: (reference: string, keys: *RecoveryKeys, output: []u8) -> bool {
+    proof: [RECOVERY_KEY_BYTES * 2 + 1]u8
+    defer { SecureWipe(*proof[0], proof.count) }
+    if BytesToHex(*keys.proof[0], RECOVERY_KEY_BYTES, *proof[0], proof.count) == 0 { return false }
+    at: s64 = 0
+    return AccountBackupAppend(output, *at, "{\"account\":\"") && AccountBackupAppend(output, *at, reference) &&
+    AccountBackupAppend(output, *at, "\",\"proof\":\"") && AccountBackupAppend(output, *at, TextUntilNul(proof[:])) &&
+    AccountBackupAppend(output, *at, "\"}")
+}
+
+// The sealed text has no quotes or backslashes, only line breaks to escape.
+AccountBackupUploadBody :: (backup: string, keys: *RecoveryKeys, output: []u8) -> bool {
+    parts := RecoverySealedParse(backup)
+    if !parts.valid { return false }
+    verifier: [RECOVERY_KEY_BYTES * 2 + 1]u8
+    if BytesToHex(*keys.verifier[0], RECOVERY_KEY_BYTES, *verifier[0], verifier.count) == 0 { return false }
+    at: s64 = 0
+    if !AccountBackupAppend(output, *at, "{\"backup\":\"") { return false }
+    for byte: backup {
+        if byte == cast(u8)34 || byte == cast(u8)92 { return false }
+        if byte == cast(u8)10 {
+            if !AccountBackupAppend(output, *at, "\\n") { return false }
+        } else {
+            if at + 1 >= output.count { return false }
+            output[at] = byte
+            at += 1
+            output[at] = cast(u8)0
+        }
+    }
+    return AccountBackupAppend(output, *at, "\",\"salt\":\"") && AccountBackupAppend(output, *at, parts.salt) &&
+    AccountBackupAppend(output, *at, "\",\"verifier\":\"") && AccountBackupAppend(output, *at, TextUntilNul(verifier[:])) &&
+    AccountBackupAppend(output, *at, "\"}")
+}
+
+// The node's salt, as hex. Returns "" for anything that is not a salt.
+AccountBackupSalt :: (reply: string, output: []u8) -> string {
+    if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "salt"), output) != RECOVERY_SALT_BYTES * 2 { return "" }
+    return TextUntilNul(output)
+}
+
+// Opens what the node released. The account inside must be the one the node
+// named, so a node cannot pass another person's account off as this one.
+AccountBackupOpen :: (reply: string, keys: *RecoveryKeys, output: *Recovery) -> bool {
+    identity: [65]u8
+    backup: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*backup[0], backup.count) }
+    if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "account_id"), identity[:]) != 64 ||
+    Json.ReadStringText(reply, Json.FieldAt(reply, 0, "backup"), backup[:]) <= 0 { return false }
+    if !RecoveryOpenSealed(TextUntilNul(backup[:]), keys, output) { return false }
+    if TextUntilNul(output.keys.public_id[:]) != TextUntilNul(identity[:]) {
+        RecoveryClear(output)
+        return false
+    }
+    return true
+}
+
+// How many minutes to wait, rounded up, from the node's retry_after.
+AccountBackupWaitMinutes :: (reply: string) -> s64 {
+    at := Json.FieldAt(reply, 0, "retry_after")
+    if at < 0 { return 1 }
+    seconds: s64 = 0
+    while at < reply.count && reply[at] >= #char "0" && reply[at] <= #char "9" && seconds < 1000000 {
+        seconds = seconds * 10 + cast(s64)(reply[at] - #char "0")
+        at += 1
+    }
+    minutes := (seconds + 59) / 60
+    return ifx minutes < 1 then 1 else minutes
+}

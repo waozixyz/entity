@@ -14,6 +14,8 @@
 Auth :: #import "daochi_client/auth";
 #import "native_files"
 #import "recovery"
+#import "account_backup"
+#import "shared_account"
 #import "pairing"
 #import "std/c_string"
 #import "std/text_buffer"
@@ -269,6 +271,190 @@ RecoverySealedCheck :: (fixture: *Recovery, text: string) -> s32 {
     return 0
 }
 
+sign_out_marked: bool;
+sign_out_key: bool;
+SignOutAction :: (context: *void, request: *ManagementRequest) -> s32 {
+    operation := TextUntilNul(request.operation[:])
+    if operation == "backup_marked" { return ifx sign_out_marked then 1 else 0 }
+    if operation == "backup_mark" { sign_out_marked = true; return 1 }
+    if operation == "backup_unmark" { sign_out_marked = false; return 1 }
+    if operation == "logout" {
+        // Nothing here reaches a network: signing out needs none.
+        sign_out_key = false
+        current_id = .{}
+        return 1
+    }
+    return 2
+}
+
+// Sign-out works with no backup, offline, and over work already in flight; the
+// warning is skipped once this device has backed the account up.
+SignOutCheck :: (fixture: *Recovery) -> s32 {
+    current_id = fixture.keys.public_id
+    sign_out_key = true
+    sign_out_marked = false
+    provider := ManagementProvider.{.snapshot = Snapshot, .action = SignOutAction, .load = LoadFixture}
+    ProviderPump(*provider)
+    state := ProviderState(*provider)
+    if !ManagementSignOutWarns(*state) { return 1 }
+
+    // A backup clears the warning, and the answer belongs to this account.
+    ProviderBackedUpSet(*provider, true)
+    state = ProviderState(*provider)
+    if ManagementSignOutWarns(*state) || !sign_out_marked { return 2 }
+    fresh := ManagementProvider.{.snapshot = Snapshot, .action = SignOutAction, .load = LoadFixture}
+    ProviderPump(*fresh)
+    state = ProviderState(*fresh)
+    if ManagementSignOutWarns(*state) { return 3 }
+    sign_out_marked = false
+    other := ManagementProvider.{.snapshot = Snapshot, .action = SignOutAction, .load = LoadFixture}
+    ProviderPump(*other)
+    state = ProviderState(*other)
+    if !ManagementSignOutWarns(*state) { return 4 }
+
+    // Unbacked, with another request still held up: signing out goes first.
+    if !Request(*other, "sync") { return 5 }
+    ProviderPump(*other)
+    if !other.queue.pending || !other.delegated { return 6 }
+    other.session.token[0] = cast(u8)65
+    if !Request(*other, "logout") { return 7 }
+    ProviderPump(*other)
+    if other.queue.pending || TextUntilNul(other.queue.result[:]) != "ok" { return 8 }
+    if sign_out_key || current_id[0] != cast(u8)0 { return 9 }
+    if other.session.token[0] != cast(u8)0 { return 10 }
+
+    // Nothing signs back in: no account, and no offer left by this account.
+    ProviderPump(*other)
+    state = ProviderState(*other)
+    if state.account || state.backed_up { return 11 }
+    if (state.capabilities & ACCOUNT_CONTINUE) != 0 { return 12 }
+    return 0
+}
+
+// The online sign-in: exact node bodies, and a reply opens only with the right
+// password and only as the account the node named.
+AccountBackupCheck :: (fixture: *Recovery) -> s32 {
+    reference: [ACCOUNT_BACKUP_REFERENCE_MAX]u8
+    if AccountBackupReference(" @Waozi_1 ", reference[:]) != "waozi_1" { return 1 }
+    if AccountBackupReference("abc", reference[:]) != "" { return 2 }
+    if AccountBackupReference("name\"x", reference[:]) != "" { return 3 }
+    if AccountBackupReference(TextUntilNul(fixture.keys.public_id[:]), reference[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 4 }
+
+    keys: RecoveryKeys
+    defer { RecoveryKeysClear(*keys) }
+    sealed: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    password := "correct horse battery"
+    if !RecoverySeal(fixture, password, sealed[:], *keys) { return 5 }
+    body: [ACCOUNT_BACKUP_BODY_MAX]u8
+    if !AccountBackupUploadBody(TextUntilNul(sealed[:]), *keys, body[:]) { return 6 }
+    upload := TextUntilNul(body[:])
+    // The JSON gives back exactly what was sealed, and no password or proof goes up.
+    round: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    if ReadStringText(upload, FieldAt(upload, 0, "backup"), round[:]) <= 0 || TextUntilNul(round[:]) != TextUntilNul(sealed[:]) { return 7 }
+    parts := RecoverySealedParse(TextUntilNul(sealed[:]))
+    salt_read: [33]u8
+    if !parts.valid || ReadStringText(upload, FieldAt(upload, 0, "salt"), salt_read[:]) != 32 || TextUntilNul(salt_read[:]) != parts.salt { return 8 }
+    if FieldAt(upload, 0, "proof") >= 0 || FieldAt(upload, 0, "password") >= 0 { return 9 }
+    if FieldAt(upload, 0, "verifier") < 0 { return 10 }
+
+    short_body: [512]u8
+    if !AccountBackupSaltBody("waozi_1", short_body[:]) || TextUntilNul(short_body[:]) != "{\"account\":\"waozi_1\"}" { return 11 }
+    proof_body: [512]u8
+    if !AccountBackupOpenBody("waozi_1", *keys, proof_body[:]) { return 12 }
+    proof_read: [65]u8
+    open_body := TextUntilNul(proof_body[:])
+    if ReadStringText(open_body, FieldAt(open_body, 0, "proof"), proof_read[:]) != 64 { return 13 }
+
+    salt_reply := "{\"salt\":\"000102030405060708090a0b0c0d0e0f\"}"
+    salt_text: [33]u8
+    if AccountBackupSalt(salt_reply, salt_text[:]) != "000102030405060708090a0b0c0d0e0f" { return 14 }
+    if AccountBackupSalt("{\"salt\":\"short\"}", salt_text[:]) != "" { return 15 }
+
+    // A second device: derive from the salt the node gives, open what it releases.
+    derived: RecoveryKeys
+    defer { RecoveryKeysClear(*derived) }
+    if !RecoveryDeriveFromHex(password, parts.salt, *derived) { return 16 }
+    reply: Vec(u8)
+    BuilderPrint(*reply, "{\"account_id\":\"%\",\"backup\":", TextUntilNul(fixture.keys.public_id[:]))
+    EntityQuote(*reply, TextUntilNul(sealed[:]))
+    BuilderPrint(*reply, "}")
+    released := BuilderFinish(reply)
+    defer { EntityFree(released) }
+    opened: Recovery
+    defer { RecoveryClear(*opened) }
+    if !AccountBackupOpen(released, *derived, *opened) { return 17 }
+    if TextUntilNul(opened.keys.private_key_hex[:]) != TextUntilNul(fixture.keys.private_key_hex[:]) { return 18 }
+
+    wrong: RecoveryKeys
+    defer { RecoveryKeysClear(*wrong) }
+    if !RecoveryDeriveFromHex("not the right password", parts.salt, *wrong) || AccountBackupOpen(released, *wrong, *opened) { return 19 }
+
+    // A node naming a different account than the sealed one is refused.
+    lying: Vec(u8)
+    BuilderPrint(*lying, "{\"account_id\":\"%\",\"backup\":", "0000000000000000000000000000000000000000000000000000000000000000")
+    EntityQuote(*lying, TextUntilNul(sealed[:]))
+    BuilderPrint(*lying, "}")
+    forged := BuilderFinish(lying)
+    defer { EntityFree(forged) }
+    if AccountBackupOpen(forged, *derived, *opened) { return 20 }
+
+    if AccountBackupWaitMinutes("{\"retry_after\":61}") != 2 { return 21 }
+    if AccountBackupWaitMinutes("{\"retry_after\":1}") != 1 { return 22 }
+    if AccountBackupWaitMinutes("{}") != 1 { return 23 }
+    return 0
+}
+
+// One shared account: offered once, never replaced by another, removed only by
+// its own logout, and a corrupt file offers nothing.
+SharedAccountCheck :: (fixture: *Recovery) -> s32 {
+    root := "build/shared-account-test"
+    key_path: [256]u8
+    name_path: [256]u8
+    unused RemoveFile(NativeJoin(key_path[:], root, "account.key"))
+    unused RemoveFile(NativeJoin(name_path[:], root, "account.name"))
+    absolute: [4096]u8
+    if !CopyCString(NativeEnvironment("PWD"), absolute[:]) { return 1 }
+    full_buffer: [4096]u8
+    full := NativeJoin(full_buffer[:], TextUntilNul(absolute[:]), root)
+    name: [SHARED_ACCOUNT_NAME_MAX]u8
+    if SharedAccountName(full, name[:]) != "" { return 2 }
+    if !SharedAccountOffer(full, fixture, "waozi_1") { return 3 }
+    if SharedAccountName(full, name[:]) != "waozi_1" { return 4 }
+    read: Recovery
+    defer { RecoveryClear(*read) }
+    if !SharedAccountRead(full, *read) || TextUntilNul(read.keys.private_key_hex[:]) != TextUntilNul(fixture.keys.private_key_hex[:]) { return 5 }
+
+    other: Recovery
+    defer { RecoveryClear(*other) }
+    if CreateAccountKeys(*other.keys) == 0 { return 6 }
+    if SharedAccountOffer(full, *other, "someone") { return 7 }
+    if SharedAccountName(full, name[:]) != "waozi_1" { return 8 }
+    if SharedAccountRemove(full, TextUntilNul(other.keys.public_id[:])) { return 9 }
+    if !SharedAccountRead(full, *read) { return 10 }
+
+    // A rename updates the name; no username offers the public ID.
+    if !SharedAccountOffer(full, fixture, "") { return 11 }
+    if SharedAccountName(full, name[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 12 }
+
+    if !SharedAccountRemove(full, TextUntilNul(fixture.keys.public_id[:])) { return 13 }
+    if SharedAccountName(full, name[:]) != "" || SharedAccountRead(full, *read) { return 14 }
+
+    // What this device knows about a backup is per account, and can be undone.
+    owner := TextUntilNul(fixture.keys.public_id[:])
+    if AccountBackedUpRead(full, owner) { return 18 }
+    if !AccountBackedUpWrite(full, owner, true) || !AccountBackedUpRead(full, owner) { return 19 }
+    if AccountBackedUpRead(full, TextUntilNul(other.keys.public_id[:])) { return 20 }
+    if !AccountBackedUpWrite(full, owner, false) || AccountBackedUpRead(full, owner) { return 21 }
+
+    absolute_key: [4096]u8
+    if !NativeWrite(NativeJoin(absolute_key[:], full, "account.key"), "not a key") { return 15 }
+    if SharedAccountRead(full, *read) { return 16 }
+    // An unreadable file is never replaced: the person's data stays in place.
+    if SharedAccountOffer(full, fixture, "waozi_1") { return 17 }
+    unused RemoveFile(TextUntilNul(absolute_key[:]))
+    return 0
+}
+
 #program_export
 Check :: () -> s32 {
     if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
@@ -297,6 +483,12 @@ Check :: () -> s32 {
     if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }
     if opened.keys.private_key_hex[0] != cast(u8)0 { return 10 }
 
+    sign_out_result := SignOutCheck(*fixture)
+    if sign_out_result != 0 { return 580 + sign_out_result }
+    online_result := AccountBackupCheck(*fixture)
+    if online_result != 0 { return 500 + online_result }
+    shared_result := SharedAccountCheck(*fixture)
+    if shared_result != 0 { return 540 + shared_result }
     hybrid_result := HybridLinkCheck(*fixture)
     if hybrid_result != 0 { return 400 + hybrid_result }
 
