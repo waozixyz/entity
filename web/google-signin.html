@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Waozi</title>
+<!-- Hands Google's answer to the page that asked; it runs nothing from anywhere else. -->
+<script>
+const answer = new URLSearchParams(location.hash.slice(1));
+history.replaceState(null, '', location.pathname);
+const channel = new BroadcastChannel('waozi-google-signin');
+channel.postMessage({state: answer.get('state') || '', id_token: answer.get('id_token') || ''});
+channel.close();
+close();
+</script>

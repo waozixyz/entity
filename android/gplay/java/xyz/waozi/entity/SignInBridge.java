@@ -48,6 +48,8 @@ public final class SignInBridge {
     private static final Object lock = new Object();
     private static String answer = "{\"status\":\"cancelled\"}";
     private static CancellationSignal cancellation;
+    // A result counts only for the operation that asked; cancelling ends it.
+    private static long generation;
 
     private SignInBridge() {
     }
@@ -90,8 +92,17 @@ public final class SignInBridge {
         }
     }
 
-    private static void finish(String value) {
+    private static long currentOperation() {
         synchronized (lock) {
+            return generation;
+        }
+    }
+
+    private static void finish(long operation, String value) {
+        synchronized (lock) {
+            if (operation != generation) {
+                return;
+            }
             answer = value;
             cancellation = null;
         }
@@ -99,6 +110,7 @@ public final class SignInBridge {
 
     private static CancellationSignal begin() {
         synchronized (lock) {
+            generation++;
             answer = status("pending");
             cancellation = new CancellationSignal();
             return cancellation;
@@ -107,6 +119,7 @@ public final class SignInBridge {
 
     private static void cancel() {
         synchronized (lock) {
+            generation++;
             if (cancellation != null) {
                 cancellation.cancel();
             }
@@ -232,7 +245,9 @@ public final class SignInBridge {
         JSONObject output = new JSONObject();
         output.put("status", "ok");
         output.put("credential", credential);
-        output.put("prf", hex(decode(first)));
+        byte[] value = decode(first);
+        output.put("prf", hex(value));
+        java.util.Arrays.fill(value, (byte) 0);
         JSONObject inner = response.optJSONObject("response");
         String handle = inner == null ? "" : inner.optString("userHandle", "");
         if (!handle.isEmpty()) {
@@ -267,55 +282,56 @@ public final class SignInBridge {
             return status("error");
         }
         CancellationSignal signal = begin();
+        final long operation = currentOperation();
         CredentialManager.create(activity).createCredentialAsync(activity, new CreatePublicKeyCredentialRequest(requestJson),
                 signal, mainExecutor(activity), new CredentialManagerCallback<CreateCredentialResponse, CreateCredentialException>() {
                     @Override
                     public void onResult(CreateCredentialResponse result) {
-                        created(activity, result);
+                        created(activity, operation, result);
                     }
 
                     @Override
                     public void onError(CreateCredentialException error) {
-                        finish(createFailure(error));
+                        finish(operation, createFailure(error));
                     }
                 });
         return status("pending");
     }
 
-    private static void created(Activity activity, CreateCredentialResponse result) {
+    private static void created(Activity activity, long operation, CreateCredentialResponse result) {
         if (!(result instanceof CreatePublicKeyCredentialResponse)) {
-            finish(status("error"));
+            finish(operation, status("error"));
             return;
         }
         String responseJson = ((CreatePublicKeyCredentialResponse) result).getRegistrationResponseJson();
         try {
             String read = passkeyAnswer(responseJson);
             if (!read.contains("no_prf")) {
-                finish(read);
+                finish(operation, read);
                 return;
             }
             if (!prfEnabled(responseJson)) {
-                finish(read);
+                finish(operation, read);
                 return;
             }
-            read(activity, new JSONObject(responseJson).getString("rawId"));
+            read(activity, operation, new JSONObject(responseJson).getString("rawId"));
         } catch (JSONException | NoSuchAlgorithmException error) {
-            finish(status("error"));
+            finish(operation, status("error"));
         }
     }
 
     private static String get(Activity activity) {
         begin();
-        read(activity, "");
+        read(activity, currentOperation(), "");
         return status("pending");
     }
 
-    private static void read(Activity activity, String credentialId) {
+    private static void read(Activity activity, long operation, String credentialId) {
         final String requestJson;
         try {
             requestJson = getRequest(credentialId);
         } catch (JSONException error) {
-            finish(status("error"));
+            finish(operation, status("error"));
             return;
         }
         CancellationSignal signal;
@@ -331,19 +347,19 @@ public final class SignInBridge {
                     public void onResult(GetCredentialResponse result) {
                         Credential credential = result.getCredential();
                         if (!(credential instanceof PublicKeyCredential)) {
-                            finish(status("error"));
+                            finish(operation, status("error"));
                             return;
                         }
                         try {
-                            finish(passkeyAnswer(((PublicKeyCredential) credential).getAuthenticationResponseJson()));
+                            finish(operation, passkeyAnswer(((PublicKeyCredential) credential).getAuthenticationResponseJson()));
                         } catch (JSONException | NoSuchAlgorithmException error) {
-                            finish(status("error"));
+                            finish(operation, status("error"));
                         }
                     }
 
                     @Override
                     public void onError(GetCredentialException error) {
-                        finish(getFailure(error));
+                        finish(operation, getFailure(error));
                     }
                 });
     }
@@ -357,6 +373,7 @@ public final class SignInBridge {
                 .addCredentialOption(option.build())
                 .build();
         CancellationSignal signal = begin();
+        final long operation = currentOperation();
         CredentialManager.create(activity).getCredentialAsync(activity, request, signal, mainExecutor(activity),
                 new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
                     @Override
@@ -365,7 +382,7 @@ public final class SignInBridge {
                         if (!(credential instanceof CustomCredential) ||
                                 !GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(credential.getType()) &&
                                 !GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_SIWG_CREDENTIAL.equals(credential.getType())) {
-                            finish(status("error"));
+                            finish(operation, status("error"));
                             return;
                         }
                         try {
@@ -373,15 +390,15 @@ public final class SignInBridge {
                             JSONObject output = new JSONObject();
                             output.put("status", "ok");
                             output.put("token", token);
-                            finish(output.toString());
+                            finish(operation, output.toString());
                         } catch (JSONException error) {
-                            finish(status("error"));
+                            finish(operation, status("error"));
                         }
                     }
 
                     @Override
                     public void onError(GetCredentialException error) {
-                        finish(getFailure(error));
+                        finish(operation, getFailure(error));
                     }
                 });
         return status("pending");

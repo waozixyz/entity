@@ -161,6 +161,11 @@ SignInPasskeyList :: (reply: string, output: []ManagementPasskey) -> s32 {
     return kept
 }
 
+// A passkey made for one account never seals another that signed in meanwhile.
+SignInSameAccount :: (expected: string, current: string) -> bool {
+    return expected != "" && expected == current
+}
+
 // A plain name for the list of passkeys, so a person can tell them apart.
 SignInDeviceLabel :: (output: []u8) -> string {
     name := "Passkey"
@@ -176,20 +181,25 @@ SignInDeviceLabel :: (output: []u8) -> string {
 #if #defined(PLATFORM_WEB) {
     bridge_answer: SignInAnswer;
     bridge_pending: bool;
+    // A callback counts only for the request that made it; finishing ends it.
+    bridge_generation: s32;
     // 1 waits for a new passkey, 2 for a passkey's PRF value.
     bridge_step: s32;
     bridge_abort: s32;
     bridge_account: [65]u8;
     bridge_overlay: s32;
     bridge_google_client: [160]u8;
-    bridge_google_nonce: [65]u8;
-    bridge_google_ready: bool;
+    bridge_google_state: [33]u8;
+    bridge_google_url: [1200]u8;
+    bridge_channel: s32;
 
     BridgeFinish :: (status: string) {
         unused CopyCString(status, bridge_answer.status[:])
         bridge_pending = false
         bridge_step = 0
+        bridge_generation += 1
         BridgeOverlayClose()
+        BridgeChannelClose()
         if bridge_abort != 0 { WebRelease(bridge_abort); bridge_abort = 0 }
     }
 
@@ -257,9 +267,10 @@ SignInDeviceLabel :: (output: []u8) -> string {
         data: [64]u8
         count := WebCopyOut(bytes, cast(*void)*data[0], cast(s32)data.count)
         if count <= 0 || count != limit { return 0 }
-        if BytesToHex(*data[0], cast(s64)count, *output[0], output.count) == 0 { return 0 }
+        written := BytesToHex(*data[0], cast(s64)count, *output[0], output.count)
         SecureWipe(*data[0], data.count)
-        return count
+        unused WebCall1(bytes, WebName("fill"), WebNumber(0.0))
+        return ifx written == 0 then 0 else count
     }
 
     // The credential is named by its SHA-256, so its length does not matter.
@@ -335,12 +346,11 @@ SignInDeviceLabel :: (output: []u8) -> string {
     }
 
     BridgeResolved :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
         unused second
         unused third
         scope := WebScope()
         defer WebEnd(scope)
-        if !bridge_pending { return }
+        if !bridge_pending || context != bridge_generation { return }
         if first == 0 || WebTypeOf(first) != WebTypeObject { BridgeFinish("cancelled"); return }
         if !BridgeCredentialHash(first) { BridgeFinish("error"); return }
         if BridgePrfValue(first) {
@@ -358,12 +368,11 @@ SignInDeviceLabel :: (output: []u8) -> string {
     }
 
     BridgeRejected :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
         unused second
         unused third
         scope := WebScope()
         defer WebEnd(scope)
-        if !bridge_pending { return }
+        if !bridge_pending || context != bridge_generation { return }
         name: [40]u8
         handle := WebAsObject(WebGet(first, WebName("name")))
         if handle != 0 && !WebFailed() { unused WebCopyString(handle, name[:]) }
@@ -385,8 +394,8 @@ SignInDeviceLabel :: (output: []u8) -> string {
         if bridge_abort != 0 { WebSet(wrapper, WebName("signal"), WebGet(bridge_abort, WebName("signal"))) }
         promise := WebAsObject(WebCall1(credentials, WebName(method), WebObject(wrapper)))
         if promise == 0 || WebFailed() { return false }
-        resolved := WebFunction(BridgeResolved, 0)
-        rejected := WebFunction(BridgeRejected, 0)
+        resolved := WebFunction(BridgeResolved, bridge_generation)
+        rejected := WebFunction(BridgeRejected, bridge_generation)
         unused WebCall2(promise, WebName("then"), WebObject(resolved), WebObject(rejected))
         return !WebFailed()
     }
@@ -398,96 +407,137 @@ SignInDeviceLabel :: (output: []u8) -> string {
         bridge_overlay = 0
     }
 
-    BridgeGoogleToken :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
+    BridgeChannelClose :: () {
+        if bridge_channel == 0 { return }
+        unused WebCall0(bridge_channel, WebName("close"))
+        WebRelease(bridge_channel)
+        bridge_channel = 0
+    }
+
+    // Only the Entity site serves the page Google returns to.
+    BridgeGoogleHosted :: () -> bool {
+        location := WebGetObject(WebGlobal, WebName("location"))
+        if location == 0 || WebFailed() { return false }
+        handle := WebAsObject(WebGet(location, WebName("hostname")))
+        if handle == 0 || WebFailed() { return false }
+        host: [256]u8
+        length := WebCopyString(handle, host[:])
+        if length <= 0 || length >= cast(s32)host.count { return false }
+        name := TextUntilNul(host[:])
+        return name == "entity.waozi.xyz" || name == "localhost"
+    }
+
+    BridgeUrlAppend :: (value: string, at: *s64, encode: bool) -> bool {
+        digits := "0123456789ABCDEF"
+        for byte: value {
+            plain := !encode || (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+                (byte >= #char "0" && byte <= #char "9") || byte == #char "-" || byte == #char "." || byte == #char "_" || byte == #char "~"
+            if at.* + 4 >= cast(s64)bridge_google_url.count { return false }
+            if plain {
+                bridge_google_url[at.*] = byte
+                at.* += 1
+            } else {
+                bridge_google_url[at.*] = #char "%"
+                bridge_google_url[at.* + 1] = digits[cast(s64)(byte >> 4)]
+                bridge_google_url[at.* + 2] = digits[cast(s64)(byte & cast(u8)15)]
+                at.* += 3
+            }
+        }
+        bridge_google_url[at.*] = cast(u8)0
+        return true
+    }
+
+    // Google's own page in its own window: no Google code runs beside the key.
+    BridgeGoogleAddress :: (nonce: string) -> bool {
+        location := WebGetObject(WebGlobal, WebName("location"))
+        if location == 0 || WebFailed() { return false }
+        handle := WebAsObject(WebGet(location, WebName("origin")))
+        if handle == 0 || WebFailed() { return false }
+        origin: [256]u8
+        length := WebCopyString(handle, origin[:])
+        if length <= 0 || length >= cast(s32)origin.count { return false }
+        at: s64 = 0
+        return BridgeUrlAppend("https://accounts.google.com/o/oauth2/v2/auth?response_type=id_token&scope=openid&prompt=select_account&client_id=", *at, false) &&
+            BridgeUrlAppend(TextUntilNul(bridge_google_client[:]), *at, true) &&
+            BridgeUrlAppend("&redirect_uri=", *at, false) &&
+            BridgeUrlAppend(TextUntilNul(origin[:]), *at, true) &&
+            BridgeUrlAppend("/google-signin.html", *at, true) &&
+            BridgeUrlAppend("&state=", *at, false) &&
+            BridgeUrlAppend(TextUntilNul(bridge_google_state[:]), *at, true) &&
+            BridgeUrlAppend("&nonce=", *at, false) &&
+            BridgeUrlAppend(nonce, *at, true)
+    }
+
+    BridgeGoogleMessage :: (context: s32, first: s32, second: s32, third: s32) {
         unused second
         unused third
         scope := WebScope()
         defer WebEnd(scope)
-        if !bridge_pending { return }
-        handle := WebAsObject(WebGet(first, WebName("credential")))
+        if !bridge_pending || context != bridge_generation { return }
+        data := WebAsObject(WebGet(first, WebName("data")))
+        if data == 0 || WebFailed() { return }
+        state: [33]u8
+        state_handle := WebAsObject(WebGet(data, WebName("state")))
+        if state_handle == 0 || WebFailed() { return }
+        length := WebCopyString(state_handle, state[:])
+        // Another tab's sign-in has another state: it is not an answer to this one.
+        if length != 32 || TextUntilNul(state[:]) != TextUntilNul(bridge_google_state[:]) { return }
+        handle := WebAsObject(WebGet(data, WebName("id_token")))
         if handle == 0 || WebFailed() { BridgeFinish("error"); return }
-        length := WebCopyString(handle, bridge_answer.token[:])
-        if length <= 0 || length >= cast(s32)bridge_answer.token.count { BridgeFinish("error"); return }
+        length = WebCopyString(handle, bridge_answer.token[:])
+        if length <= 0 || length >= cast(s32)bridge_answer.token.count {
+            bridge_answer.token = .{}
+            BridgeFinish("cancelled")
+            return
+        }
         BridgeFinish("ok")
     }
 
     BridgeGoogleCancel :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
         unused first
         unused second
         unused third
-        if bridge_pending { BridgeFinish("cancelled") }
+        if bridge_pending && context == bridge_generation { BridgeFinish("cancelled") }
     }
 
-    BridgeGoogleFailed :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
-        unused first
-        unused second
-        unused third
-        if bridge_pending { BridgeFinish("error") }
-    }
-
-    // Google's button has to be Google's own element, over the canvas.
-    BridgeGoogleShow :: () {
-        document := WebGetObject(WebGlobal, WebName("document"))
-        google := WebGetObject(WebGlobal, WebName("google"))
-        if document == 0 || google == 0 || WebFailed() { BridgeFinish("unsupported"); return }
-        accounts := WebGetObject(google, WebName("accounts"))
-        identity := WebGetObject(accounts, WebName("id"))
-        if identity == 0 || WebFailed() { BridgeFinish("unsupported"); return }
-        settings := WebNewObject()
-        WebSet(settings, WebName("client_id"), WebText(TextUntilNul(bridge_google_client[:])))
-        WebSet(settings, WebName("callback"), WebObject(WebFunction(BridgeGoogleToken, 0)))
-        WebSet(settings, WebName("auto_select"), WebBool(false))
-        if bridge_google_nonce[0] != cast(u8)0 {
-            WebSet(settings, WebName("nonce"), WebText(TextUntilNul(bridge_google_nonce[:])))
-        }
-        unused WebCall1(identity, WebName("initialize"), WebObject(settings))
-        BridgeOverlayClose()
-        overlay := WebAsObject(WebCall1(document, WebName("createElement"), WebText("div")))
-        style := WebGetObject(overlay, WebName("style"))
-        WebSet(style, WebName("cssText"), WebText("position:fixed;inset:0;z-index:1000;display:grid;place-content:center;gap:16px;background:rgba(0,0,0,.55);padding:24px"))
-        holder := WebAsObject(WebCall1(document, WebName("createElement"), WebText("div")))
-        unused WebCall1(overlay, WebName("append"), WebObject(holder))
-        cancel := WebAsObject(WebCall1(document, WebName("createElement"), WebText("button")))
-        WebSet(cancel, WebName("type"), WebText("button"))
-        WebSet(cancel, WebName("textContent"), WebText("Cancel"))
-        WebSet(WebGetObject(cancel, WebName("style")), WebName("cssText"), WebText("padding:12px;border:0;border-radius:8px;font:16px system-ui,sans-serif;cursor:pointer"))
-        WebSet(cancel, WebName("onclick"), WebObject(WebFunction(BridgeGoogleCancel, 0)))
-        unused WebCall1(overlay, WebName("append"), WebObject(cancel))
-        unused WebCall1(WebGetObject(document, WebName("body")), WebName("append"), WebObject(overlay))
-        bridge_overlay = WebKeep(overlay)
-        button := WebNewObject()
-        WebSet(button, WebName("theme"), WebText("outline"))
-        WebSet(button, WebName("size"), WebText("large"))
-        WebSet(button, WebName("text"), WebText("signin_with"))
-        unused WebCall2(identity, WebName("renderButton"), WebObject(holder), WebObject(button))
-        if WebFailed() { BridgeFinish("error") }
-    }
-
-    BridgeGoogleLoaded :: (context: s32, first: s32, second: s32, third: s32) {
-        unused context
+    // Opening the window must come from this click, or browsers block it.
+    BridgeGoogleOpen :: (context: s32, first: s32, second: s32, third: s32) {
         unused first
         unused second
         unused third
         scope := WebScope()
         defer WebEnd(scope)
-        bridge_google_ready = true
-        if bridge_pending { BridgeGoogleShow() }
+        if !bridge_pending || context != bridge_generation { return }
+        opened := WebAsObject(WebCall3(WebGlobal, WebName("open"), WebText(TextUntilNul(bridge_google_url[:])), WebText("waozi-google"), WebText("popup,width=480,height=640")))
+        if opened == 0 || WebFailed() { BridgeFinish("unsupported") }
     }
 
-    BridgeGoogleLoad :: () -> bool {
-        // Google's script loads only once someone chooses Google.
-        if bridge_google_ready { BridgeGoogleShow(); return true }
+    BridgeGoogleShow :: () -> bool {
         document := WebGetObject(WebGlobal, WebName("document"))
-        if document == 0 || WebFailed() { return false }
-        script := WebAsObject(WebCall1(document, WebName("createElement"), WebText("script")))
-        if script == 0 || WebFailed() { return false }
-        WebSet(script, WebName("src"), WebText("https://accounts.google.com/gsi/client"))
-        WebSet(script, WebName("onload"), WebObject(WebFunction(BridgeGoogleLoaded, 0)))
-        WebSet(script, WebName("onerror"), WebObject(WebFunction(BridgeGoogleFailed, 0)))
-        unused WebCall1(WebGetObject(document, WebName("head")), WebName("append"), WebObject(script))
+        constructor := WebGetObject(WebGlobal, WebName("BroadcastChannel"))
+        if document == 0 || constructor == 0 || WebFailed() { return false }
+        channel := WebNew1(constructor, WebText("waozi-google-signin"))
+        if channel == 0 || WebFailed() { return false }
+        bridge_channel = WebKeep(channel)
+        WebSet(bridge_channel, WebName("onmessage"), WebObject(WebFunction(BridgeGoogleMessage, bridge_generation)))
+        BridgeOverlayClose()
+        overlay := WebAsObject(WebCall1(document, WebName("createElement"), WebText("div")))
+        WebSet(WebGetObject(overlay, WebName("style")), WebName("cssText"), WebText("position:fixed;inset:0;z-index:1000;display:grid;place-content:center;gap:16px;background:rgba(0,0,0,.55);padding:24px"))
+        look := "padding:12px 20px;border:0;border-radius:8px;font:16px system-ui,sans-serif;cursor:pointer"
+        open_button := WebAsObject(WebCall1(document, WebName("createElement"), WebText("button")))
+        WebSet(open_button, WebName("type"), WebText("button"))
+        WebSet(open_button, WebName("textContent"), WebText("Continue with Google"))
+        WebSet(WebGetObject(open_button, WebName("style")), WebName("cssText"), WebText(look))
+        WebSet(open_button, WebName("onclick"), WebObject(WebFunction(BridgeGoogleOpen, bridge_generation)))
+        unused WebCall1(overlay, WebName("append"), WebObject(open_button))
+        cancel := WebAsObject(WebCall1(document, WebName("createElement"), WebText("button")))
+        WebSet(cancel, WebName("type"), WebText("button"))
+        WebSet(cancel, WebName("textContent"), WebText("Cancel"))
+        WebSet(WebGetObject(cancel, WebName("style")), WebName("cssText"), WebText(look))
+        WebSet(cancel, WebName("onclick"), WebObject(WebFunction(BridgeGoogleCancel, bridge_generation)))
+        unused WebCall1(overlay, WebName("append"), WebObject(cancel))
+        unused WebCall1(WebGetObject(document, WebName("body")), WebName("append"), WebObject(overlay))
+        bridge_overlay = WebKeep(overlay)
         return !WebFailed()
     }
 }
@@ -582,11 +632,13 @@ PasskeyBridgeAvailable :: () -> bool {
     return false
 }
 
-// Google needs its script (web) or the Play adapter (Android), and a client ID
+// Google needs the Entity site (web) or the Play adapter (Android), and a client ID
 // the node gave, so nothing offers Google before the owner has set it up.
 GoogleBridgeAvailable :: () -> bool {
     #if #defined(PLATFORM_WEB) {
-        return true
+        scope := WebScope()
+        defer WebEnd(scope)
+        return BridgeGoogleHosted()
     }
     #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
         output: [32]u8
@@ -634,6 +686,7 @@ PasskeyBridgeCreate :: (account: string, name: string) -> bool {
         WebSet(options, WebName("timeout"), WebNumber(120000.0))
         WebSet(options, WebName("extensions"), WebObject(BridgePrfExtension()))
         bridge_answer = SignInAnswer.{}
+        bridge_generation += 1
         bridge_pending = true
         bridge_step = 1
         if !BridgeRequest(credentials, "create", options) {
@@ -674,6 +727,7 @@ PasskeyBridgeGet :: () -> bool {
         WebSet(options, WebName("timeout"), WebNumber(120000.0))
         WebSet(options, WebName("extensions"), WebObject(BridgePrfExtension()))
         bridge_answer = SignInAnswer.{}
+        bridge_generation += 1
         bridge_pending = true
         bridge_step = 2
         if !BridgeRequest(credentials, "get", options) {
@@ -695,11 +749,20 @@ GoogleBridgeStart :: (client: string, nonce: string) -> bool {
     #if #defined(PLATFORM_WEB) {
         scope := WebScope()
         defer WebEnd(scope)
-        if bridge_pending || !CopyCString(client, bridge_google_client[:]) || !CopyCString(nonce, bridge_google_nonce[:]) { return false }
+        if bridge_pending || !CopyCString(client, bridge_google_client[:]) { return false }
+        // The redirect form requires a nonce even when nothing is bound to it.
+        random: [16]u8
+        fresh_nonce: [33]u8
+        unused SecureRandom(*random[0], random.count)
+        if BytesToHex(*random[0], 16, *fresh_nonce[0], fresh_nonce.count) == 0 { return false }
+        unused SecureRandom(*random[0], random.count)
+        if BytesToHex(*random[0], 16, *bridge_google_state[0], bridge_google_state.count) == 0 { return false }
+        if !BridgeGoogleAddress(ifx nonce == "" then TextUntilNul(fresh_nonce[:]) else nonce) { return false }
         bridge_answer = SignInAnswer.{}
+        bridge_generation += 1
         bridge_pending = true
-        if !BridgeGoogleLoad() {
-            bridge_pending = false
+        if !BridgeGoogleShow() {
+            BridgeFinish("unsupported")
             return false
         }
         return true
@@ -766,12 +829,8 @@ SignInBridgeForget :: () {
         scope := WebScope()
         defer WebEnd(scope)
         bridge_google_client[0] = cast(u8)0
-        bridge_google_nonce[0] = cast(u8)0
-        google := WebGetObject(WebGlobal, WebName("google"))
-        if google == 0 || WebFailed() { return }
-        accounts := WebGetObject(google, WebName("accounts"))
-        identity := WebGetObject(accounts, WebName("id"))
-        if identity != 0 && !WebFailed() { unused WebCall0(identity, WebName("disableAutoSelect")) }
+        bridge_google_state[0] = cast(u8)0
+        bridge_google_url[0] = cast(u8)0
     }
     #if #defined(ANDROID_BUILD) && #defined(GOOGLE_PLAY) {
         output: [64]u8

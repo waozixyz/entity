@@ -99,6 +99,7 @@ ManagementProvider :: struct {
     sign_in_message: [160]u8
     passkey_keys: RecoveryKeys
     passkey_credential: [65]u8
+    passkey_account: [65]u8
     passkey_count: s32
     passkeys: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
     google_client: [256]u8
@@ -790,6 +791,7 @@ ProviderMethodsPump :: (provider: *ManagementProvider) {
 ProviderPasskeyForget :: (provider: *ManagementProvider) {
     RecoveryKeysClear(*provider.passkey_keys)
     provider.passkey_credential = .{}
+    provider.passkey_account = .{}
 }
 
 ProviderBridgeFinish :: (provider: *ManagementProvider, result: string, message: string) {
@@ -816,6 +818,7 @@ ProviderPasskeyStart :: (provider: *ManagementProvider, adding: bool) {
         state := ProviderState(provider)
         name := TextUntilNul(state.alias[:])
         if name == "" { name = TextUntilNul(state.public_id[:]) }
+        unused CopyCString(TextUntilNul(state.public_id[:]), provider.passkey_account[:])
         started = PasskeyBridgeCreate(TextUntilNul(state.public_id[:]), name)
         provider.bridge_operation = 1
     } else {
@@ -860,6 +863,10 @@ ProviderPasskeyUpload :: (provider: *ManagementProvider, answer: *SignInAnswer) 
     defer { RecoveryClear(*recovery) }
     if provider.load == null || !provider.load(provider.context, *recovery) {
         ProviderBridgeFinish(provider, "error", "No account is signed in on this device")
+        return
+    }
+    if !SignInSameAccount(TextUntilNul(provider.passkey_account[:]), TextUntilNul(recovery.keys.public_id[:])) {
+        ProviderBridgeFinish(provider, "error", "The account changed while adding this passkey. Add it again.")
         return
     }
     wrapper: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8

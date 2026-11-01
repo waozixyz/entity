@@ -164,9 +164,11 @@ lost password.
 Use the same Cloud project as Drive above.
 
 1. In [Clients](https://console.cloud.google.com/auth/clients), create a **Web
-   application** client. Add `https://entity.waozi.xyz` and `https://waozi.xyz`
-   under Authorized JavaScript origins. Copy its client ID; it is not a secret.
-   See [Google's client ID guide](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
+   application** client. Add `https://entity.waozi.xyz/google-signin.html` under
+   Authorized redirect URIs. Copy its client ID; it is not a secret. Browsers offer
+   Google only on the Entity site: no Google script runs beside the account key,
+   so Google's page opens in its own window. See
+   [Google's OpenID Connect guide](https://developers.google.com/identity/openid-connect/openid-connect).
 2. Keep the Android OAuth clients from Drive step 4, one per package and signing
    certificate pair. Sign in with Google needs them too.
 3. In [Data Access](https://console.cloud.google.com/auth/scopes) add only

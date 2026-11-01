@@ -121,6 +121,8 @@ main :: () -> s32 {
     if PasskeyOpenReply(TextUntilNul(reply[:]), other_id, CREDENTIAL_A, *keys_a, *wrong) { return 33 }
     if !ReplyFor(other_id, text, reply[:]) { return 34 }
     if PasskeyOpenReply(TextUntilNul(reply[:]), other_id, CREDENTIAL_A, *keys_a, *wrong) { return 35 }
+    // A late passkey answer cannot seal an account that signed in meanwhile.
+    if !SignInSameAccount(public_id, public_id) || SignInSameAccount(public_id, other_id) || SignInSameAccount("", "") { return 62 }
     // Without a platform to ask, nothing is offered and nothing pretends.
     if PasskeyBridgeAvailable() || GoogleBridgeAvailable() { return 40 }
     if PasskeyBridgeCreate(public_id, "name") || PasskeyBridgeGet() || GoogleBridgeStart("client", "") { return 41 }
