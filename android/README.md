@@ -144,3 +144,43 @@ Its native code uses the
 same `GOOGLE_PLAY` gate, with a separate package, signing key and output path;
 it does not overwrite the production Play APK. `assembleGplayDebugAndroidTest`
 builds the shared unconfigured-flow test for the Moto.
+
+# Passkeys and Sign in with Google (Play and web)
+
+`SignInBridge` is the Play-only Android side; browsers use the same logic in
+`src/sign_in_bridge.zi`. Normal and F-Droid builds have neither, and offer the
+username and password instead. Desktop builds also have no passkey or Google
+sign-in today.
+
+A passkey gives a WebAuthn PRF value that unlocks its own sealed copy of the
+account key. The node stores only that sealed text and a digest. Where the
+passkey provider returns no PRF value, the app says so and asks for the password.
+Google only tells the node which account to look for; a password or passkey
+still unlocks it. The `.key` backup stays the master key, and no one can reset a
+lost password.
+
+## Google Cloud and domain setup by the owner
+
+Use the same Cloud project as Drive above.
+
+1. In [Clients](https://console.cloud.google.com/auth/clients), create a **Web
+   application** client. Add `https://entity.waozi.xyz` and `https://waozi.xyz`
+   under Authorized JavaScript origins. Copy its client ID; it is not a secret.
+   See [Google's client ID guide](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
+2. Keep the Android OAuth clients from Drive step 4, one per package and signing
+   certificate pair. Sign in with Google needs them too.
+3. In [Data Access](https://console.cloud.google.com/auth/scopes) add only
+   `openid`. The node keeps no email or name.
+4. Set this on the Daochi node, web client first, then restart it:
+
+   ```sh
+   DAOCHI_GOOGLE_SIGNIN_CLIENT_IDS=WEB_CLIENT_ID
+   ```
+
+   The Google button stays hidden until the node has this value.
+5. For Android passkeys, publish
+   `https://waozi.xyz/.well-known/assetlinks.json` with
+   `delegate_permission/common.get_login_creds` for each Play package, using its
+   **Play App Signing SHA-256** from Play Console > Test and release > Setup >
+   App signing. Never publish a debug certificate there. See
+   [Credential Manager prerequisites](https://developer.android.com/identity/credential-manager/prerequisites).

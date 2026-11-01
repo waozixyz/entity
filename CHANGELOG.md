@@ -4,6 +4,9 @@
 
 - Every waozi.xyz site with its own key store, such as Breeze and Werk, follows the shared sign-in and sign-out. A site signed in to a different account offers Continue as @name.
 
+- Sign in with a passkey in browsers and Google Play builds where the passkey provider supports PRF. It unlocks a sealed copy of your key that the node can't open. Elsewhere, use your password.
+- Sign in with Google to find your account in browsers and Google Play builds. Your password or passkey still unlocks it.
+
 - In Google Play builds, optionally save encrypted account backups to Google Drive and choose the same backup in another app or phone. Local backup files remain available.
 
 - Continue as @name on a computer where another waozi app is signed in, using one shared account file.
