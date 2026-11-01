@@ -99,6 +99,22 @@ ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectan
     return true
 }
 
+ProfileLeaderboardShovey :: (session: Session, key: u64, game: string, icon: s32, bounds: Rectangle) -> bool {
+    asset := ProfileLeaderboardShoveyAsset(game, icon)
+    if asset == "" { return false }
+    if AppSupports("entity.asset") && AppService("entity.asset", asset) != "available" { return false }
+    out: Vec(u8)
+    root := AppService("entity.assets", "")
+    if root != "" { BuilderPrint(*out, "%/", root) }
+    Append(*out, asset)
+    path := BuilderFinish(out)
+    unused Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
+        .fit = ImageFit.ImageFitContain, .smooth = false,
+        .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+    AchievementRelease(path)
+    return true
+}
+
 ProfileLeaderboardCommand :: (command: string) -> bool {
     if command == "reload" {
         profile_leaderboard_open = false
@@ -310,7 +326,8 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         game := TextUntilNul(current.id[:])
         worm := (game == "xyz.waozi.wurm" || game == "wurm") &&
             ProfileLeaderboardWurm(session, key + 5, row.game_icon, picture_bounds)
-        if !worm { ProfileLeaderboardPicture(session, key + 5, row.icon, picture_bounds) }
+        shovey := ProfileLeaderboardShovey(session, key + 5, game, row.game_icon, picture_bounds)
+        if !worm && !shovey { ProfileLeaderboardPicture(session, key + 5, row.icon, picture_bounds) }
         if average {
             Text(session, TextProps.{.key = key + 4, .text = TextUntilNul(row.average[:]),
                 .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},

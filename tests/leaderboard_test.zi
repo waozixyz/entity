@@ -52,7 +52,7 @@ MockStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"value\":60}]}", output)
     }
     request_error = request_error || request.url != "http://127.0.0.1:9/api/v1/friends/stats?app=inbe&practice=arcade.shovey&metric=levels"
-    return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"value\":12}]}", output)
+    return CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"game_icon\":3,\"value\":12}]}", output)
 }
 MockPoll :: (context: *void, status: *s32) -> s32 { status.* = mock_status; return 1 }
 MockCancel :: (context: *void) { cancelled += 1 }
@@ -90,6 +90,12 @@ Check :: () -> s32 {
     unused CopyCString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", account_recovery.keys.public_id[:])
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 0 || page.row_count != 0 { return 7 }
     if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "levels 4") { return 8 }
+    if !EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin 7") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin 8") ||
+    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin ../x") { return 60 }
+    if ProfileLeaderboardShoveyAsset("other.game", 8) != "" ||
+    ProfileLeaderboardShoveyAsset("arcade.shovey", 8) != "assets/entity/shovey-7.png" ||
+    ProfileLeaderboardShoveyAsset("arcade.shovey-island", 257) != "assets/entity/shovey-0.png" { return 61 }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer("{\"owner\":\"stale\",\"board\":\"arcade.shovey\"}"), *page) ||
     page.board_count != 1 || page.row_count != 1 || TextUntilNul(page.rows[0].value[:]) != "4" { return 9 }
     // Exercise the real asynchronous provider with an in-memory transport.
@@ -104,6 +110,7 @@ Check :: () -> s32 {
     if requests != 3 || request_error || native_leaderboard_error || !native_leaderboard_loaded { return 16 }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
     TextUntilNul(page.rows[0].name[:]) != "@river" || !page.rows[1].own { return 17 }
+    if page.rows[0].game_icon != 3 || page.rows[1].game_icon != 8 { return 62 }
     if page.rows[0].icon != 50 || page.rows[1].icon != 41 || page.rows[2].icon != 124 { return 31 }
     account_profile.picture = 7
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.rows[1].icon != 48 { return 32 }
@@ -122,7 +129,7 @@ Check :: () -> s32 {
     unused EntityLeaderboardAnswer("refresh")
     for step: 0..3 { EntityLeaderboardPump() }
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.error || page.loading { return 19 }
-    unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
+    unused CopyCString("{\"rows\":[{\"user_id_hash\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":50,\"game_icon\":3,\"value\":12},{\"user_id_hash\":\"friend-a\",\"alias\":\"duplicate\",\"value\":99}]}", native_leaderboard_stats[:])
     unused CopyCString("{\"friends\":[{\"id\":\"friend-a\",\"alias\":\"river\",\"profile_icon\":52},{\"id\":\"friend-b\",\"alias\":\"cedar\",\"profile_icon\":124}]}", native_leaderboard_friends[:])
     native_leaderboard_rows_dirty = true
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.row_count != 3 ||
@@ -149,7 +156,7 @@ Check :: () -> s32 {
     if cancelled <= before_cancel || native_leaderboard_stage != 0 { return 20 }
     account_recovery.keys.public_id = .{}
     if !ProfileLeaderboardDecode(EntityLeaderboardAnswer(""), *page) || page.board_count != 1 ||
-    page.row_count != 1 || !page.rows[0].own || TextUntilNul(page.rows[0].value[:]) != "12" { return 14 }
+    page.row_count != 1 || !page.rows[0].own || page.rows[0].game_icon != 0 || TextUntilNul(page.rows[0].value[:]) != "12" { return 14 }
     // A run board: the best run's score ranks, its level shows beside it.
     if EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run 57") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "run x 4210") ||
@@ -160,7 +167,7 @@ Check :: () -> s32 {
     if !EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 5") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin 13") ||
     EntityLeaderboardReport("wurm", "Apfelwurm", "wurm", "Apfelwurm", "skin -1") ||
-    EntityLeaderboardReport("arcade", "Arcade", "arcade.shovey", "Shovey", "skin 2") { return 34 }
+    EntityLeaderboardReport("arcade", "Arcade", "other.game", "Other", "skin 2") { return 34 }
     // The account change dropped the old session; this one is fixture text too.
     unused CopyCString("fixture-token", native_leaderboard_session.token[:])
     native_leaderboard_session.expires_at_local = UnixNow() + 3600

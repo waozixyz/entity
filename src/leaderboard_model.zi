@@ -47,6 +47,20 @@ ProfileScoreReport :: (request: string, output: *ProfileScore) -> bool {
     return true
 }
 
+// Exact game identities and numeric skin IDs only; no remote asset paths.
+ProfileLeaderboardSkinMaximum :: (game: string) -> s32 {
+    if game == "wurm" || game == "xyz.waozi.wurm" { return 12 }
+    if game == "arcade.shovey" || game == "arcade.shovey-island" { return 7 }
+    return -1
+}
+ProfileLeaderboardShoveyAsset :: (game: string, icon: s32) -> string {
+    if game != "arcade.shovey" && game != "arcade.shovey-island" { return "" }
+    assets: [8]string = .["assets/entity/shovey-0.png", "assets/entity/shovey-1.png",
+        "assets/entity/shovey-2.png", "assets/entity/shovey-3.png", "assets/entity/shovey-4.png",
+        "assets/entity/shovey-5.png", "assets/entity/shovey-6.png", "assets/entity/shovey-7.png"]
+    return assets[ifx icon >= 1 && icon <= 8 then icon - 1 else 0]
+}
+
 ProfileBoard :: struct {
     app: [97]u8
     app_title: [129]u8

@@ -50,6 +50,8 @@ main :: (argc: s32, argv: **u8) -> s32 {
     unused CopyCString("@you", page.rows[1].name[:])
     unused CopyCString("4", page.rows[1].value[:])
     unused CopyCString("42", page.rows[1].average[:])
+    page.rows[0].game_icon = 3
+    page.rows[1].game_icon = 8
     page.rows[1].own = true
     page.rows[0].icon = 52
     page.rows[1].icon = 54
