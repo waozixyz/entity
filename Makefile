@@ -215,3 +215,13 @@ drive-backup-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/drive-native-test/test
 
 test: drive-backup-test
+
+# The passkey wrapper needs no browser: PRF output is given to it directly.
+.PHONY: passkey-test
+passkey-test: $(LIBOQS_LIBRARY)
+	mkdir -p build/passkey-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry passkey_test:main -o build/passkey-test tests/passkey_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/passkey-test -I$(MONOCYPHER_DIR)/src $$(rg --files build/passkey-test -g '*.c') $(MONOCYPHER_SOURCES) $(LIBOQS_LIBRARY) -lpthread -lm -o build/passkey-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/passkey-test/test
+
+test: passkey-test

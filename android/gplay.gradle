@@ -14,7 +14,10 @@ def driveEntityRoot = project.ext.waoziEntityDir
 // 21.4 retains Android 6 support; 22 requires API 24.
 dependencies {
     gplayImplementation 'com.google.android.gms:play-services-auth:21.4.0'
-
+    // Passkeys and Sign in with Google (SignInBridge).
+    gplayImplementation 'androidx.credentials:credentials:1.5.0'
+    gplayImplementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
+    gplayImplementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
 }
 if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('gplaydebug') }) {
     android.testBuildType 'gplayDebug'
