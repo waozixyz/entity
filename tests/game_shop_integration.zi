@@ -32,6 +32,7 @@ Start :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     VecFree(url)
     return started
 }
+OfflineStart :: (context: *void, request: HttpRequest, output: []u8) -> bool { return false }
 Poll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*transfer, status) }
 Cancel :: (context: *void) { HttpTransferCancel(*transfer) }
 Wait :: () -> bool {
@@ -68,7 +69,7 @@ Check :: () -> s32 {
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
     if step == "restored" {
-        if shop_owned != 32398 { return 8 }
+        if shop_owned != 65166 { return 8 }
         // Each game keeps its own ownership mask and coin total.
         reply := EntityGameShopAnswer("status")
         owned := ReadNumber(reply, FieldAt(reply, 0, "owned"))
@@ -76,9 +77,17 @@ Check :: () -> s32 {
         shovey_owned := ReadNumber(reply, FieldAt(reply, 0, "shovey_owned"))
         coins := ReadNumber(reply, FieldAt(reply, 0, "coins"))
         shovey_coins := ReadNumber(reply, FieldAt(reply, 0, "shovey_coins"))
-        return ifx owned.valid && owned.value == 654.0 && decorations.valid && decorations.value == 7168.0 &&
+        valid := owned.valid && owned.value == 654.0 && decorations.valid && decorations.value == 7168.0 &&
         shovey_owned.valid && shovey_owned.value == 24576.0 && coins.valid && coins.value == 400.0 &&
-        shovey_coins.valid && shovey_coins.value == 900.0 then 0 else 18
+        shovey_coins.valid && shovey_coins.value == 900.0
+        if !valid { return 18 }
+        shop_transport.start = OfflineStart
+        unused EntityGameShopAnswer("refresh")
+        if Wait() || (shop_owned & (1 << SHOVEY_ISLAND_PRODUCT)) == 0 { return 29 }
+        // An account transition drops the previous owner's verified entitlement and quote.
+        account_recovery.keys.public_id = .{}
+        unused EntityGameShopAnswer("status")
+        return ifx shop_owned == 0 && shop_island_price == 0 then 0 else 30
     }
     if step == "buy" {
         if shop_coin_receipts == 1 && shop_shovey_coin_receipts == 1 {
@@ -89,12 +98,14 @@ Check :: () -> s32 {
             shop_shovey_coin_receipts = 0
         }
         for product: GAME_SHOP_PRODUCTS {
+            if product == SHOVEY_ISLAND_PRODUCT { continue }
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() || (shop_owned & (1 << product)) == 0 { print("purchase % failed: %\n", product, shop_status); return 9 }
         }
         // An uncertain response has no local ownership; retry those same keys.
         shop_owned = 0
         for product: GAME_SHOP_PRODUCTS {
+            if product == SHOVEY_ISLAND_PRODUCT { continue }
             unused EntityGameShopAnswer(GameShopProduct(cast(s32)product))
             if !Wait() { return 10 }
         }
@@ -102,6 +113,14 @@ Check :: () -> s32 {
         if !Wait() || shop_coins != 400 || shop_shovey_coins != 0 || shop_coin_receipts != 1 || shop_shovey_coin_receipts != 0 { return 21 }
         unused EntityGameShopAnswer("shovey-coins:3")
         if !Wait() || shop_coins != 400 || shop_shovey_coins != 900 || shop_coin_receipts != 1 || shop_shovey_coin_receipts != 1 { return 22 }
+        unused EntityGameShopAnswer("shovey.island.quote")
+        if !Wait() || shop_island_price != SHOVEY_ISLAND_SALE_UNITS { return 24 }
+        unused EntityGameShopAnswer("shovey.island:51000000")
+        if !Wait() || (shop_owned & (1 << SHOVEY_ISLAND_PRODUCT)) == 0 { return 25 }
+        // Lost local entitlement retries the same durable server unlock.
+        shop_owned &= ~(1 << SHOVEY_ISLAND_PRODUCT)
+        unused EntityGameShopAnswer("shovey.island:51000000")
+        if !Wait() || (shop_owned & (1 << SHOVEY_ISLAND_PRODUCT)) == 0 { return 26 }
         return 0
     }
     if step == "insufficient" {
@@ -111,6 +130,10 @@ Check :: () -> s32 {
         if Wait() || shop_owned != 0 { return 19 }
         unused EntityGameShopAnswer("shovey.night")
         if Wait() || shop_owned != 0 { return 23 }
+        unused EntityGameShopAnswer("shovey.island.quote")
+        if !Wait() || shop_island_price != SHOVEY_ISLAND_SALE_UNITS { return 27 }
+        unused EntityGameShopAnswer("shovey.island:51000000")
+        if Wait() || shop_owned != 0 || shop_status != "insufficient" { print("Island unfunded status %, HTTP %, auth %\n", shop_status, shop_request.status, cast(s32)shop_request.result); return 28 }
         return 0
     }
     if step == "holiday_early" {

@@ -4,7 +4,7 @@
 
 Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"spend\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, ifx reference == "" then GameShopReference(product) else reference, amount)
+    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"%\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, ifx product == SHOVEY_ISLAND_PRODUCT then "unlock" else "spend", ifx reference == "" then GameShopReference(product) else reference, amount)
     return BuilderFinish(out)
 }
 #program_export
@@ -21,6 +21,10 @@ main :: () -> s32 {
         if GameShopKey(p) == "" || GameShopKey(p) != GameShopKey(p) { return 5 }
         if p <= 3 && GameShopReceipt(Receipt(p, owner, -GameShopPrice(p) / 10, GameShopLegacyReference(p)), owner) != p { return 8 }
     }
+    // Island edition is distinct from cosmetics; both settled historical prices restore.
+    if GameShopReceipt(Receipt(15, owner, -SHOVEY_ISLAND_SALE_UNITS), owner) != 15 ||
+    GameShopReceipt(Receipt(15, owner, -SHOVEY_ISLAND_SALE_UNITS + 1), owner) != 0 ||
+    GameShopShoveyOwned(1 << 15) != 0 { return 31 }
     if GameShopPrice(0) != 0 || GameShopPrice(4) != 0 || GameShopReceipt("{}", owner) != 0 { return 6 }
     if GameShopPrice(7) != 50000000 || GameShopKey(7) == GameShopKey(3) { return 9 }
     if ChristmasClaimWindow(1796083199) || !ChristmasClaimWindow(1796083200) ||

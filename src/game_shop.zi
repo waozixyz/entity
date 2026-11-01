@@ -8,7 +8,10 @@
 GAME_SHOP_SERVICE :: "entity.game-shop"
 // Product IDs double as ownership bits. Wurm reads `owned` and rejects any value
 // above its own bits, so other games' products are reported separately.
-GAME_SHOP_PRODUCTS: [10]s32 = .[1, 2, 3, 7, 9, 10, 11, 12, 13, 14];
+GAME_SHOP_PRODUCTS: [11]s32 = .[1, 2, 3, 7, 9, 10, 11, 12, 13, 14, 15];
+SHOVEY_ISLAND_PRODUCT :: 15;
+SHOVEY_ISLAND_REGULAR_UNITS :: 85000000;
+SHOVEY_ISLAND_SALE_UNITS :: 51000000;
 GAME_SHOP_WURM_BITS :: 1023;
 GAME_SHOP_CHOANO_BITS :: 7168;
 GAME_SHOP_SHOVEY_BITS :: 24576;
@@ -16,6 +19,7 @@ GameShopWurmOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_WURM_BITS }
 GameShopDecorations :: (owned: s32) -> s32 { return owned & GAME_SHOP_CHOANO_BITS }
 GameShopShoveyOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_SHOVEY_BITS }
 GameShopPrice :: (product: s32) -> s64 {
+    if product == SHOVEY_ISLAND_PRODUCT { return SHOVEY_ISLAND_REGULAR_UNITS }
     if product >= 10 && product <= 12 { return cast(s64)(product - 9) * 10000000 }
     if product == 13 { return 10000000 }
     if product == 14 { return 30000000 }
@@ -25,6 +29,7 @@ GameShopPrice :: (product: s32) -> s64 {
     return cast(s64)product * 10000000
 }
 GameShopProduct :: (product: s32) -> string {
+    if product == SHOVEY_ISLAND_PRODUCT { return "shovey.island" }
     if product == 9 { return "wurm.mountains" }
     if product == 1 { return "wurm.mint" }
     if product == 2 { return "wurm.berry" }
@@ -38,6 +43,7 @@ GameShopProduct :: (product: s32) -> string {
     return ""
 }
 GameShopKey :: (product: s32) -> string {
+    if product == SHOVEY_ISLAND_PRODUCT { return "unlock:shovey.island" }
     if product == 9 { return "stage-wurm-mountains-v1" }
     if product == 1 { return "skin-wurm-mint-v2" }
     if product == 2 { return "skin-wurm-berry-v2" }
@@ -51,6 +57,7 @@ GameShopKey :: (product: s32) -> string {
     return ""
 }
 GameShopReference :: (product: s32) -> string {
+    if product == SHOVEY_ISLAND_PRODUCT { return "shovey.island" }
     if product == 9 { return "wurm.mountains:stage-wurm-mountains-v1" }
     if product == 1 { return "wurm.mint:skin-wurm-mint-v2" }
     if product == 2 { return "wurm.berry:skin-wurm-berry-v2" }
@@ -74,11 +81,22 @@ GameShopField :: (text: string, field: string, expected: string) -> bool {
     return ReadStringText(text, FieldAt(text, 0, field), bytes[:]) >= 0 && TextUntilNul(bytes[:]) == expected
 }
 GameShopReceipt :: (text: string, owner: string) -> s32 {
+    if owner.count == 64 && GameShopField(text, "account_id", owner) &&
+    GameShopField(text, "app_id", "entity") && GameShopField(text, "asset_id", "waozi:token") &&
+    GameShopField(text, "event_type", "debit") && GameShopField(text, "source_type", "unlock") &&
+    GameShopField(text, "source_ref", "shovey.island") {
+        // Historical sale receipts stay valid after the server's sale ends.
+        amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
+        if amount.valid && (amount.value == -cast(float64)SHOVEY_ISLAND_REGULAR_UNITS ||
+            amount.value == -cast(float64)SHOVEY_ISLAND_SALE_UNITS) { return SHOVEY_ISLAND_PRODUCT }
+        return 0
+    }
     if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
     !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
     !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
     amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
     for product: GAME_SHOP_PRODUCTS {
+        if product == SHOVEY_ISLAND_PRODUCT { continue }
         if amount.valid && amount.value == -cast(float64)GameShopPrice(cast(s32)product) &&
         GameShopField(text, "source_ref", GameShopReference(cast(s32)product)) { return cast(s32)product }
         if product <= 3 && amount.valid && amount.value == -cast(float64)(GameShopPrice(cast(s32)product) / 10) &&

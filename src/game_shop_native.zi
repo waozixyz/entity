@@ -28,7 +28,10 @@ shop_request: PendingRequest;
 shop_session: Auth.Session;
 shop_transfer: HttpTransfer;
 shop_response: [131072]u8;
-shop_answer: [640]u8;
+shop_answer: [1024]u8;
+shop_island_quote: bool;
+shop_island_price: s64;
+shop_island_confirmed: s64;
 // Native hosts may supply their platform transport; bundles never see it.
 shop_transport: AsyncTransport;
 shop_visit: bool;
@@ -61,6 +64,9 @@ ShopOwner :: () {
     shop_shovey_coin_receipts = 0
     shop_shovey_pack = 0
     shop_status = "idle"
+    shop_island_quote = false
+    shop_island_price = 0
+    shop_island_confirmed = 0
 }
 ShopStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     return HttpTransferStart(*shop_transfer, request, output, 15000)
@@ -86,26 +92,50 @@ EntityGameShopAnswer :: (request: string) -> string {
         unused ShopChristmasClaim(UnixNow())
     }
     if request == "visit" { shop_visit = true; return "queued" }
-    if request == "refresh" && !shop_active { shop_requested = true; shop_product = 0; shop_pack = 0; shop_shovey_pack = 0 }
+    if request == "refresh" && !shop_active { shop_island_quote = false; shop_requested = true; shop_product = 0; shop_pack = 0; shop_shovey_pack = 0 }
     if request.count == 7 && request[:6] == "coins:" && !shop_active && !shop_requested {
         pack := cast(s32)(request[6] - #char "0")
         if CoinPackPrice(pack) <= 0 { shop_status = "failed" }
         else if !shop_loaded { shop_status = "failed"; shop_requested = true }
-        else if DewReady() { shop_pack = pack; shop_product = 0; shop_shovey_pack = 0; shop_requested = true }
+        else if DewReady() { shop_island_quote = false; shop_pack = pack; shop_product = 0; shop_shovey_pack = 0; shop_requested = true }
         else { shop_status = "signin" }
     }
     if request.count == 14 && request[:13] == "shovey-coins:" && !shop_active && !shop_requested {
         pack := cast(s32)(request[13] - #char "0")
         if ShoveyCoinPackPrice(pack) <= 0 { shop_status = "failed" }
         else if !shop_loaded { shop_status = "failed"; shop_requested = true }
-        else if DewReady() { shop_shovey_pack = pack; shop_product = 0; shop_pack = 0; shop_requested = true }
+        else if DewReady() { shop_island_quote = false; shop_shovey_pack = pack; shop_product = 0; shop_pack = 0; shop_requested = true }
         else { shop_status = "signin" }
     }
+    if request == "shovey.island.quote" && !shop_active && !shop_requested {
+        shop_island_price = 0
+        shop_island_quote = true
+        shop_product = 0
+        shop_pack = 0
+        shop_shovey_pack = 0
+        shop_requested = true
+    }
+    if request.count > 14 && request[:14] == "shovey.island:" && !shop_active && !shop_requested {
+        amount := ReadNumber(request[14:], 0)
+        if !DewReady() { shop_status = "signin" }
+        else if !amount.valid || ValueEnd(request[14:], 0, 0) != request.count - 14 || shop_island_price <= 0 || amount.value != cast(float64)shop_island_price {
+            shop_status = "price_changed"
+        } else {
+            shop_island_confirmed = shop_island_price
+            shop_product = SHOVEY_ISLAND_PRODUCT
+            shop_island_quote = false
+            shop_pack = 0
+            shop_shovey_pack = 0
+            shop_requested = true
+        }
+    }
     for product: GAME_SHOP_PRODUCTS {
+        if product == SHOVEY_ISLAND_PRODUCT { continue }
         if request == GameShopProduct(cast(s32)product) && !shop_active && !shop_requested {
             if (shop_owned & (1 << product)) != 0 {
                 shop_status = "done"
             } else if DewReady() {
+                shop_island_quote = false
                 shop_product = cast(s32)product
                 shop_requested = true
             } else { shop_status = "signin" }
@@ -113,9 +143,11 @@ EntityGameShopAnswer :: (request: string) -> string {
     }
     if request == "status" && !shop_loaded && !shop_active && shop_status == "idle" { shop_requested = true }
     out: Vec(u8)
-    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"decorations\":%,\"coins\":%,\"shovey_owned\":%,\"shovey_coins\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
+    BuilderPrint(*out, "{\"owner\":\"%\",\"device\":\"%\",\"connected\":%,\"owned\":%,\"decorations\":%,\"coins\":%,\"shovey_owned\":%,\"shovey_coins\":%,\"island_owned\":%,\"island_price_units\":%,\"island_regular_price_units\":85000000,\"island_discount_percent\":%,\"special_skins\":true,\"christmas_claimable\":%,\"status\":\"%\"}",
         TextUntilNul(shop_owner[:]), TextUntilNul(account_client_id[:]), DewReady(), GameShopWurmOwned(shop_owned), GameShopDecorations(shop_owned), shop_coins,
         GameShopShoveyOwned(shop_owned), shop_shovey_coins,
+        (shop_owned & (1 << SHOVEY_ISLAND_PRODUCT)) != 0, shop_island_price,
+        ifx shop_island_price == SHOVEY_ISLAND_SALE_UNITS then 40 else 0,
         ChristmasClaimWindow(UnixNow()),
         ifx shop_active || shop_requested then "pending" else shop_status)
     text := BuilderFinish(out)
@@ -139,9 +171,41 @@ EntityGameShopPump :: () {
         if !PollRequest(*shop_request) { return }
         shop_active = false
         shop_status = "failed"
-        if shop_request.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK { return }
+        if shop_request.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
+            // Distinguish an authenticated endpoint refusal from a login or transport failure.
+            if shop_product == SHOVEY_ISLAND_PRODUCT && shop_request.stage == 3 && shop_request.failure == 0 &&
+            shop_request.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_REQUEST_FAILED {
+                if shop_request.status == 409 { shop_island_price = 0; shop_status = "price_changed" }
+                if shop_request.status == 402 { shop_status = "insufficient" }
+            }
+            return
+        }
         response := TextUntilNul(shop_response[:])
-        if shop_pack > 0 || shop_shovey_pack > 0 {
+        if shop_island_quote {
+            shop_island_quote = false
+            at := FieldAt(response, 0, "products")
+            for index: cast(s32)0..8 {
+                item := ElementAt(response, at, index)
+                if item < 0 { break }
+                end := ValueEnd(response, item, 0)
+                if end <= item { return }
+                row := response[item:end]
+                if !GameShopField(row, "product", "shovey.island") { continue }
+                price := ReadNumber(row, FieldAt(row, 0, "price_units"))
+                regular := ReadNumber(row, FieldAt(row, 0, "regular_price_units"))
+                if regular.valid && regular.value == cast(float64)SHOVEY_ISLAND_REGULAR_UNITS && price.valid &&
+                (price.value == cast(float64)SHOVEY_ISLAND_REGULAR_UNITS || price.value == cast(float64)SHOVEY_ISLAND_SALE_UNITS) {
+                    shop_island_price = cast(s64)price.value
+                    shop_status = "done"
+                }
+                return
+            }
+        } else if shop_product == SHOVEY_ISLAND_PRODUCT {
+            if shop_request.status != 200 { return }
+            // Only the subsequent authenticated ledger receipt grants access.
+            shop_product = 0
+            shop_requested = true
+        } else if shop_pack > 0 || shop_shovey_pack > 0 {
             at := FieldAt(response, 0, "receipt")
             end := ValueEnd(response, at, 0)
             wurm_pack := shop_pack > 0
@@ -215,7 +279,9 @@ EntityGameShopPump :: () {
     client: Client
     body: Vec(u8)
     purchase := shop_product > 0 || shop_pack > 0 || shop_shovey_pack > 0
-    if shop_pack > 0 {
+    if shop_product == SHOVEY_ISLAND_PRODUCT {
+        BuilderPrint(*body, "{\"product\":\"shovey.island\",\"expected_units\":%}", shop_island_confirmed)
+    } else if shop_pack > 0 {
         BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
             CoinPackPrice(shop_pack), COIN_PACK_ACTION, CoinPackKey(shop_pack, shop_coin_receipts + 1, shop_pack_key[:]))
     } else if shop_shovey_pack > 0 {
@@ -231,7 +297,7 @@ EntityGameShopPump :: () {
     shop_response = .{}
     shop_active = AccountStoreClient(null, *client) && BeginRequest(*shop_request, client, *shop_session,
         UnixNow(), transport, ifx purchase then "POST" else "GET",
-        ifx purchase then "/api/v1/tokens/spend" else "/api/v1/tokens/ledger?app_id=entity",
+        ifx shop_island_quote then "/api/v1/unlocks/products" else ifx shop_product == SHOVEY_ISLAND_PRODUCT then "/api/v1/unlocks" else ifx purchase then "/api/v1/tokens/spend" else "/api/v1/tokens/ledger?app_id=entity",
         TextView(VecSlice(body, 0, body.count)), shop_response[:], headers[:])
     VecFree(body)
     if !shop_active { shop_status = "failed" }

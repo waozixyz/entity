@@ -23,7 +23,7 @@ def package(name):
 
 
 def main():
-    out = ROOT / 'build/game-shop-integration'
+    out = ROOT / 'work/game-shop-integration'
     out.mkdir(parents=True, exist_ok=True)
     fixture = Path(tempfile.mkdtemp(prefix='fixture-', dir=out))
     fixture.chmod(0o700)
@@ -36,6 +36,13 @@ def main():
              '--module-path', 'kryon=' + str(kryon / 'src/ui'), '--module-path', str(kryon / 'src/ui'),
              '--module-path', 'daochi_client=' + str(daochi), '--module-path', str(daochi),
              '--module-path', 'crypto=' + str(crypto / 'src'), '--module-path', 'oqs=' + str(oqs / 'src')]
+    model = out / 'model'
+    subprocess.run(['ziran', 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
+                    'game_shop_test:main', '-o', str(model), 'tests/game_shop_test.zi'],
+                   cwd=ROOT, env=ENV, check=True)
+    subprocess.run(['cc', '-std=c11', '-O2', '-I' + str(compiler / 'include'), '-I' + str(model),
+                    *map(str, model.rglob('*.c')), '-lm', '-o', str(model / 'test')], env=ENV, check=True)
+    subprocess.run([str(model / 'test')], env=ENV, check=True)
     subprocess.run(['ziran', 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
                     'game_shop_integration:Check', '-o', str(generated), 'tests/game_shop_integration.zi'],
                    cwd=ROOT, env=ENV, check=True)
@@ -62,6 +69,7 @@ def main():
     url = 'http://127.0.0.1:' + str(port)
     node_env = {**ENV, 'DAOCHI_ADDR': '127.0.0.1:' + str(port), 'DAOCHI_DB': str(fixture / 'node.db'),
                 'DAOCHI_BASE_URL': url, 'DAOCHI_LAN_DISCOVERY': '0', 'DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET': '1',
+                'DAOCHI_SHOVEY_ISLAND_LAUNCH_AT': str(int(time.time()) - 86400),
                 'DAOCHI_ADMIN_TOKEN': admin, 'DAOCHI_TOKEN_ISSUER_PUBLIC_KEY_HEX': public.hex(),
                 'DAOCHI_TOKEN_ISSUER_PRIVATE_KEY_HEX': private.hex()}
     node_binary = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
@@ -90,7 +98,7 @@ def main():
             step('other', 'local')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 245000000,
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 296000000,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -109,18 +117,18 @@ def main():
             step('other', 'insufficient')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
-                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000, -10000000, -30000000, -5000000, -10000000], events
+                assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000, -10000000, -30000000, -5000000, -10000000, -51000000], events
                 assert [row[1] for row in events[5:]] == [
                     'choano.pearl:decoration-choano-pearl-v1', 'choano.flower:decoration-choano-flower-v1',
                     'choano.wizard:decoration-choano-wizard-v1', 'shovey.night:skin-shovey-night-v1',
                     'shovey.crystal:skin-shovey-crystal-v1', 'wurm.coins:coins-wurm-2-1-v1',
-                    'shovey.coins:coins-shovey-3-1-v1'], events
+                    'shovey.coins:coins-shovey-3-1-v1', 'shovey.island'], events
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
-            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 12,
+            (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 13,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
                               'receipt restore on a fresh device', 'separate Wurm and Shovey coin packs',
                               'unfunded account cannot acquire paid skins', 'different accounts have separate ownership']}, indent=2))
-            print('Game shop integration local tests: twelve private-node debits including Choano and Shovey products, separate coin packs, cross-device restore, retries, account isolation and December claim persistence passed.')
+            print('Game shop integration local tests: thirteen private-node debits including Shovey Island launch-sale unlock, separate coin packs, cross-device restore, retries, account isolation and December claim persistence passed.')
         finally:
             node.terminate()
             node.wait(timeout=10)

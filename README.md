@@ -228,6 +228,28 @@ queues opening `https://waozi.xyz/` after the guest frame.
 retries, fresh-device restoration and account isolation on a private local node
 with throwaway keys and Dew.
 
+Shovey Island uses the same service with a server-priced edition unlock.
+Send `shovey.island.quote`, pump until terminal, and read `island_price_units`,
+`island_regular_price_units`, `island_discount_percent` and `island_owned` in
+`status`. Amounts are integer millionths of Dew: regular 85,000,000 and
+launch sale 51,000,000 (40% off). Confirm the displayed price with
+`shovey.island:51000000` or `shovey.island:85000000`. Plain `shovey.island`
+does not buy. A quote belongs to the current verified account and clears on
+account changes. `price_changed` requires a fresh quote and confirmation;
+`insufficient` and `signin` remain distinct. The node rejects a stale sale
+confirmation without charging the higher price. The provider refreshes the
+authenticated ledger after purchase and grants bit 15 only from an exact
+Island `unlock` receipt, separate from the skin-only `shovey_owned` mask.
+Historical discounted receipts restore after the offer ends; retrying from
+another device never charges twice. Failed/offline refreshes retain ownership
+already verified in the current account session. A host that persists offline
+access across restarts must retain its last verified `island_owned` in that
+same owner's local save; never transfer a previous owner's entitlement.
+Quotes through the provider require sign-in; the node's public
+`GET /api/v1/unlocks/products` also exposes the catalog for pre-sign-in hosts.
+The node configures the actual launch and offer window; UI uses only 40% off,
+without a duration or countdown. Dew acquisition paths are unchanged.
+
 The Profile shows Inbe's shared `DewBalance` card inline. Native game hosts hide storage usage, storage plans and node media-storage controls; Inbe retains its storage indicator and actions. The picture modal offers Abstract and Classic choices with large thumbnails. Both picture families publish the chosen picture for Friends and Leaderboard through the authenticated public profile metadata. Game hosts hide the
 Name and Intention fields and identify players by their alias or public ID.
 The browser host uses Kryon's existing `BundleApp` lifecycle, IndexedDB-backed

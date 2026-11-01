@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Restore Shovey Island purchases across devices and confirm the current Dew price before unlocking.
+
 - Sign in like any other app: choose your backup file, then enter its password, and try again without finding the file again.
 - Name saved backups after your username, or your public ID when you have none.
 - Require a repeated password for every new backup, say plainly that no one can reset it, and go straight to saving one after creating an account. Older backup files still open.
