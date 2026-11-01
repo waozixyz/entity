@@ -533,6 +533,8 @@ AccountSummary :: (x: float32, y: *float32, width: float32) {
     if management.account {
         PublicIdLine(705, Rectangle.{x, y.*, width, 44.0 * scale})
         y.* += 56.0 * scale
+        // Another waozi.xyz site is signed in to a different account.
+        if CanManage(ACCOUNT_CONTINUE) && ListRow(8801, ContinueLabel(), "", x, y, width) { Manage("continue") }
         return
     }
     padding := 16.0 * scale

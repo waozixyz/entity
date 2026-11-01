@@ -12,7 +12,69 @@
 #import "std/file"
 #import "std/byte_text_linux"
 
+#if #defined(PLATFORM_WEB) {
+    #import "std/web"
+}
+
 SHARED_ACCOUNT_NAME_MAX :: 80
+
+// What a site with its own key store does about the waozi.xyz shared sign-in.
+SHARED_WEB_NOTHING :: 0
+SHARED_WEB_SEED :: 1
+SHARED_WEB_ADOPT :: 2
+SHARED_WEB_OFFER :: 3
+SHARED_WEB_SIGN_OUT :: 4
+
+// The shared sign-in wins on a site with no account. A different key already
+// here may be its only copy, so that one is offered, never overwritten. Only
+// the account that was signed out leaves; a key made here while the hub was
+// out of reach stays.
+SharedWebDecide :: (local_owner: string, shared_key: string, shared_owner: string,
+    initialized: bool, signed_out: string) -> s32 {
+    if local_owner == "" { return ifx shared_key == "" then SHARED_WEB_NOTHING else SHARED_WEB_ADOPT }
+    if shared_key != "" { return ifx shared_owner == local_owner then SHARED_WEB_NOTHING else SHARED_WEB_OFFER }
+    if !initialized { return SHARED_WEB_SEED }
+    return ifx signed_out == local_owner then SHARED_WEB_SIGN_OUT else SHARED_WEB_NOTHING
+}
+
+// A text field share.js placed on the page's Module, or "" anywhere else.
+SharedWebText :: (name: string, output: []u8) -> string {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        if module == 0 || WebFailed() { return "" }
+        handle := WebAsObject(WebGet(module, WebName(name)))
+        if handle == 0 || WebFailed() || WebTypeOf(handle) != WebTypeString { return "" }
+        length := WebCopyString(handle, output)
+        if length <= 0 || length >= cast(s32)output.count { return "" }
+        output[length] = cast(u8)0
+        return TextUntilNul(output)
+    }
+    return ""
+}
+
+SharedWebFlag :: (name: string) -> bool {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        if module == 0 || WebFailed() { return false }
+        return WebAsBool(WebGet(module, WebName(name)))
+    }
+    return false
+}
+
+// An empty key signs that owner out of every site.
+SharedWebShare :: (key: string, owner: string, only_if_empty: bool) {
+    #if #defined(PLATFORM_WEB) {
+        scope := WebScope()
+        defer WebEnd(scope)
+        module := WebGetObject(WebGlobal, WebName("Module"))
+        if module == 0 || WebFailed() || WebTypeOf(WebGetObject(module, WebName("shareAccount"))) != WebTypeFunction { return }
+        unused WebCall3(module, WebName("shareAccount"), WebText(key), WebText(owner), WebBool(only_if_empty))
+    }
+}
 
 // Follows the same folder rules as NativeRoot. WAOZI_ACCOUNT_DATA gives tests
 // and separated profiles their own place.

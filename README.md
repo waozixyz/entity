@@ -80,7 +80,10 @@ https://account.waozi.xyz/share.js and calls `WaoziAccount.attach(Module)`
 before starting gives Entity the shared key as `Module.sharedAccountKey`; a
 site without its own account signs in with it, and signing in, creating an
 account, linking a device or logging out is passed back through
-`Module.shareAccount`. A site keeps its own account if it already has one.
+`Module.shareAccount`. Hosts with their own key store follow it through
+`ManagementProvider` without extra code. A site signed in to a different account
+keeps it and offers "Continue as @name", because that key may be its only copy.
+Signing out on one site signs that account out of all of them.
 
 Signing in takes the backup first and asks for its password only if it has one,
 keeping the still-sealed file so a mistyped password can be retried. New backups

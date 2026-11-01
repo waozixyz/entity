@@ -406,7 +406,21 @@ AccountBackupCheck :: (fixture: *Recovery) -> s32 {
 
 // One shared account: offered once, never replaced by another, removed only by
 // its own logout, and a corrupt file offers nothing.
+SharedWebDecideCheck :: () -> bool {
+    one := "1111111111111111111111111111111111111111111111111111111111111111"
+    two := "2222222222222222222222222222222222222222222222222222222222222222"
+    return SharedWebDecide("", "", "", false, "") == SHARED_WEB_NOTHING &&
+    SharedWebDecide("", "key", one, true, "") == SHARED_WEB_ADOPT &&
+    SharedWebDecide(one, "key", one, true, "") == SHARED_WEB_NOTHING &&
+    SharedWebDecide(one, "key", two, true, "") == SHARED_WEB_OFFER &&
+    SharedWebDecide(one, "", "", false, "") == SHARED_WEB_SEED &&
+    SharedWebDecide(one, "", "", true, one) == SHARED_WEB_SIGN_OUT &&
+    SharedWebDecide(one, "", "", true, two) == SHARED_WEB_NOTHING &&
+    SharedWebDecide(one, "", "", true, "") == SHARED_WEB_NOTHING
+}
+
 SharedAccountCheck :: (fixture: *Recovery) -> s32 {
+    if !SharedWebDecideCheck() { return 549 }
     root := "build/shared-account-test"
     key_path: [256]u8
     name_path: [256]u8

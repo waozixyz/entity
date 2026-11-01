@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Every waozi.xyz site with its own key store, such as Breeze and Werk, follows the shared sign-in and sign-out. A site signed in to a different account offers Continue as @name.
+
 - In Google Play builds, optionally save encrypted account backups to Google Drive and choose the same backup in another app or phone. Local backup files remain available.
 
 - Continue as @name on a computer where another waozi app is signed in, using one shared account file.

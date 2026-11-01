@@ -80,6 +80,10 @@ ManagementProvider :: struct {
     online_reply: [ACCOUNT_BACKUP_BODY_MAX]u8
     // The account shared with the other waozi apps on this device.
     shared_name: [SHARED_ACCOUNT_NAME_MAX]u8
+    // share.js keeps this host's account files in step with the shared web
+    // sign-in, so the provider leaves that to it.
+    shared_web_files: bool
+    shared_web_tried: [65]u8
     shared_owner: [65]u8
     shared_alias: [40]u8
     shared_next: s64
@@ -125,7 +129,7 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     state.password_needed = provider.held_backup[0] != cast(u8)0
     state.backed_up = state.account && provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
-    if !state.account && provider.shared_name[0] != cast(u8)0 {
+    if provider.shared_name[0] != cast(u8)0 {
         state.shared_name = provider.shared_name
         state.capabilities |= ACCOUNT_CONTINUE
     }
@@ -175,6 +179,9 @@ ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
     result := provider.apply(provider.context, *provider.incoming, choice)
     if result == 2 { ProviderFinish(provider, "switch", "Choose what to do with the local records"); return }
     if result != 1 { ProviderFinish(provider, "error", "Could not save the account"); return }
+    // A sign-in here signs in the other waozi.xyz sites too.
+    ProviderSharedWebOffer(provider, *provider.incoming, false)
+    provider.shared_name = .{}
     RecoveryClear(*provider.incoming)
     provider.has_incoming = false
     ProviderFinish(provider, "ok", ifx TextUntilNul(provider.queue.request.operation[:]) == "create" then "Account created" else "Signed in")
@@ -337,6 +344,10 @@ ProviderSharedPump :: (provider: *ManagementProvider) {
     now := UnixNow()
     if now < provider.shared_next { return }
     provider.shared_next = now + 2
+    #if #defined(PLATFORM_WEB) {
+        ProviderSharedWebPump(provider)
+        return
+    }
     root_buffer: [4096]u8
     root := SharedAccountRoot(root_buffer[:])
     if root == "" { return }
@@ -358,11 +369,87 @@ ProviderSharedPump :: (provider: *ManagementProvider) {
     }
 }
 
+// The name to offer for the shared web account: the name in its public
+// profile, or its short ID.
+ProviderSharedWebName :: (provider: *ManagementProvider, owner: string) {
+    document: [65536]u8
+    state: EntityState
+    text := SharedWebText("sharedProfileDocument", document[:])
+    if text != "" && EntityDecode(text, *state) && TextUntilNul(state.owner_id[:]) == owner && state.name[0] != cast(u8)0 {
+        provider.shared_name = .{}
+        unused CopyCString(TextUntilNul(state.name[:]), provider.shared_name[:])
+        return
+    }
+    provider.shared_name = .{}
+    unused CopyCString(owner, provider.shared_name[:])
+}
+
+// Passes this host's own sign-in on to the other waozi.xyz sites.
+ProviderSharedWebOffer :: (provider: *ManagementProvider, recovery: *Recovery, only_if_empty: bool) {
+    #if #defined(PLATFORM_WEB) {
+        if provider.shared_web_files { return }
+        text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+        defer { SecureWipe(*text[0], text.count) }
+        if RecoveryEncode(recovery, "", text[:]) {
+            SharedWebShare(TextUntilNul(text[:]), TextUntilNul(recovery.keys.public_id[:]), only_if_empty)
+        }
+    }
+}
+
+// Hosts with their own key store, such as Breeze and Werk, follow the shared
+// web sign-in here. Until the hub answers, each keeps working on its own.
+ProviderSharedWebPump :: (provider: *ManagementProvider) {
+    if provider.shared_web_files || !SharedWebFlag("sharedAccountReady") || provider.queue.pending { return }
+    key_buffer: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*key_buffer[0], key_buffer.count) }
+    owner_buffer: [65]u8
+    gone_buffer: [65]u8
+    key := SharedWebText("sharedAccountKey", key_buffer[:])
+    owner := SharedWebText("sharedAccountOwner", owner_buffer[:])
+    state := ProviderState(provider)
+    local := ifx state.account then TextUntilNul(state.public_id[:]) else ""
+    decision := SharedWebDecide(local, key, owner, SharedWebFlag("sharedAccountInitialized"),
+        SharedWebText("sharedAccountSignedOut", gone_buffer[:]))
+    if decision != SHARED_WEB_OFFER && decision != SHARED_WEB_ADOPT { provider.shared_name = .{} }
+    if decision == SHARED_WEB_SEED {
+        if TextUntilNul(provider.shared_web_tried[:]) == local { return }
+        provider.shared_web_tried = state.public_id
+        recovery: Recovery
+        defer { RecoveryClear(*recovery) }
+        if provider.load != null && provider.load(provider.context, *recovery) { ProviderSharedWebOffer(provider, *recovery, true) }
+    } else if decision == SHARED_WEB_OFFER {
+        ProviderSharedWebName(provider, owner)
+    } else if decision == SHARED_WEB_ADOPT {
+        if TextUntilNul(provider.shared_web_tried[:]) == owner { return }
+        unused CopyCString(owner, provider.shared_web_tried[:])
+        incoming: Recovery
+        defer { RecoveryClear(*incoming) }
+        if provider.apply == null || !RecoveryDecode(key, "", *incoming) ||
+        TextUntilNul(incoming.keys.public_id[:]) != owner { return }
+        // Local records from another owner are the owner's choice to make.
+        if provider.apply(provider.context, *incoming, 0) != 1 { ProviderSharedWebName(provider, owner) }
+    } else if decision == SHARED_WEB_SIGN_OUT {
+        request: ManagementRequest
+        unused CopyCString("logout", request.operation[:])
+        unused CopyCString(local, request.owner_id[:])
+        if provider.action != null && provider.action(provider.context, *request) == 1 {
+            ProviderBridgeSignOut(provider)
+            ProviderSignOutClear(provider, local, false)
+        }
+    }
+}
+
 ProviderContinue :: (provider: *ManagementProvider) {
     root_buffer: [4096]u8
     incoming: Recovery
     defer { RecoveryClear(*incoming) }
-    if !SharedAccountRead(SharedAccountRoot(root_buffer[:]), *incoming) {
+    web_key: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*web_key[0], web_key.count) }
+    shared_key := SharedWebText("sharedAccountKey", web_key[:])
+    available := false
+    if shared_key != "" { available = RecoveryDecode(shared_key, "", *incoming) }
+    else { available = SharedAccountRead(SharedAccountRoot(root_buffer[:]), *incoming) }
+    if !available {
         provider.shared_name = .{}
         ProviderFinish(provider, "error", "That account is no longer signed in on this device")
         return
@@ -410,8 +497,11 @@ ProviderSignOutFirst :: (provider: *ManagementProvider) {
 }
 
 // Nothing of the account stays in memory once it is signed out here.
-ProviderSignOutClear :: (provider: *ManagementProvider, owner: string) {
+ProviderSignOutClear :: (provider: *ManagementProvider, owner: string, share: bool = true) {
     root_buffer: [4096]u8
+    if share && !provider.shared_web_files { SharedWebShare("", owner, false) }
+    provider.shared_web_tried = .{}
+    provider.shared_name = .{}
     unused SharedAccountRemove(SharedAccountRoot(root_buffer[:]), owner)
     provider.shared_owner = .{}
     provider.shared_next = 0
