@@ -1,0 +1,498 @@
+// "Continue as @name" between Waozi apps on one Android device.
+//
+// An app with no account asks an app that is signed in. The asking app makes
+// one-time keys and passes their public half. The signed-in app shows a native
+// consent dialog, checks the caller's package and signing certificate against
+// the table below, and seals the account to those keys. The account never
+// crosses an Intent unsealed, and each side checks the other's certificate.
+//
+// The Android Activities and the name provider are Kryon's
+// (templates/android-account-handoff). They hold no account logic: every decision
+// here reaches them through the natives AccountHandoffJniOnLoad registers.
+//
+// The consent dialog can open when the signed-in app is not running, so the
+// app keeps a private copy of its account where the dialog can read it, in the
+// app's no_backup folder: only that app can read it and Android never backs
+// it up. It has the same protection as the app's own key.
+#import "pairing"
+#import "recovery"
+#import "native_files"
+#import "model"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/file"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/byte_text_linux"
+#if #defined(ANDROID_BUILD) {
+    #import "kryon/android_jni"
+}
+// A device test's own packages (work/account-handoff), never in a shipped build.
+#if #defined(ACCOUNT_HANDOFF_PROBE) {
+    #import "account_handoff_probe_rows"
+}
+
+// Each row is an app that may ask for, and offer, the account: its exact package
+// and the SHA-256 of its signing certificate, lowercase hex without colons.
+// Add a row and raise the count to add an app, or a second certificate for a
+// package, such as a Play App Signing certificate. Debug and test packages have
+// other names, so they are never listed.
+AccountHandoffApp :: struct {
+    package: string
+    certificate: string
+}
+
+AccountHandoffAppAt :: (index: s64, output: *AccountHandoffApp) -> bool {
+    apps: [7]AccountHandoffApp = .[
+    AccountHandoffApp.{"xyz.waozi.inbe", "47648dc7665db12a97c3077a4892ce29072c756bb31b5c331b8924493c888475"},
+    AccountHandoffApp.{"xyz.waozi.wurm", "d2b9e4259dc34f3236121b10dd3495f8c9f687361546c8c779a8fd6cfc44e668"},
+    AccountHandoffApp.{"xyz.waozi.shovey", "3f687dd9aa7edd8c81b9d3ade255f0b620be7b9fd62783e5f8d7e7f7df658820"},
+    AccountHandoffApp.{"xyz.waozi.arcade", "afb41b87784e68ceeb5cc49912e3d4237561a1d79853fd934bef8a86eae27968"},
+    AccountHandoffApp.{"xyz.waozi.choano", "181c2124b549b190d4bfebddf0335eb276ba71877957decafcb0f6a408f91694"},
+    // Werkzeug keeps Pass's package on Android; older releases are xyz.waozi.werk.
+    AccountHandoffApp.{"xyz.waozi.pass", "1ac82db5bc8f742b8161fdd7083cefc16b39524dce7d103a7eb7f1ee19589c2d"},
+    AccountHandoffApp.{"xyz.waozi.werk", "1ac82db5bc8f742b8161fdd7083cefc16b39524dce7d103a7eb7f1ee19589c2d"}
+    ]
+    if index < 0 || index >= apps.count { return false }
+    output.* = apps[index]
+    return true
+}
+
+// Compares every byte, so the time taken does not show how much matched.
+AccountHandoffSameText :: (first: string, second: string) -> bool {
+    if first.count != second.count { return false }
+    difference: u8 = cast(u8)0
+    for byte, index: first { difference = difference | (byte ^ second[index]) }
+    return difference == cast(u8)0
+}
+
+// Whether this package with this signing certificate may ask for the account.
+// Every row is compared; an unknown caller is refused and falls back to Sign in.
+AccountHandoffCallerAllowed :: (package: string, cert_sha256: string) -> bool {
+    if package == "" || cert_sha256.count != 64 { return false }
+    allowed := false
+    row: AccountHandoffApp
+    index: s64 = 0
+    while AccountHandoffAppAt(index, *row) {
+        same_package := AccountHandoffSameText(package, row.package)
+        same_certificate := AccountHandoffSameText(cert_sha256, row.certificate)
+        if same_package && same_certificate { allowed = true }
+        index += 1
+    }
+    #if #defined(ACCOUNT_HANDOFF_PROBE) {
+        if AccountHandoffProbeAllowed(package, cert_sha256) { allowed = true }
+    }
+    return allowed
+}
+
+ACCOUNT_HANDOFF_KEY_FILE :: "account.key"
+ACCOUNT_HANDOFF_NAME_FILE :: "account.name"
+ACCOUNT_HANDOFF_NAME_MAX :: 80
+// The sealed format needs a node address. A hand-off carries the account only
+// and each app keeps its own node, so nothing reads this one.
+ACCOUNT_HANDOFF_SERVER :: "https://waozi.xyz"
+
+// Keeps this app's copy current for the consent dialog, replacing any earlier
+// account. alias "" offers the public ID instead.
+AccountHandoffPublishTo :: (root: string, value: *Recovery, alias: string) -> bool {
+    if root == "" || value == null || value.keys.public_id[0] == cast(u8)0 || !NativeDirectory(root) { return false }
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    key_path: [4096]u8
+    name_path: [4096]u8
+    if !RecoveryEncode(value, "", text[:]) { return false }
+    // The name goes first, so a dialog never shows an older name for a newer key.
+    name := ifx alias == "" then TextUntilNul(value.keys.public_id[:]) else alias
+    return NativeWrite(NativeJoin(name_path[:], root, ACCOUNT_HANDOFF_NAME_FILE), name) &&
+    NativeWrite(NativeJoin(key_path[:], root, ACCOUNT_HANDOFF_KEY_FILE), TextUntilNul(text[:]))
+}
+
+// Signing out here means this app offers nothing any more.
+AccountHandoffWithdrawFrom :: (root: string) {
+    if root == "" { return }
+    key_path: [4096]u8
+    name_path: [4096]u8
+    unused RemoveFile(NativeJoin(key_path[:], root, ACCOUNT_HANDOFF_KEY_FILE))
+    unused RemoveFile(NativeJoin(name_path[:], root, ACCOUNT_HANDOFF_NAME_FILE))
+}
+
+// The public name to offer, or "" with no account. Nothing else is ever offered.
+AccountHandoffNameFrom :: (root: string, output: []u8) -> string {
+    if output.count > 0 { output[0] = cast(u8)0 }
+    if root == "" { return "" }
+    key_path: [4096]u8
+    name_path: [4096]u8
+    if !PathExists(NativeJoin(key_path[:], root, ACCOUNT_HANDOFF_KEY_FILE)) { return "" }
+    if NativeRead(NativeJoin(name_path[:], root, ACCOUNT_HANDOFF_NAME_FILE), output) <= 0 { return "" }
+    return ifx AccountHandoffNameValid(TextUntilNul(output)) then TextUntilNul(output) else ""
+}
+
+// A name crosses between apps, so anything that is not a printable name is dropped.
+AccountHandoffNameValid :: (name: string) -> bool {
+    if name.count >= ACCOUNT_HANDOFF_NAME_MAX { return false }
+    for byte: name {
+        if byte < cast(u8)32 || byte == cast(u8)127 { return false }
+    }
+    return true
+}
+
+// What "Continue as" names: @username, or the start of the public ID without one.
+AccountHandoffLabel :: (name: string, output: []u8) -> string {
+    if name == "" || output.count < ACCOUNT_HANDOFF_NAME_MAX + 2 {
+        if output.count > 0 { output[0] = cast(u8)0 }
+        return ""
+    }
+    at: s64 = 0
+    if name.count == 64 {
+        for byte: name[:8] {
+            output[at] = byte
+            at += 1
+        }
+        // U+2026, the ellipsis.
+        output[at] = cast(u8)226
+        output[at + 1] = cast(u8)128
+        output[at + 2] = cast(u8)166
+        at += 3
+    } else {
+        output[0] = #char "@"
+        at = 1
+        for byte: name {
+            output[at] = byte
+            at += 1
+        }
+    }
+    output[at] = cast(u8)0
+    return TextUntilNul(output)
+}
+
+// Seals this app's account to the asking app's one-time keys. "" when signed
+// out or when the request is not well formed. Fresh keys seal every hand-off.
+AccountHandoffSealFrom :: (root: string, bundle_text: string, id: string) -> string {
+    if root == "" || !DeviceLinkHexValid(id, DEVICE_LINK_ID_HEX) { return "" }
+    receiver: [DEVICE_LINK_BUNDLE]u8
+    if !DeviceLinkBundleRead(bundle_text, null, *receiver[0]) { return "" }
+    key_path: [4096]u8
+    text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*text[0], text.count) }
+    if NativeRead(NativeJoin(key_path[:], root, ACCOUNT_HANDOFF_KEY_FILE), text[:]) <= 0 { return "" }
+    account: Recovery
+    defer { RecoveryClear(*account) }
+    if !RecoveryDecode(TextUntilNul(text[:]), "", *account) { return "" }
+    sender: DeviceLinkKeys
+    defer { DeviceLinkForget(*sender) }
+    if !DeviceLinkNewKeys(*sender) { return "" }
+    return DeviceLinkHybridSeal(*account.keys, ACCOUNT_HANDOFF_SERVER, id, *sender, *receiver[0], true,
+        TextUntilNul(account.context[:]))
+}
+
+// One request from the asking app: its one-time keys and a fresh ID that the
+// seal is bound to, so a message from another hand-off never opens.
+AccountHandoffRequest :: struct {
+    keys: DeviceLinkKeys
+    id: [DEVICE_LINK_ID_HEX + 1]u8
+}
+
+AccountHandoffRequestNew :: (request: *AccountHandoffRequest) -> bool {
+    return DeviceLinkNewKeys(*request.keys) && DeviceLinkNewID(request.id[:])
+}
+
+AccountHandoffRequestClear :: (request: *AccountHandoffRequest) {
+    DeviceLinkForget(*request.keys)
+    request.* = AccountHandoffRequest.{}
+}
+
+// Opens what the signed-in app sent. output is then applied through
+// ManagementProvider's incoming path, like any other account.
+AccountHandoffOpen :: (message: string, request: *AccountHandoffRequest, output: *Recovery) -> bool {
+    opened := DeviceLinkHybridOpen(message, TextUntilNul(request.id[:]), *request.keys, false, null)
+    defer { SecureWipe(*opened.account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+    defer { SecureWipe(*opened.context[0], opened.context.count) }
+    if !opened.valid { return false }
+    output.keys = opened.account
+    output.context = opened.context
+    return true
+}
+
+// What AccountHandoffPoll answers.
+ACCOUNT_HANDOFF_PENDING :: 0
+ACCOUNT_HANDOFF_DONE :: 1
+// The person said no: stay on the sign-in choices.
+ACCOUNT_HANDOFF_CANCELLED :: 2
+// The other app is signed out or refused: stop offering it.
+ACCOUNT_HANDOFF_REFUSED :: 3
+ACCOUNT_HANDOFF_FAILED :: 4
+
+account_handoff_request: AccountHandoffRequest;
+account_handoff_active: bool;
+account_handoff_text: [DEVICE_LINK_MESSAGE_MAX + 64]u8;
+
+// This app's private folder for its copy, on Android; "" elsewhere.
+AccountHandoffRoot :: (output: []u8) -> string {
+    #if #defined(ANDROID_BUILD) {
+        files: [4096]u8
+        path := AndroidPrivateDataPath(files[:])
+        tail := "/files"
+        if path.count <= tail.count || path[path.count - tail.count:] != tail { return "" }
+        return NativeJoin(output, path[:path.count - tail.count], "no_backup/waozi-account")
+    }
+    unused output
+    return ""
+}
+
+AccountHandoffPublish :: (value: *Recovery, alias: string) -> bool {
+    root: [4096]u8
+    return AccountHandoffPublishTo(AccountHandoffRoot(root[:]), value, alias)
+}
+
+AccountHandoffWithdraw :: () {
+    root: [4096]u8
+    AccountHandoffWithdrawFrom(AccountHandoffRoot(root[:]))
+}
+
+// The name another signed-in app offers, or "". Asking is cheap: the other apps
+// are looked up off the render thread and the answer arrives on a later call.
+AccountHandoffOfferedName :: (output: []u8) -> string {
+    if output.count > 0 { output[0] = cast(u8)0 }
+    #if #defined(ANDROID_BUILD) {
+        answer := AccountHandoffJavaCall("offer", output)
+        return ifx AccountHandoffNameValid(answer) then answer else ""
+    }
+    return ""
+}
+
+// Opens the other app's consent dialog. Poll until it answers.
+AccountHandoffStart :: () -> bool {
+    AccountHandoffCancel()
+    #if #defined(ANDROID_BUILD) {
+        if !AccountHandoffRequestNew(*account_handoff_request) { return false }
+        bundle := DeviceLinkBundleText(*account_handoff_request.keys)
+        defer { EntityFree(bundle) }
+        request: Vec(u8)
+        BuilderPrint(*request, "start:%:%", TextUntilNul(account_handoff_request.id[:]), bundle)
+        text := BuilderFinish(request)
+        defer { EntityFree(text) }
+        answer: [16]u8
+        if bundle == "" || AccountHandoffJavaCall(text, answer[:]) != "started" {
+            AccountHandoffRequestClear(*account_handoff_request)
+            return false
+        }
+        account_handoff_active = true
+        return true
+    }
+    return false
+}
+
+// On ACCOUNT_HANDOFF_DONE output holds the account, for the caller to apply and clear.
+AccountHandoffPoll :: (output: *Recovery) -> s32 {
+    #if #defined(ANDROID_BUILD) {
+        if !account_handoff_active { return ACCOUNT_HANDOFF_FAILED }
+        answer := AccountHandoffJavaCall("poll", account_handoff_text[:])
+        if answer == "pending" { return ACCOUNT_HANDOFF_PENDING }
+        status: s32 = ACCOUNT_HANDOFF_FAILED
+        prefix := "sealed:"
+        if answer == "cancelled" {
+            status = ACCOUNT_HANDOFF_CANCELLED
+        } else if answer == "refused" {
+            status = ACCOUNT_HANDOFF_REFUSED
+        } else if answer.count > prefix.count && answer[:prefix.count] == prefix &&
+        AccountHandoffOpen(answer[prefix.count:], *account_handoff_request, output) {
+            status = ACCOUNT_HANDOFF_DONE
+        }
+        account_handoff_active = false
+        AccountHandoffRequestClear(*account_handoff_request)
+        return status
+    }
+    unused output
+    return ACCOUNT_HANDOFF_FAILED
+}
+
+// Forgets an unanswered hand-off. A late answer finds nothing to open it with.
+AccountHandoffCancel :: () {
+    if !account_handoff_active { return }
+    account_handoff_active = false
+    AccountHandoffRequestClear(*account_handoff_request)
+    #if #defined(ANDROID_BUILD) {
+        answer: [16]u8
+        unused AccountHandoffJavaCall("cancel", answer[:])
+    }
+}
+
+#if #defined(ANDROID_BUILD) {
+    AccountHandoffJniName :: (text: string, output: []u8) -> *u8 {
+        if !CopyCString(text, output) { return null }
+        return *output[0]
+    }
+
+    AccountHandoffJniClear :: (env: *JniEnv) -> bool {
+        if env.functions.ExceptionCheck(env) == 0 { return false }
+        env.functions.ExceptionClear(env)
+        return true
+    }
+
+    // Kryon's class through the activity's class loader. An app without it
+    // answers null, and so offers nothing.
+    AccountHandoffJavaClass :: (env: *JniEnv, activity: *void) -> *void {
+        activity_class := env.functions.GetObjectClass(env, activity)
+        if activity_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, activity_class) }
+        method_name: [24]u8
+        method_type: [40]u8
+        get_loader := env.functions.GetMethodID(env, activity_class, AccountHandoffJniName("getClassLoader", method_name[:]), AccountHandoffJniName("()Ljava/lang/ClassLoader;", method_type[:]))
+        if get_loader == null { AccountHandoffJniClear(env); return null }
+        loader := env.functions.CallObjectMethodA(env, activity, get_loader, null)
+        if AccountHandoffJniClear(env) || loader == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader) }
+        loader_class := env.functions.GetObjectClass(env, loader)
+        if loader_class == null { return null }
+        defer { env.functions.DeleteLocalRef(env, loader_class) }
+        load_name: [16]u8
+        load_type: [48]u8
+        load := env.functions.GetMethodID(env, loader_class, AccountHandoffJniName("loadClass", load_name[:]), AccountHandoffJniName("(Ljava/lang/String;)Ljava/lang/Class;", load_type[:]))
+        if load == null { AccountHandoffJniClear(env); return null }
+        arguments: [1]JniValue
+        class_name: [56]u8
+        arguments[0].reference = AndroidJniString(env, AccountHandoffJniName("org.kryonlabs.platform.AccountHandoff", class_name[:]))
+        if arguments[0].reference == null { return null }
+        defer { env.functions.DeleteLocalRef(env, arguments[0].reference) }
+        found := env.functions.CallObjectMethodA(env, loader, load, *arguments[0])
+        if AccountHandoffJniClear(env) { return null }
+        return found
+    }
+
+    AccountHandoffJavaCall :: (request: string, output: []u8) -> string {
+        output[0] = cast(u8)0
+        text: [DEVICE_LINK_BUNDLE * 2 + 64]u8
+        if !CopyCString(request, text[:]) { return "" }
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return "" }
+        defer { AndroidJniDetachCurrent(*session) }
+        env := session.env
+        bridge := AccountHandoffJavaClass(env, session.activity)
+        if bridge == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, bridge) }
+        method_name: [8]u8
+        method_type: [80]u8
+        method := env.functions.GetStaticMethodID(env, bridge, AccountHandoffJniName("call", method_name[:]),
+            AccountHandoffJniName("(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;", method_type[:]))
+        if method == null { AccountHandoffJniClear(env); return "" }
+        arguments: [2]JniValue
+        arguments[0].reference = session.activity
+        arguments[1].reference = AndroidJniString(env, *text[0])
+        if arguments[1].reference == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, arguments[1].reference) }
+        value := env.functions.CallStaticObjectMethodA(env, bridge, method, *arguments[0])
+        if AccountHandoffJniClear(env) || value == null { return "" }
+        defer { env.functions.DeleteLocalRef(env, value) }
+        bytes := env.functions.GetStringUTFChars(env, value, null)
+        if bytes == null { return "" }
+        defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+        if !CopyCString(TextFromCString(bytes), output) {
+            output[0] = cast(u8)0
+            return ""
+        }
+        return TextUntilNul(output)
+    }
+
+    AccountHandoffJniText :: (env: *JniEnv, value: *void, output: []u8) -> string {
+        output[0] = cast(u8)0
+        if env == null || value == null { return "" }
+        bytes := env.functions.GetStringUTFChars(env, value, null)
+        if bytes == null { return "" }
+        defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+        if !CopyCString(TextFromCString(bytes), output) {
+            output[0] = cast(u8)0
+            return ""
+        }
+        return TextUntilNul(output)
+    }
+
+    AccountHandoffJniAnswer :: (env: *JniEnv, text: string) -> *void {
+        if text == "" { return null }
+        copy: [DEVICE_LINK_MESSAGE_MAX + 64]u8
+        if !CopyCString(text, copy[:]) { return null }
+        return env.functions.NewStringUTF(env, *copy[0])
+    }
+
+    #program_export
+    AccountHandoffNativeAllowed :: (env: *JniEnv, klass: *void, package: *void, certificate: *void) -> u8 {
+        unused klass
+        package_text: [256]u8
+        certificate_text: [65]u8
+        allowed := AccountHandoffCallerAllowed(AccountHandoffJniText(env, package, package_text[:]),
+            AccountHandoffJniText(env, certificate, certificate_text[:]))
+        return ifx allowed then cast(u8)1 else cast(u8)0
+    }
+
+    #program_export
+    AccountHandoffNativeName :: (env: *JniEnv, klass: *void, root: *void) -> *void {
+        unused klass
+        root_text: [4096]u8
+        name: [ACCOUNT_HANDOFF_NAME_MAX]u8
+        return AccountHandoffJniAnswer(env, AccountHandoffNameFrom(AccountHandoffJniText(env, root, root_text[:]), name[:]))
+    }
+
+    #program_export
+    AccountHandoffNativeLabel :: (env: *JniEnv, klass: *void, root: *void) -> *void {
+        unused klass
+        root_text: [4096]u8
+        name: [ACCOUNT_HANDOFF_NAME_MAX]u8
+        label: [ACCOUNT_HANDOFF_NAME_MAX + 2]u8
+        return AccountHandoffJniAnswer(env, AccountHandoffLabel(AccountHandoffNameFrom(AccountHandoffJniText(env, root, root_text[:]), name[:]), label[:]))
+    }
+
+    #program_export
+    AccountHandoffNativeSeal :: (env: *JniEnv, klass: *void, root: *void, bundle: *void, id: *void) -> *void {
+        unused klass
+        root_text: [4096]u8
+        bundle_text: [DEVICE_LINK_BUNDLE * 2 + 1]u8
+        id_text: [DEVICE_LINK_ID_HEX + 1]u8
+        sealed := AccountHandoffSealFrom(AccountHandoffJniText(env, root, root_text[:]),
+            AccountHandoffJniText(env, bundle, bundle_text[:]), AccountHandoffJniText(env, id, id_text[:]))
+        defer { EntityFree(sealed) }
+        return AccountHandoffJniAnswer(env, sealed)
+    }
+
+    AccountHandoffAllowedFn :: #type (*JniEnv, *void, *void, *void) -> u8 #c_call;
+    AccountHandoffTextFn :: #type (*JniEnv, *void, *void) -> *void #c_call;
+    AccountHandoffSealFn :: #type (*JniEnv, *void, *void, *void, *void) -> *void #c_call;
+    AccountHandoffProcedure :: union {
+        allowed: AccountHandoffAllowedFn
+        text: AccountHandoffTextFn
+        seal: AccountHandoffSealFn
+    }
+    AccountHandoffMethod :: struct {
+        name: *u8
+        signature: *u8
+        procedure: AccountHandoffProcedure
+    }
+
+    // An app's one line of wiring, in its JNI_OnLoad after AndroidJniOnLoad. It
+    // runs when the library loads, so the dialog works with the app closed. An
+    // app without Kryon's class has nothing to wire.
+    AccountHandoffJniOnLoad :: (vm: *JniVm) {
+        env: *JniEnv
+        if vm == null || vm.functions.GetEnv(vm, *env, JniVersion) != 0 || env == null { return }
+        class_name: [48]u8
+        klass := env.functions.FindClass(env, AccountHandoffJniName("org/kryonlabs/platform/AccountHandoff", class_name[:]))
+        if AccountHandoffJniClear(env) || klass == null { return }
+        defer { env.functions.DeleteLocalRef(env, klass) }
+        names: [4][24]u8
+        types: [4][88]u8
+        methods: [4]AccountHandoffMethod
+        methods[0].name = AccountHandoffJniName("nativeAllowed", names[0][:])
+        methods[0].signature = AccountHandoffJniName("(Ljava/lang/String;Ljava/lang/String;)Z", types[0][:])
+        methods[0].procedure.allowed = AccountHandoffNativeAllowed
+        methods[1].name = AccountHandoffJniName("nativeName", names[1][:])
+        methods[1].signature = AccountHandoffJniName("(Ljava/lang/String;)Ljava/lang/String;", types[1][:])
+        methods[1].procedure.text = AccountHandoffNativeName
+        methods[2].name = AccountHandoffJniName("nativeLabel", names[2][:])
+        methods[2].signature = AccountHandoffJniName("(Ljava/lang/String;)Ljava/lang/String;", types[2][:])
+        methods[2].procedure.text = AccountHandoffNativeLabel
+        methods[3].name = AccountHandoffJniName("nativeSeal", names[3][:])
+        methods[3].signature = AccountHandoffJniName("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", types[3][:])
+        methods[3].procedure.seal = AccountHandoffNativeSeal
+        unused env.functions.RegisterNatives(env, klass, cast(*void)*methods[0], 4)
+        unused AccountHandoffJniClear(env)
+    }
+}

@@ -5,6 +5,7 @@
 - In Google Play builds, optionally save encrypted account backups to Google Drive and choose the same backup in another app or phone. Local backup files remain available.
 
 - Continue as @name on a computer where another waozi app is signed in, using one shared account file.
+- Continue as @name on Android from another waozi app signed in on this phone. That app asks first and seals the account to a one-time key; only waozi apps with a listed signing certificate can ask.
 - Sign in with a username and password when you saved a backup online. The backup is sealed on this device; no one can reset your password.
 - Sign out always works, offline and without a backup. It reminds you once to back up unless this device already did.
 - Link devices with X25519 and ML-KEM-768 together; the code carries a relay ID and key hash so it stays easy to scan. Older codes keep working.

@@ -225,3 +225,13 @@ passkey-test: $(LIBOQS_LIBRARY)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/passkey-test/test
 
 test: passkey-test
+
+# "Continue as @name": the allowlist and sealing to one-time keys, no phone needed.
+.PHONY: account-handoff-test
+account-handoff-test: $(LIBOQS_LIBRARY)
+	mkdir -p build/account-handoff-test
+	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry account_handoff_test:main -o build/account-handoff-test tests/account_handoff_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/account-handoff-test -I$(MONOCYPHER_DIR)/src $$(rg --files build/account-handoff-test -g '*.c') $(MONOCYPHER_SOURCES) $(LIBOQS_LIBRARY) -lpthread -lm -o build/account-handoff-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS ACCOUNT_HANDOFF_TEST_ROOT=$(abspath build/account-handoff-test/store) build/account-handoff-test/test
+
+test: account-handoff-test

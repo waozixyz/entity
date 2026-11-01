@@ -1,0 +1,211 @@
+// "Continue as @name": who may ask, sealing to one-time keys, and signing out.
+// The Android Activities around this have no account logic of their own.
+#import "account_handoff"
+#import "pairing"
+#import "recovery"
+#import "model"
+#import "native_files"
+#import "daochi_client/keys"
+#import "daochi_client/crypto"
+#import "std/c_string"
+#import "std/file"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+
+INBE :: "47648dc7665db12a97c3077a4892ce29072c756bb31b5c331b8924493c888475"
+ARCADE :: "afb41b87784e68ceeb5cc49912e3d4237561a1d79853fd934bef8a86eae27968"
+
+Fail :: (code: s32, what: string) -> s32 {
+    unused what
+    return code
+}
+
+CheckTable :: () -> s32 {
+    row: AccountHandoffApp
+    index: s64 = 0
+    while AccountHandoffAppAt(index, *row) {
+        if row.certificate.count != 64 || !DeviceLinkHexValid(row.certificate, 64) { return Fail(10, "a certificate is not lowercase SHA-256 hex") }
+        if !AccountHandoffCallerAllowed(row.package, row.certificate) { return Fail(11, "a listed app is refused") }
+        index += 1
+    }
+    if index < 7 { return Fail(12, "the table lost an app") }
+    return 0
+}
+
+CheckAllowed :: () -> s32 {
+    if !AccountHandoffCallerAllowed("xyz.waozi.inbe", INBE) { return Fail(20, "Inbe is refused") }
+    if !AccountHandoffCallerAllowed("xyz.waozi.arcade", ARCADE) { return Fail(21, "Arcade is refused") }
+    if AccountHandoffCallerAllowed("xyz.waozi.arcade", INBE) { return Fail(22, "another app's certificate is accepted") }
+    if AccountHandoffCallerAllowed("com.example.inbe", INBE) { return Fail(23, "an unknown package is accepted") }
+    if AccountHandoffCallerAllowed("", INBE) || AccountHandoffCallerAllowed("xyz.waozi.inbe", "") { return Fail(24, "an empty value is accepted") }
+    // Debug installs have their own names and keys.
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe.debug", INBE) { return Fail(25, ".debug is accepted") }
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe.gplay.debug", INBE) { return Fail(26, ".gplay.debug is accepted") }
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe.verification", INBE) { return Fail(27, ".verification is accepted") }
+    // Certificates must be exact, including a change in the last character or in case.
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe", "47648dc7665db12a97c3077a4892ce29072c756bb31b5c331b8924493c888474") { return Fail(28, "a changed certificate is accepted") }
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe", "47648DC7665DB12A97C3077A4892CE29072C756BB31B5C331B8924493C888475") { return Fail(29, "upper case is accepted") }
+    if AccountHandoffCallerAllowed("xyz.waozi.inbe", INBE[:63]) { return Fail(30, "a short certificate is accepted") }
+    if AccountHandoffSameText("abc", "abd") || !AccountHandoffSameText("abc", "abc") || AccountHandoffSameText("abc", "abcd") { return Fail(31, "comparison is wrong") }
+    return 0
+}
+
+CheckLabels :: () -> s32 {
+    output: [ACCOUNT_HANDOFF_NAME_MAX + 2]u8
+    if AccountHandoffLabel("wao", output[:]) != "@wao" { return Fail(40, "a username needs its @") }
+    id := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    if AccountHandoffLabel(id, output[:]) != "01234567…" { return Fail(41, "a public ID is not shortened") }
+    if AccountHandoffLabel("", output[:]) != "" { return Fail(42, "no name gives no label") }
+    return 0
+}
+
+SealedHolds :: (text: string, part: string) -> bool {
+    at: s64 = 0
+    while at + part.count <= text.count {
+        if text[at:at + part.count] == part { return true }
+        at += 1
+    }
+    return false
+}
+
+tampered_text: [DEVICE_LINK_MESSAGE_MAX]u8;
+
+TamperedOpens :: (sealed: string, place: s64, request: *AccountHandoffRequest, output: *Recovery) -> bool {
+    if !CopyCString(sealed, tampered_text[:]) { return true }
+    tampered_text[place] = ifx tampered_text[place] == #char "0" then #char "1" else #char "0"
+    return AccountHandoffOpen(TextUntilNul(tampered_text[:]), request, output)
+}
+
+CheckRoundTrip :: (root: string) -> s32 {
+    AccountHandoffWithdrawFrom(root)
+    name: [ACCOUNT_HANDOFF_NAME_MAX]u8
+    if AccountHandoffNameFrom(root, name[:]) != "" { return Fail(50, "an empty folder offers a name") }
+
+    account: Recovery
+    defer { RecoveryClear(*account) }
+    if CreateAccountKeys(*account.keys) == 0 { return Fail(51, "no account") }
+    unused CopyCString("vault-context", account.context[:])
+    if !AccountHandoffPublishTo(root, *account, "wao") { return Fail(52, "publish") }
+    if AccountHandoffNameFrom(root, name[:]) != "wao" { return Fail(53, "wrong name") }
+
+    request: AccountHandoffRequest
+    defer { AccountHandoffRequestClear(*request) }
+    if !AccountHandoffRequestNew(*request) { return Fail(54, "request") }
+    bundle := DeviceLinkBundleText(*request.keys)
+    defer { EntityFree(bundle) }
+    id_copy: [DEVICE_LINK_ID_HEX + 1]u8
+    unused CopyCString(TextUntilNul(request.id[:]), id_copy[:])
+    id := TextUntilNul(id_copy[:])
+    if id.count != DEVICE_LINK_ID_HEX { return Fail(55, "ID size") }
+
+    sealed := AccountHandoffSealFrom(root, bundle, id)
+    defer { EntityFree(sealed) }
+    if sealed == "" { return Fail(56, "seal") }
+
+    // The sealed text holds neither key in the clear.
+    private_copy: [ACCOUNT_PRIVATE_KEY_HEX_SIZE]u8
+    unused CopyCString(TextUntilNul(account.keys.private_key_hex[:]), private_copy[:])
+    private_hex := TextUntilNul(private_copy[:])
+    needle := private_hex[:64]
+    if SealedHolds(sealed, needle) { return Fail(57, "the private key is readable") }
+
+    opened: Recovery
+    defer { RecoveryClear(*opened) }
+    if !AccountHandoffOpen(sealed, *request, *opened) { return Fail(58, "open") }
+    if TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(account.keys.public_id[:]) { return Fail(59, "public ID differs") }
+    if TextUntilNul(opened.keys.private_key_hex[:]) != private_hex { return Fail(60, "private key differs") }
+    if TextUntilNul(opened.context[:]) != "vault-context" { return Fail(61, "context differs") }
+
+    // Bound to this request's ID.
+    wrong_id: AccountHandoffRequest
+    defer { AccountHandoffRequestClear(*wrong_id) }
+    wrong_id = request
+    if !DeviceLinkNewID(wrong_id.id[:]) { return Fail(62, "second ID") }
+    other: Recovery
+    defer { RecoveryClear(*other) }
+    if AccountHandoffOpen(sealed, *wrong_id, *other) { return Fail(63, "opens with another ID") }
+
+    // Only the one-time keys open it.
+    wrong_keys: AccountHandoffRequest
+    defer { AccountHandoffRequestClear(*wrong_keys) }
+    if !AccountHandoffRequestNew(*wrong_keys) { return Fail(64, "other keys") }
+    wrong_keys.id = request.id
+    if AccountHandoffOpen(sealed, *wrong_keys, *other) { return Fail(65, "opens with other keys") }
+
+    // Tampering is refused, at the start, the middle and the end.
+    places: [3]s64 = .[0, sealed.count / 2, sealed.count - 1]
+    for place: places {
+        if TamperedOpens(sealed, place, *request, *other) { return Fail(66, "opens when tampered") }
+    }
+    if AccountHandoffOpen("", *request, *other) { return Fail(67, "opens nothing") }
+    if AccountHandoffOpen(sealed[:sealed.count - 2], *request, *other) { return Fail(68, "opens when cut short") }
+
+    // A request that is not well formed gets nothing.
+    if AccountHandoffSealFrom(root, "", id) != "" { return Fail(70, "seals to no keys") }
+    if AccountHandoffSealFrom(root, bundle[:bundle.count - 2], id) != "" { return Fail(71, "seals to short keys") }
+    if AccountHandoffSealFrom(root, bundle, "") != "" { return Fail(72, "seals with no ID") }
+    if AccountHandoffSealFrom(root, bundle, "XYZ") != "" { return Fail(73, "seals with a bad ID") }
+
+    // Every hand-off is sealed apart.
+    second := AccountHandoffSealFrom(root, bundle, id)
+    defer { EntityFree(second) }
+    if second == "" || second == sealed { return Fail(74, "repeated seal") }
+
+    // A different account replaces the copy here: this is the app's own.
+    replacement: Recovery
+    defer { RecoveryClear(*replacement) }
+    if CreateAccountKeys(*replacement.keys) == 0 { return Fail(75, "second account") }
+    if !AccountHandoffPublishTo(root, *replacement, "") { return Fail(76, "publish over") }
+    if AccountHandoffNameFrom(root, name[:]) != TextUntilNul(replacement.keys.public_id[:]) { return Fail(77, "no alias offers the public ID") }
+    newest := AccountHandoffSealFrom(root, bundle, id)
+    defer { EntityFree(newest) }
+    if !AccountHandoffOpen(newest, *request, *other) { return Fail(78, "open newest") }
+    if TextUntilNul(other.keys.public_id[:]) != TextUntilNul(replacement.keys.public_id[:]) { return Fail(79, "old account handed over") }
+
+    // Signing out means no offer and nothing to seal.
+    AccountHandoffWithdrawFrom(root)
+    if AccountHandoffNameFrom(root, name[:]) != "" { return Fail(80, "signed out still offers a name") }
+    if AccountHandoffSealFrom(root, bundle, id) != "" { return Fail(81, "signed out still seals") }
+
+    // A name without its key is no offer; a damaged name is not shown.
+    path: [4096]u8
+    if !NativeWrite(NativeJoin(path[:], root, "account.name"), "stale") { return Fail(82, "write name") }
+    if AccountHandoffNameFrom(root, name[:]) != "" { return Fail(83, "a name without a key is offered") }
+    if !AccountHandoffPublishTo(root, *account, "line\nbreak") { return Fail(84, "publish name") }
+    if AccountHandoffNameFrom(root, name[:]) != "" { return Fail(85, "a control character is offered") }
+    AccountHandoffWithdrawFrom(root)
+    return 0
+}
+
+// The account keeps no copy beyond the two files, and neither stays after sign out.
+CheckFolderClean :: (root: string) -> s32 {
+    path: [4096]u8
+    if PathExists(NativeJoin(path[:], root, "account.key")) { return Fail(90, "key stayed") }
+    return 0
+}
+
+// Off Android the platform calls do nothing.
+CheckOtherPlatforms :: () -> s32 {
+    root: [64]u8
+    output: [ACCOUNT_HANDOFF_NAME_MAX]u8
+    recovery: Recovery
+    if AccountHandoffRoot(root[:]) != "" { return Fail(95, "a root off Android") }
+    if AccountHandoffOfferedName(output[:]) != "" { return Fail(96, "an offer off Android") }
+    if AccountHandoffStart() { return Fail(97, "a hand-off off Android") }
+    if AccountHandoffPoll(*recovery) != ACCOUNT_HANDOFF_FAILED { return Fail(98, "a poll off Android") }
+    if AccountHandoffPublish(*recovery, "") { return Fail(99, "a publish off Android") }
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    root := NativeEnvironment("ACCOUNT_HANDOFF_TEST_ROOT")
+    if root == "" { return Fail(1, "ACCOUNT_HANDOFF_TEST_ROOT is not set") }
+    result := CheckTable()
+    if result == 0 { result = CheckAllowed() }
+    if result == 0 { result = CheckLabels() }
+    if result == 0 { result = CheckRoundTrip(root) }
+    if result == 0 { result = CheckFolderClean(root) }
+    if result == 0 { result = CheckOtherPlatforms() }
+    return result
+}
