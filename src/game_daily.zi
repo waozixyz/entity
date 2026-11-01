@@ -1,0 +1,68 @@
+GameDaily :: struct {
+    days: s32
+    last_day: s64
+    week: s32
+}
+
+GameDailyEmpty :: () -> GameDaily {
+    return GameDaily.{days = 0, last_day = -1, week = 0}
+}
+
+GameDailyClaimReady :: (plan: GameDaily, today: s64) -> bool {
+    return today >= 0 && today > plan.last_day && plan.days < 65535
+}
+
+GameDailyClaim :: (plan: *GameDaily, today: s64) -> bool {
+    if !GameDailyClaimReady(plan.*, today) { return false }
+    plan.days += 1
+    plan.week = ifx plan.week > 0 && today == plan.last_day + 1 then plan.week % 7 + 1 else 1
+    plan.last_day = today
+    return true
+}
+
+GameDailyWeekClaimed :: (plan: GameDaily, today: s64) -> s32 {
+    if plan.week <= 0 || plan.last_day < 0 { return 0 }
+    claimed := plan.week
+    if today == plan.last_day + 1 { claimed = plan.week % 7 }
+    else if today > plan.last_day + 1 { claimed = 0 }
+    return ifx claimed > plan.days then plan.days else claimed
+}
+
+GameDailyMerge :: (plan: *GameDaily, remote_days: s32, remote_last: s64) -> bool {
+    if remote_days < 0 || remote_days > 65535 || remote_last < -1 || remote_last > 4000000 { return false }
+    if remote_last > plan.last_day {
+        if plan.week > 0 && remote_last == plan.last_day + 1 && remote_days == plan.days + 1 {
+            plan.week = plan.week % 7 + 1
+        } else {
+            plan.week = 1
+        }
+    }
+    if remote_days > plan.days { plan.days = remote_days }
+    if remote_last > plan.last_day { plan.last_day = remote_last }
+    return plan.days != remote_days || plan.last_day != remote_last
+}
+
+GameDailyEncode :: (plan: GameDaily, output: []u8) -> s64 {
+    if output.count < 8 { return -1 }
+    output[0] = 1
+    output[1] = cast(u8)(plan.days & 255)
+    output[2] = cast(u8)((plan.days >> 8) & 255)
+    stored := ifx plan.last_day < 0 then 4294967295 else plan.last_day
+    for index: 0..3 { output[index + 3] = cast(u8)((stored >> (index * 8)) & 255) }
+    output[7] = cast(u8)plan.week
+    return 8
+}
+
+GameDailyDecode :: (bytes: []u8) -> GameDaily {
+    if bytes.count != 8 || bytes[0] != 1 {
+        return GameDailyEmpty()
+    }
+    plan: GameDaily
+    plan.days = cast(s32)bytes[1] | (cast(s32)bytes[2] << 8)
+    stored: s64 = 0
+    for index: 0..3 { stored |= cast(s64)bytes[index + 3] << (index * 8) }
+    plan.last_day = ifx stored == 4294967295 then -1 else stored
+    plan.week = cast(s32)bytes[7]
+    if plan.week > 7 || (plan.week == 0 && plan.days > 0) { plan.week = 1 }
+    return plan
+}

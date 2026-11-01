@@ -1,0 +1,76 @@
+#import "game_daily"
+
+#program_export
+main :: () -> s32 {
+    first := GameDailyEmpty()
+    if !GameDailyClaimReady(first, 0) || !GameDailyClaim(*first, 0) ||
+    first.days != 1 || first.last_day != 0 || first.week != 1 { return 1 }
+    if GameDailyClaimReady(first, 0) || GameDailyClaim(*first, 0) { return 2 }
+
+    next := GameDaily.{days = 1, last_day = 0, week = 1}
+    if !GameDailyClaim(*next, 1) || next.days != 2 || next.last_day != 1 || next.week != 2 { return 3 }
+
+    missed := GameDaily.{days = 3, last_day = 0, week = 3}
+    if !GameDailyClaim(*missed, 2) || missed.days != 4 || missed.last_day != 2 || missed.week != 1 ||
+    GameDailyWeekClaimed(missed, 4) != 0 { return 4 }
+
+    wrapped := GameDaily.{days = 8, last_day = 7, week = 1}
+    if GameDailyWeekClaimed(wrapped, 8) != 1 { return 5 }
+
+    continuing := GameDaily.{days = 6, last_day = 10, week = 6}
+    if GameDailyMerge(*continuing, 7, 11) || continuing.days != 7 || continuing.last_day != 11 ||
+    continuing.week != 7 { return 6 }
+
+    farAhead := GameDaily.{days = 2, last_day = 10, week = 2}
+    if GameDailyMerge(*farAhead, 9, 30) || farAhead.days != 9 || farAhead.last_day != 30 ||
+    farAhead.week != 1 { return 7 }
+
+    stale := GameDaily.{days = 5, last_day = 20, week = 5}
+    if !GameDailyMerge(*stale, 2, 10) || stale.days != 5 || stale.last_day != 20 || stale.week != 5 { return 8 }
+
+    staleDays := GameDaily.{days = 3, last_day = 20, week = 3}
+    if !GameDailyMerge(*staleDays, 9, 10) || staleDays.days != 9 || staleDays.last_day != 20 ||
+    staleDays.week != 3 { return 9 }
+
+    invalid := GameDaily.{days = 4, last_day = 20, week = 4}
+    if GameDailyMerge(*invalid, -1, 21) || GameDailyMerge(*invalid, 65536, 21) ||
+    GameDailyMerge(*invalid, 5, -2) || GameDailyMerge(*invalid, 5, 4000001) ||
+    invalid.days != 4 || invalid.last_day != 20 || invalid.week != 4 { return 10 }
+
+    firstBytes: [8]u8
+    if GameDailyEncode(first, firstBytes[:]) != 8 || firstBytes[0] != 1 { return 11 }
+    restoredFirst := GameDailyDecode(firstBytes[:])
+    if restoredFirst.days != first.days || restoredFirst.last_day != first.last_day ||
+    restoredFirst.week != first.week { return 12 }
+
+    empty := GameDailyEmpty()
+    emptyBytes: [8]u8
+    if GameDailyEncode(empty, emptyBytes[:]) != 8 { return 13 }
+    restoredEmpty := GameDailyDecode(emptyBytes[:])
+    if restoredEmpty.days != 0 || restoredEmpty.last_day != -1 || restoredEmpty.week != 0 { return 14 }
+
+    full := GameDaily.{days = 65535, last_day = 4000000, week = 7}
+    fullBytes: [8]u8
+    if GameDailyEncode(full, fullBytes[:]) != 8 { return 15 }
+    restoredFull := GameDailyDecode(fullBytes[:])
+    if restoredFull.days != full.days || restoredFull.last_day != full.last_day ||
+    restoredFull.week != full.week { return 16 }
+
+    short: [7]u8
+    if GameDailyEncode(full, short[:]) != -1 { return 17 }
+
+    corrupt: [9]u8
+    corrupt[0] = 1
+    invalidLength := GameDailyDecode(short[:])
+    invalidVersion: [8]u8 = .[2, 0, 0, 255, 255, 255, 255, 0]
+    invalidLengthAgain := GameDailyDecode(corrupt[:])
+    invalidVersionAgain := GameDailyDecode(invalidVersion[:])
+    if invalidLength.days != 0 || invalidLength.last_day != -1 || invalidLength.week != 0 ||
+    invalidLengthAgain.days != 0 || invalidLengthAgain.last_day != -1 || invalidLengthAgain.week != 0 ||
+    invalidVersionAgain.days != 0 || invalidVersionAgain.last_day != -1 || invalidVersionAgain.week != 0 { return 18 }
+
+    normalizedWeek: [8]u8 = .[1, 2, 0, 0, 0, 0, 0, 0]
+    highWeek: [8]u8 = .[1, 2, 0, 0, 0, 0, 0, 8]
+    if GameDailyDecode(normalizedWeek[:]).week != 1 || GameDailyDecode(highWeek[:]).week != 1 { return 19 }
+    return 0
+}
