@@ -86,6 +86,12 @@ build/liboqs/lib/liboqs.a: ziran.lock Makefile
 	cmake -S $(LIBOQS_DIR) -B build/liboqs -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=OFF \
 		-DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF -DOQS_DIST_BUILD=OFF -DOQS_OPT_TARGET=generic '-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44;KEM_ml_kem_768'
 	cmake --build build/liboqs --target oqs
+
+# Native game shop and production browser routing against a private Daochi node.
+.PHONY: game-shop-test
+game-shop-test: $(LIBOQS_LIBRARY)
+	ZIRAN_BIN=$(ZIRAN) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/game_shop_test.py
+
 build/ziran/libziran.a: ziran.lock $(RUNTIME_SOURCES)
 	env -u DISPLAY -u WAYLAND_DISPLAY $(MAKE) -C $(ZIRAN_ROOT) BUILD_DIR=$(abspath build/ziran) $(abspath $@)
 build/generated/native/.complete: $(SOURCES) $(UI_SOURCES) ziran.lock Makefile

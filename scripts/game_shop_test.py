@@ -17,10 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {key: value for key, value in os.environ.items()
        if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER')}
 ENV.update(MAKEFLAGS='-j1', ZIRAN_PAR_THREADS='1', OMP_NUM_THREADS='1', YUE_DESKTOP_RECOVERY='0')
+ZIRAN = os.environ.get('ZIRAN_BIN', str(ROOT / 'scripts/ziran.sh'))
+LOCK_FLAGS = [] if (ROOT / 'ziran.local.toml').exists() else ['--locked']
 
 
 def package(name):
-    return Path(subprocess.check_output(['ziran', 'pkg', 'path', name], cwd=ROOT, env=ENV, text=True).strip())
+    return Path(subprocess.check_output([ZIRAN, 'pkg', 'path', name, *LOCK_FLAGS], cwd=ROOT, env=ENV, text=True).strip())
 
 
 def main():
@@ -40,7 +42,7 @@ def main():
              '--module-path', 'daochi_client=' + str(daochi), '--module-path', str(daochi),
              '--module-path', 'crypto=' + str(crypto / 'src'), '--module-path', 'oqs=' + str(oqs / 'src')]
     model = out / 'model'
-    subprocess.run(['ziran', 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
+    subprocess.run([ZIRAN, 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
                     'game_shop_test:main', '-o', str(model), 'tests/game_shop_test.zi'],
                    cwd=ROOT, env=ENV, check=True)
     subprocess.run(['cc', '-std=c11', '-O2', '-I' + str(compiler / 'include'), '-I' + str(model),
@@ -66,7 +68,7 @@ EntityRecordsAnswer :: (request: string) -> string { return "" }
 EntityHostProfileRequest :: (request: string) -> bool { return false }
 BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 { return 0 }
 """)
-    subprocess.run(['ziran', 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
+    subprocess.run([ZIRAN, 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
                     'game_shop_integration:Check', '-o', str(generated), str(fixture_source)],
                    cwd=ROOT, env=ENV, check=True)
     (generated / 'main.c').write_text('#include "work/game-shop-integration/game_shop_integration.h"\n#include <stdio.h>\n#include <unistd.h>\n'

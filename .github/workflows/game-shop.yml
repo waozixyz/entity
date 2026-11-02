@@ -1,0 +1,56 @@
+name: Game shop
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  game-shop:
+    name: Locked native and browser grant integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MAKEFLAGS: -j2
+      ZIRAN_PAR_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check out the private-node test dependency
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: kryonlabs/daochi
+          ref: e64fc1169f7479e2504710a486dbb307e3dcee51
+          path: work/daochi
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: work/daochi/go.mod
+          cache-dependency-path: work/daochi/go.sum
+      - name: Set up the node's locked compiler and native build tools
+        id: node-ziran
+        uses: ziranlang/ziran/.github/actions/setup@4c27b5a080a9596f5919ece1651e5a372be2142f
+        with:
+          project: work/daochi
+          path: .node-ziran
+          fetch: true
+          packages: >-
+            build-essential cmake python3 ripgrep pkg-config libgtk-3-dev
+            libx11-dev libcurl4-openssl-dev zlib1g-dev openssl
+      - name: Build the private test node
+        env:
+          ZIRAN: ${{ steps.node-ziran.outputs.ziran }}
+        run: make -C work/daochi build ZIRAN="$ZIRAN"
+      - name: Set up Entity's locked compiler and packages
+        uses: ziranlang/ziran/.github/actions/setup@4c27b5a080a9596f5919ece1651e5a372be2142f
+        with:
+          fetch: true
+      - name: Native game-shop and production browser routing grant cases
+        env:
+          DAOCHI_BIN: ${{ github.workspace }}/work/daochi/daochi
+        run: |
+          test ! -e ziran.local.toml
+          make game-shop-test
+          git diff --exit-code -- ziran.toml ziran.lock src tests scripts
