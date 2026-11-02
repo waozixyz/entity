@@ -101,6 +101,8 @@ NativeAccountId :: (id: string) -> bool {
 
 SharedProfilePath :: (id: string, output: []u8) -> string {
     #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) || #defined(PLAN9_BUILD) || #defined(_WIN32) {
+        unused id
+        unused output
         return ""
     }
     if !NativeAccountId(id) { return "" }
@@ -134,6 +136,8 @@ SharedProfileLoad :: (id: string, state: *EntityState) -> bool {
 
 SharedProfileSave :: (id: string, state: EntityState) -> bool {
     #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) || #defined(PLAN9_BUILD) || #defined(_WIN32) {
+        unused id
+        unused state
         return true
     }
     path: [4096]u8
