@@ -162,7 +162,7 @@ AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
     text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*text[0], text.count) }
     path: [4096]u8
-    if !RecoveryEncode(recovery, "", text[:]) || !NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:])) ||
+    if !RecoveryDeviceText(recovery, text[:]) || !NativeWrite(AccountStorePath("account.key", path[:]), TextUntilNul(text[:])) ||
     !AccountStorePersist() { return false }
     // A sign-in here signs in the other waozi.xyz sites too.
     AccountStoreShare(TextUntilNul(text[:]), TextUntilNul(recovery.keys.public_id[:]), false)

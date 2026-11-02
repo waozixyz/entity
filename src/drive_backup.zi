@@ -1,6 +1,7 @@
 // Optional sealed-backup transport. Normal/F-Droid builds do not reference a
 // Google class, scope or Android adapter. The adapter receives sealed v3 only.
 #import "recovery"
+#import "passphrase"
 #import "daochi_client/keys"
 #import "std/text_buffer"
 #import "std/c_string"
@@ -15,8 +16,10 @@ DriveBackupAvailable :: () -> bool {
     return DriveAndroidCall("available", output[:]) == "yes"
 }
 
-// Only the existing sealed v3 bytes cross the Java boundary.
+// Only the existing sealed v3 bytes cross the Java boundary, and only when the
+// password meets the rule for new backups.
 DriveBackupStart :: (value: *Recovery, passphrase: string) -> bool {
+    if !PassphraseAccepted(passphrase) { return false }
     sealed: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     defer { SecureWipe(*sealed[0], sealed.count) }
     if !RecoveryEncode(value, passphrase, sealed[:]) || !RecoverySealedParse(TextUntilNul(sealed[:])).valid { return false }

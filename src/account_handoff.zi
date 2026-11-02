@@ -101,7 +101,7 @@ AccountHandoffPublishTo :: (root: string, value: *Recovery, alias: string) -> bo
     defer { SecureWipe(*text[0], text.count) }
     key_path: [4096]u8
     name_path: [4096]u8
-    if !RecoveryEncode(value, "", text[:]) { return false }
+    if !RecoveryDeviceText(value, text[:]) { return false }
     // The name goes first, so a dialog never shows an older name for a newer key.
     name := ifx alias == "" then TextUntilNul(value.keys.public_id[:]) else alias
     return NativeWrite(NativeJoin(name_path[:], root, ACCOUNT_HANDOFF_NAME_FILE), name) &&

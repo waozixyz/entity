@@ -71,7 +71,7 @@ Check :: () -> s32 {
         if CreateAccountKeys(*recovery.keys) != 1 || !NativeDirectory(root) { return 2 }
         text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
         path: [4096]u8
-        if !RecoveryEncode(*recovery, "", text[:]) || !NativeWrite(NativeJoin(path[:], root, "account.key"), TextUntilNul(text[:])) { return 3 }
+        if !RecoveryDeviceText(*recovery, text[:]) || !NativeWrite(NativeJoin(path[:], root, "account.key"), TextUntilNul(text[:])) { return 3 }
         state := EntityDefault()
         unused CopyCString(TextUntilNul(recovery.keys.public_id[:]), state.owner_id[:])
         if !NativeWrite(NativeJoin(path[:], root, "entity.json"), EntityEncode(state)) { return 4 }

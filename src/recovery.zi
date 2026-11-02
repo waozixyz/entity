@@ -25,6 +25,7 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/byte_text_linux"
+#import "passphrase"
 
 recovery_c :: #system_library "c";
 RecoveryCalloc :: (count: usize, size: usize) -> *u8 #foreign recovery_c "calloc";
@@ -180,6 +181,14 @@ RecoveryNeedsPassword :: (input: string) -> bool {
     return AccountStartsWith(input[start:], AccountEncryptedHeader) || AccountStartsWith(input[start:], RECOVERY_SEALED_HEADER)
 }
 
+// A backup in the current sealed format. Older plain and PBKDF2 files still
+// open, and after opening one the device offers to save it again sealed.
+RecoveryIsSealed :: (input: string) -> bool {
+    start: s64 = 0
+    if input.count >= 3 && input[0] == cast(u8)239 && input[1] == cast(u8)187 && input[2] == cast(u8)191 { start = 3 }
+    return AccountStartsWith(input[start:], RECOVERY_SEALED_HEADER)
+}
+
 RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
     if output.count < ACCOUNT_EXPORT_TEXT_SIZE || AccountKeysText(*value.keys, *output[0], output.count) == 0 { return false }
     context := TextUntilNul(value.context[:])
@@ -192,9 +201,10 @@ RecoveryPlain :: (value: *Recovery, output: []u8) -> bool {
 }
 
 // Seals with a fresh salt. keys holds what a node needs to release this copy;
-// the caller wipes it.
+// the caller wipes it. Every new backup comes through here, so a password that
+// breaks the rule in passphrase.zi never makes one.
 RecoverySeal :: (value: *Recovery, passphrase: string, output: []u8, keys: *RecoveryKeys) -> bool {
-    if value == null || keys == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase == "" || passphrase.count > 511 { return false }
+    if value == null || keys == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || !PassphraseAccepted(passphrase) { return false }
     plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
     salt: [RECOVERY_SALT_BYTES]u8
     nonce: [RECOVERY_NONCE_BYTES]u8
@@ -217,17 +227,23 @@ RecoverySeal :: (value: *Recovery, passphrase: string, output: []u8, keys: *Reco
     AccountAppendHex(*output[0], output.count, *cursor, *sealed[0], length + AccountEncryptedTagBytes)
 }
 
+// A backup to save as a file or hand to Drive: always sealed. There is no
+// plain export; an empty or weak password makes nothing.
 RecoveryEncode :: (value: *Recovery, passphrase: string, output: []u8) -> bool {
-    if value == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE || passphrase.count > 511 { return false }
-    if passphrase == "" {
-        plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
-        defer { SecureWipe(*plaintext[0], plaintext.count) }
-        if !RecoveryPlain(value, plaintext[:]) { return false }
-        return CopyCString(TextUntilNul(plaintext[:]), output)
-    }
     keys: RecoveryKeys
     defer { RecoveryKeysClear(*keys) }
     return RecoverySeal(value, passphrase, output, *keys)
+}
+
+// The signed-in key as this device keeps it for itself: its own key file and
+// the private hand-off to its other waozi apps. Never a backup, never a file
+// the person saves; those go through RecoveryEncode.
+RecoveryDeviceText :: (value: *Recovery, output: []u8) -> bool {
+    if value == null || output.count < ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE { return false }
+    plaintext: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    defer { SecureWipe(*plaintext[0], plaintext.count) }
+    if !RecoveryPlain(value, plaintext[:]) { return false }
+    return CopyCString(TextUntilNul(plaintext[:]), output)
 }
 
 // The sealed format's fixed-layout fields. Anything else is not this format.

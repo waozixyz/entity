@@ -8,6 +8,7 @@
 #import "leaderboard_model"
 #import "friends_model"
 #import "management"
+#import "passphrase"
 #import "alias_model"
 #import "dew_model"
 #import "dew_play_pricing"
@@ -786,7 +787,48 @@ AccountActions :: (x: float32, y: *float32, width: float32) {
 
 AccountPage :: (x: float32, y: *float32, width: float32) {
     AccountSummary(x, y, width)
+    BackupOffer(x, y, width)
     AccountActions(x, y, width)
+}
+
+// Accounts signed in before backups needed a password are offered one, once.
+// Nothing waits on the answer; "Back up account" stays below either way.
+BackupOffer :: (x: float32, y: *float32, width: float32) {
+    if !management.account || management.backup_offer == BACKUP_OFFER_NONE || !(CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) { return }
+    if management.backup_offer == BACKUP_OFFER_RESAVE {
+        Note(8870, Label("entity.backup_offer_resave", "This backup has no password or uses an older format. Save a new backup protected by a password."), x, y, width)
+    } else {
+        Note(8871, Label("entity.backup_offer", "Your account has no backup protected by a password yet. Save one so you can sign back in if this device is lost."), x, y, width)
+    }
+    if WideButton(8872, Label("entity.backup_offer_accept", "Back up with a password"), x, y, width, true) { OpenManagement(PAGE_BACKUP) }
+    if WideButton(8873, Label("entity.not_now", "Not now"), x, y, width, false, true) { Manage("backup_offer_later") }
+    y.* += 8.0 * scale
+}
+
+// What a new backup password still lacks, or "" once it meets the rule.
+PasswordNeeds :: (password: string) -> string {
+    missing := PassphraseMissing(password)
+    if missing == 0 { return "" }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", Label("entity.password_needs", "Still needed:"))
+    parts: [4]string = .[Label("entity.password_needs_length", "at least 12 characters"), Label("entity.password_needs_number", "a number"),
+    Label("entity.password_needs_upper", "an uppercase letter"), Label("entity.password_needs_lower", "a lowercase letter")]
+    flags: [4]s32 = .[PASSPHRASE_SHORT, PASSPHRASE_NO_NUMBER, PASSPHRASE_NO_UPPER, PASSPHRASE_NO_LOWER]
+    first := true
+    for index: 0..3 {
+        if (missing & flags[index]) != 0 {
+            BuilderPrint(*out, "% %", ifx first then "" else ",", parts[index])
+            first = false
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// The notice for a password about to seal a backup, or "" when it may.
+PasswordProblem :: (password: string) -> string {
+    if !ManagementPasswordAccepted(password) { return Label("entity.password_rule_mixed", "Use at least 12 characters with a number, an uppercase and a lowercase letter") }
+    if password != TextUntilNul(account_passphrase_repeat[:]) { return Label("entity.password_mismatch", "The passwords do not match") }
+    return ""
 }
 
 // Text of any length: it takes the lines it needs and moves the page down.
@@ -831,29 +873,25 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
     Note(8802, Label("entity.backup_help", "If you lose your backup and password and have no other signed-in device, your account cannot be recovered."), x, y, width)
     unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
+    // Said while typing, so no one has to guess the rule.
+    if account_passphrase[0] != cast(u8)0 {
+        needs := PasswordNeeds(TextUntilNul(account_passphrase[:]))
+        if needs != "" { Note(8874, needs, x, y, width) }
+    }
     unused EditField(1, account_passphrase_repeat[:], Label("entity.password_repeat", "Repeat password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
     drive_backup := CanManage(ACCOUNT_DRIVE) && WideButton(848, "Google Drive", x, y, width, false)
     file_backup := CanManage(ACCOUNT_BACKUP) && WideButton(803, Label("entity.save_backup", "Save backup file"), x, y, width, true)
-    if file_backup || drive_backup {
+    online_backup := CanManage(ACCOUNT_BACKUP) && WideButton(8803, Label("entity.save_online", "Save backup online"), x, y, width)
+    // Every way of saving a backup seals it with this password, or saves nothing.
+    if file_backup || drive_backup || online_backup {
         password: [512]u8
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         {
             value := TextUntilNul(password[:])
-            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 12 characters") }
-            else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
-            else { Manage(ifx drive_backup then "drive_backup" else "backup", value) }
-        }
-        for index: 0..password.count - 1 { password[index] = cast(u8)0 }
-    }
-    if CanManage(ACCOUNT_BACKUP) && WideButton(8803, Label("entity.save_online", "Save backup online"), x, y, width) {
-        password: [512]u8
-        for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
-        {
-            value := TextUntilNul(password[:])
-            if !ManagementPasswordAccepted(value) { notice = Label("entity.password_rule", "Use a password of at least 12 characters") }
-            else if value != TextUntilNul(account_passphrase_repeat[:]) { notice = Label("entity.password_mismatch", "The passwords do not match") }
-            else { Manage("backup_online", value) }
+            problem := PasswordProblem(value)
+            if problem != "" { notice = problem }
+            else { Manage(ifx drive_backup then "drive_backup" else ifx online_backup then "backup_online" else "backup", value) }
         }
         for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
@@ -878,8 +916,18 @@ SignInPage :: (x: float32, y: *float32, width: float32) {
         return
     }
     Note(846, Label("entity.no_reset", "No one can reset your password, so keep a backup."), x, y, width)
+    // The .key file is the real sign-in: it opens on this device with no node,
+    // no account online and no network. Everything after it is a convenience.
+    if CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) {
+        Note(8875, Label("entity.key_owns_identity", "Your .key file is your identity, and you own it. It signs you in on this device without any server."), x, y, width)
+    }
+    if CanManage(ACCOUNT_IMPORT) && WideButton(805, Label("entity.choose_backup", "Choose backup file"), x, y, width, true) { Manage("import") }
+    if CanManage(ACCOUNT_PASTE) && WideButton(804, Label("entity.paste_backup", "Paste backup"), x, y, width, !CanManage(ACCOUNT_IMPORT)) { Manage("import_paste") }
+    if CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_PASTE) {
+        Note(8876, Label("entity.easier_ways", "A passkey, password or Google are only easier ways in."), x, y, width)
+    }
     if CanManage(ACCOUNT_PASSKEY) {
-        if WideButton(8830, Label("entity.passkey_sign_in", "Sign in with a passkey"), x, y, width, true) { Manage("passkey_sign_in") }
+        if WideButton(8830, Label("entity.passkey_sign_in", "Sign in with a passkey"), x, y, width) { Manage("passkey_sign_in") }
     } else {
         Note(8831, Label("entity.passkey_unavailable", "Passkeys are not available here. Use your password."), x, y, width)
     }
@@ -896,7 +944,7 @@ SignInPage :: (x: float32, y: *float32, width: float32) {
     y.* += 64.0 * scale
     unused EditField(4, account_passphrase[:], Label("entity.password", "Password"), Rectangle.{x, y.*, width, 48.0 * scale}, 160, true)
     y.* += 64.0 * scale
-    if WideButton(8805, Label("entity.sign_in", "Sign in"), x, y, width, true) {
+    if WideButton(8805, Label("entity.sign_in", "Sign in"), x, y, width) {
         password: [512]u8
         for index: 0..password.count - 1 { password[index] = account_passphrase[index] }
         account: [80]u8
@@ -909,8 +957,6 @@ SignInPage :: (x: float32, y: *float32, width: float32) {
     }
     Note(8806, Label("entity.sign_in_online_help", "This works if you saved a backup online. Otherwise use your backup file or link a device."), x, y, width)
     if CanManage(ACCOUNT_DRIVE) && WideButton(849, "Google Drive", x, y, width, false) { Manage("drive_import") }
-    if CanManage(ACCOUNT_IMPORT) && WideButton(805, Label("entity.choose_backup", "Choose backup file"), x, y, width, true) { Manage("import") }
-    if CanManage(ACCOUNT_PASTE) && WideButton(804, Label("entity.paste_backup", "Paste backup"), x, y, width, !CanManage(ACCOUNT_IMPORT)) { Manage("import_paste") }
 }
 
 KeyPage :: (x: float32, y: *float32, width: float32) {
@@ -1231,7 +1277,10 @@ Draw :: () {
     ProfilePicture(9, Rectangle.{center_x - 40.0 * scale, y + 4.0 * scale, 80.0 * scale, 80.0 * scale})
     y += 96.0 * scale
     if ListRow(10, Label("entity.change_picture", "Change picture"), "", x, *y, width) { OpenPicturePicker() }
-    if management.available { AccountSummary(x, *y, width) }
+    if management.available {
+        AccountSummary(x, *y, width)
+        BackupOffer(x, *y, width)
+    }
     // Dew needs an account; without one the card would only say so.
     if inline_dew && dew_profile_available { y += ProfileDewBalance(x, y, width, true).height }
     if inline_activity { y += ProfileActivity(x, y, width, true) }

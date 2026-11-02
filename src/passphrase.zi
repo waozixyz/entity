@@ -1,0 +1,101 @@
+// The one rule for every new backup password. It applies only when a password
+// is set: one typed to open an existing backup is never checked against it, so
+// older files and existing accounts keep opening. A node never sees the
+// password, so only the device can enforce this.
+//
+// At least 12 characters, a number, an uppercase and a lowercase letter.
+// Letters count by Unicode case for Latin, Greek, Cyrillic, Armenian and
+// full-width Latin; scripts without case need a letter from one of those.
+PASSPHRASE_MINIMUM :: 12
+PASSPHRASE_SHORT :: 1
+PASSPHRASE_NO_NUMBER :: 2
+PASSPHRASE_NO_UPPER :: 4
+PASSPHRASE_NO_LOWER :: 8
+
+PassphraseScalar :: struct {
+    value: u32
+    after: s64
+}
+
+// One scalar; a malformed byte counts as one character of its own.
+PassphraseNext :: (text: string, at: s64) -> PassphraseScalar {
+    result := PassphraseScalar.{cast(u32)text[at], at + 1}
+    first := text[at]
+    count: s64 = 0
+    if first >= cast(u8)194 && first <= cast(u8)223 { count = 1; result.value = cast(u32)(first & cast(u8)31) }
+    else if first >= cast(u8)224 && first <= cast(u8)239 { count = 2; result.value = cast(u32)(first & cast(u8)15) }
+    else if first >= cast(u8)240 && first <= cast(u8)244 { count = 3; result.value = cast(u32)(first & cast(u8)7) }
+    else { return result }
+    if at + count >= text.count { return PassphraseScalar.{cast(u32)65533, at + 1} }
+    for index: 1..count {
+        part := text[at + index]
+        if part < cast(u8)128 || part > cast(u8)191 { return PassphraseScalar.{cast(u32)65533, at + 1} }
+        result.value = (result.value << cast(u32)6) | cast(u32)(part & cast(u8)63)
+    }
+    result.after = at + count + 1
+    return result
+}
+
+PassphraseNumber :: (value: u32) -> bool {
+    starts: [6]u32 = .[cast(u32)48, cast(u32)1632, cast(u32)1776, cast(u32)2406, cast(u32)3664, cast(u32)65296]
+    for start: starts {
+        if value >= start && value <= start + cast(u32)9 { return true }
+    }
+    return false
+}
+
+// Pairs where the even scalar is uppercase and the next one its lowercase.
+PassphrasePaired :: (value: u32) -> bool {
+    return (value >= cast(u32)256 && value <= cast(u32)311) || (value >= cast(u32)330 && value <= cast(u32)375) ||
+    (value >= cast(u32)1120 && value <= cast(u32)1153) || (value >= cast(u32)1162 && value <= cast(u32)1215)
+}
+
+// Pairs where the odd scalar is uppercase.
+PassphraseOddPaired :: (value: u32) -> bool {
+    return (value >= cast(u32)313 && value <= cast(u32)328) || (value >= cast(u32)377 && value <= cast(u32)382)
+}
+
+PassphraseUpper :: (value: u32) -> bool {
+    if (value >= cast(u32)65 && value <= cast(u32)90) || (value >= cast(u32)192 && value <= cast(u32)222 && value != cast(u32)215) { return true }
+    if PassphrasePaired(value) { return value % cast(u32)2 == cast(u32)0 }
+    if PassphraseOddPaired(value) { return value % cast(u32)2 == cast(u32)1 }
+    return value == cast(u32)376 || (value >= cast(u32)913 && value <= cast(u32)937 && value != cast(u32)930) ||
+    (value >= cast(u32)1024 && value <= cast(u32)1071) || (value >= cast(u32)1329 && value <= cast(u32)1366) ||
+    (value >= cast(u32)65313 && value <= cast(u32)65338)
+}
+
+PassphraseLower :: (value: u32) -> bool {
+    if (value >= cast(u32)97 && value <= cast(u32)122) || (value >= cast(u32)223 && value <= cast(u32)255 && value != cast(u32)247) { return true }
+    if PassphrasePaired(value) { return value % cast(u32)2 == cast(u32)1 }
+    if PassphraseOddPaired(value) { return value % cast(u32)2 == cast(u32)0 }
+    return value == cast(u32)312 || value == cast(u32)383 || (value >= cast(u32)940 && value <= cast(u32)974) ||
+    (value >= cast(u32)1072 && value <= cast(u32)1119) || (value >= cast(u32)1377 && value <= cast(u32)1415) ||
+    (value >= cast(u32)65345 && value <= cast(u32)65370)
+}
+
+// What a new password still lacks, as PASSPHRASE_* flags; 0 when it is accepted.
+PassphraseMissing :: (passphrase: string) -> s32 {
+    characters: s64 = 0
+    number := false
+    upper := false
+    lower := false
+    at: s64 = 0
+    while at < passphrase.count {
+        scalar := PassphraseNext(passphrase, at)
+        at = scalar.after
+        characters += 1
+        if PassphraseNumber(scalar.value) { number = true }
+        if PassphraseUpper(scalar.value) { upper = true }
+        if PassphraseLower(scalar.value) { lower = true }
+    }
+    missing: s32 = 0
+    if characters < PASSPHRASE_MINIMUM { missing |= PASSPHRASE_SHORT }
+    if !number { missing |= PASSPHRASE_NO_NUMBER }
+    if !upper { missing |= PASSPHRASE_NO_UPPER }
+    if !lower { missing |= PASSPHRASE_NO_LOWER }
+    return missing
+}
+
+PassphraseAccepted :: (passphrase: string) -> bool {
+    return passphrase.count <= 511 && PassphraseMissing(passphrase) == 0
+}

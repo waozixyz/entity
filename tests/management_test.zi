@@ -15,6 +15,8 @@
 Auth :: #import "daochi_client/auth";
 #import "native_files"
 #import "recovery"
+#import "passphrase"
+#import "drive_backup"
 #import "account_backup"
 #import "shared_account"
 #import "pairing"
@@ -81,8 +83,8 @@ CheckBackupAndSignIn :: () -> s32 {
     if RecoveryFileName("", "", name[:]) != "account.key" { return 107 }
     tiny: [6]u8
     if RecoveryFileName("username", id, tiny[:]) != "" { return 108 }
-    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("12345678901") || !ManagementPasswordAccepted("123456789012") ||
-    ManagementPasswordAccepted("ééééééééééé") || !ManagementPasswordAccepted("éééééééééééé") { return 109 }
+    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("Abcdefghij1") || !ManagementPasswordAccepted("Abcdefghijk1") ||
+    ManagementPasswordAccepted("Éééééééééé1") || !ManagementPasswordAccepted("Ééééééééééé1") { return 109 }
 
     root: [4096]u8
     if !NativeDirectory(NativeRoot(root[:])) || NativeJoin(backup_path[:], TextUntilNul(root[:]), "fixture-backup.key") == "" { return 111 }
@@ -96,9 +98,9 @@ CheckBackupAndSignIn :: () -> s32 {
 
     // A backup never goes out without a password.
     unused RemoveFile(TextUntilNul(backup_path[:]))
-    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") || !Finished(provider, "backup", "elevenchars", "error") ||
-    PathExists(TextUntilNul(backup_path[:])) { return 114 }
-    if !Finished(provider, "backup", "fixture password", "ok") { return 115 }
+    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") || !Finished(provider, "backup", "Abcdefghij1", "error") ||
+    !Finished(provider, "backup", "fixture password", "error") || PathExists(TextUntilNul(backup_path[:])) { return 114 }
+    if !Finished(provider, "backup", "Fixture password 1", "ok") { return 115 }
     file: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     if NativeRead(TextUntilNul(backup_path[:]), file[:]) <= 0 || !RecoveryNeedsPassword(TextUntilNul(file[:])) { return 116 }
 
@@ -107,7 +109,7 @@ CheckBackupAndSignIn :: () -> s32 {
     if !Finished(provider, "import", "", "password") || !ProviderState(provider).password_needed || apply_count != applied { return 117 }
     if !Finished(provider, "import_password", "wrong password", "password") || !ProviderState(provider).password_needed ||
     apply_count != applied || TextUntilNul(provider.queue.message[:]) == "" { return 118 }
-    if !Finished(provider, "import_password", "fixture password", "switch") || ProviderState(provider).password_needed ||
+    if !Finished(provider, "import_password", "Fixture password 1", "switch") || ProviderState(provider).password_needed ||
     apply_count != applied + 1 || !provider.has_incoming { return 119 }
     if TextUntilNul(provider.incoming.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) ||
     TextUntilNul(provider.incoming.context[:]) != TextUntilNul(fixture.context[:]) { return 120 }
@@ -116,13 +118,13 @@ CheckBackupAndSignIn :: () -> s32 {
     // Leaving forgets the held file.
     if !Finished(provider, "import", "", "password") || !Finished(provider, "import_cancel", "", "cancelled") ||
     ProviderState(provider).password_needed || provider.held_backup[0] != cast(u8)0 { return 122 }
-    if !Finished(provider, "import_password", "fixture password", "error") { return 123 }
+    if !Finished(provider, "import_password", "Fixture password 1", "error") { return 123 }
 
     // Files from before this flow: a plain key opens with no password, and a
     // password given with the file still works.
-    if !Finished(provider, "import", "fixture password", "switch") || !Finished(provider, "switch_cancel", "", "cancelled") { return 124 }
+    if !Finished(provider, "import", "Fixture password 1", "switch") || !Finished(provider, "switch_cancel", "", "cancelled") { return 124 }
     plain: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
-    if !RecoveryEncode(*fixture, "", plain[:]) || !NativeWrite(TextUntilNul(backup_path[:]), TextUntilNul(plain[:])) { return 125 }
+    if !RecoveryDeviceText(*fixture, plain[:]) || !NativeWrite(TextUntilNul(backup_path[:]), TextUntilNul(plain[:])) { return 125 }
     if !Finished(provider, "import", "", "switch") || ProviderState(provider).password_needed || !Finished(provider, "switch_cancel", "", "cancelled") { return 126 }
     if !NativeWrite(TextUntilNul(backup_path[:]), "not a backup") || !Finished(provider, "import", "", "error") ||
     ProviderState(provider).password_needed { return 127 }
@@ -254,7 +256,7 @@ RecoverySealedCheck :: (fixture: *Recovery, text: string) -> s32 {
     defer { RecoveryClear(*opened) }
     right: RecoveryKeys
     defer { RecoveryKeysClear(*right) }
-    if !RecoveryDeriveFromHex("fixture passphrase", parts.salt, *right) ||
+    if !RecoveryDeriveFromHex("Fixture passphrase 1", parts.salt, *right) ||
     !RecoveryOpenSealed(text, *right, *opened) ||
     TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 8 }
     if RecoveryOpenSealed(text, *keys, *opened) || opened.keys.private_key_hex[0] != cast(u8)0 { return 9 }
@@ -267,7 +269,7 @@ RecoverySealedCheck :: (fixture: *Recovery, text: string) -> s32 {
     copy[text.count] = cast(u8)0
     // A weaker work factor is refused before any key is derived.
     weakened := "waozi-account-backup-v3\nalgorithm=ML-DSA-44\nkdf=Argon2id\nmemory_kib=8\npasses=1\nlanes=1\nsalt=00000000000000000000000000000000\nnonce=000000000000000000000000\nciphertext=00000000000000000000000000000000000000"
-    if RecoverySealedParse(weakened).valid || RecoveryDecode(weakened, "fixture passphrase", *opened) { return 12 }
+    if RecoverySealedParse(weakened).valid || RecoveryDecode(weakened, "Fixture passphrase 1", *opened) { return 12 }
     // Changing an authenticated field breaks the seal, even with the right keys.
     copy[prefix.count + 32 + 7] = ifx copy[prefix.count + 32 + 7] == cast(u8)48 then cast(u8)49 else cast(u8)48
     if RecoveryOpenSealed(TextUntilNul(copy[:]), *right, *opened) { return 13 }
@@ -334,6 +336,200 @@ SignOutCheck :: (fixture: *Recovery) -> s32 {
     return 0
 }
 
+// The rule for every new backup password, at each boundary. Characters count,
+// not bytes, and case is Unicode-aware.
+PassphraseRuleCheck :: () -> s32 {
+    all := PASSPHRASE_SHORT | PASSPHRASE_NO_NUMBER | PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER
+    if PassphraseMissing("") != all { return 1 }
+    if PassphraseMissing("Abcdefghij1") != PASSPHRASE_SHORT { return 2 }
+    if PassphraseMissing("Abcdefghijk1") != 0 || !PassphraseAccepted("Abcdefghijk1") { return 3 }
+    if PassphraseMissing("Abcdefghijkl") != PASSPHRASE_NO_NUMBER { return 4 }
+    if PassphraseMissing("abcdefghijk1") != PASSPHRASE_NO_UPPER { return 5 }
+    if PassphraseMissing("ABCDEFGHIJK1") != PASSPHRASE_NO_LOWER { return 6 }
+    if PassphraseMissing("Ééééééééééé1") != 0 { return 7 }
+    if PassphraseMissing("Éééééééééé1") != PASSPHRASE_SHORT { return 8 }
+    if PassphraseMissing("Жжжжжжжжжжж7") != 0 { return 9 }
+    if PassphraseMissing("Ωωωωωωωωωωω٣") != 0 { return 10 }
+    if PassphraseMissing("Ĺĺĺĺĺĺĺĺĺĺĺ1") != 0 { return 11 }
+    if PassphraseMissing("密码密码密码密码密码密码1") != (PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER) { return 12 }
+    if PassphraseMissing("×÷×÷×÷×÷×÷×÷1") != (PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER) { return 13 }
+    if PassphraseMissing("fixture password") != (PASSPHRASE_NO_NUMBER | PASSPHRASE_NO_UPPER) { return 14 }
+    if !ManagementPasswordAccepted("Abcdefghijk1") || ManagementPasswordAccepted("abcdefghijkl") { return 15 }
+    return 0
+}
+
+PasswordMaskCheck :: () -> s32 {
+    mask: [160]u8
+    if PasswordMask("", mask[:]) != "" { return 1 }
+    if PasswordMask("a", mask[:]) != "*" { return 2 }
+    if PasswordMask("é中Ж", mask[:]) != "***" { return 3 }
+    if PasswordMask("é中", mask[:]) != "**" { return 4 }
+    if PasswordMask("", mask[:]) != "" { return 5 }
+    long_value := "é中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé"
+    if PasswordMask(long_value, mask[:]).count != 160 { return 8 }
+    if PasswordMask("a\u0308b", mask[:]) != "***" { return 6 }
+    if PasswordMask("abcdefghijkl", mask[:]) != "************" { return 7 }
+    return 0
+}
+
+// Every way of making a backup refuses an empty, short or weak password, and
+// none makes a plain one: plain key text only comes from the device's own store.
+BackupRoutesCheck :: (fixture: *Recovery) -> s32 {
+    output: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    keys: RecoveryKeys
+    defer { RecoveryKeysClear(*keys) }
+    weak: [5]string = .["", "Abc1", "Abcdefghij1", "abcdefghijk1", "fixture password"]
+    for password: weak {
+        if RecoveryEncode(fixture, password, output[:]) || RecoverySeal(fixture, password, output[:], *keys) { return 1 }
+        if DriveBackupStart(fixture, password) { return 2 }
+    }
+    if !RecoveryEncode(fixture, "Abcdefghijk1", output[:]) || !RecoveryIsSealed(TextUntilNul(output[:])) { return 3 }
+    if !RecoveryDeviceText(fixture, output[:]) || RecoveryIsSealed(TextUntilNul(output[:])) || RecoveryNeedsPassword(TextUntilNul(output[:])) { return 4 }
+    // The file and online routes say what is missing and neither save nor send.
+    actions := action_count
+    current_id = fixture.keys.public_id
+    provider := ManagementProvider.{.snapshot = Snapshot, .apply = Apply, .action = Action, .choose_file = ChooseBackup, .load = LoadFixture}
+    for password: weak {
+        if !Finished(*provider, "backup", password, "error") || TextUntilNul(provider.queue.message[:]) != ProviderPasswordProblem(password) { return 5 }
+        if !Finished(*provider, "backup_online", password, "error") || TextUntilNul(provider.queue.message[:]) != ProviderPasswordProblem(password) ||
+        provider.asynchronous || provider.network_operation != 0 { return 6 }
+    }
+    if ProviderPasswordProblem("") != "Use a password of at least 12 characters" ||
+    ProviderPasswordProblem("abcdefghijk1") != "Add an uppercase letter to the password" ||
+    ProviderPasswordProblem("Abcdefghijkl") != "Add a number to the password" ||
+    ProviderPasswordProblem("ABCDEFGHIJK1") != "Add a lowercase letter to the password" || ProviderPasswordProblem("Abcdefghijk1") != "" { return 7 }
+    current_id = .{}
+    action_count = actions
+    return 0
+}
+
+// The answers a host keeps, in the same files Breeze, Werk and Entity use.
+OfferAction :: (context: *void, request: *ManagementRequest) -> s32 {
+    root: [4096]u8
+    folder := NativeRoot(root[:])
+    owner := TextUntilNul(request.owner_id[:])
+    operation := TextUntilNul(request.operation[:])
+    if operation == "backup_marked" { return ifx AccountBackedUpRead(folder, owner) then 1 else 0 }
+    if operation == "backup_mark" || operation == "backup_unmark" {
+        return ifx AccountBackedUpWrite(folder, owner, operation == "backup_mark") then 1 else 0
+    }
+    return 2
+}
+
+OfferProvider :: () -> ManagementProvider {
+    return ManagementProvider.{.snapshot = Snapshot, .apply = Apply, .action = OfferAction, .choose_file = ChooseBackup, .load = LoadFixture}
+}
+
+OfferShown :: (provider: *ManagementProvider) -> s32 {
+    ProviderPump(provider)
+    return ProviderState(provider).backup_offer
+}
+
+// Opens a backup file through the normal sign-in and applies it, with no
+// network at any step.
+OfferImport :: (provider: *ManagementProvider, text: string, password: string) -> bool {
+    if !NativeWrite(TextUntilNul(backup_path[:]), text) { return false }
+    if password != "" {
+        if !Finished(provider, "import", "", "password") || !Finished(provider, "import_password", password, "switch") { return false }
+    } else if !Finished(provider, "import", "", "switch") { return false }
+    if !Request(provider, "switch_apply", "", 1) || !Pumped(provider, "ok") { return false }
+    return !provider.asynchronous && provider.network_operation == 0
+}
+
+Pumped :: (provider: *ManagementProvider, result: string) -> bool {
+    ProviderPump(provider)
+    return !provider.queue.pending && TextUntilNul(provider.queue.result[:]) == result
+}
+
+// An account signed in on an older app is offered a sealed backup once; "Not
+// now" is kept per account; a known sealed backup means no offer; older files
+// still open and are offered a sealed copy.
+BackupOfferCheck :: (fixture: *Recovery) -> s32 {
+    applied := apply_count
+    root: [4096]u8
+    folder := NativeRoot(root[:])
+    if !NativeDirectory(folder) || NativeJoin(backup_path[:], folder, "offer-backup.key") == "" { return 1 }
+    current_id = fixture.keys.public_id
+    owner: [65]u8
+    owner = fixture.keys.public_id
+    later: [80]u8
+    later_owner := AccountBackupOfferOwner(TextUntilNul(owner[:]), later[:])
+    if later_owner == "" || !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) || !AccountBackedUpWrite(folder, later_owner, false) { return 2 }
+    refused: [80]u8
+    if AccountBackupOfferOwner("not an id", refused[:]) != "" || AccountBackedUpWrite(folder, "../backup", true) { return 3 }
+
+    provider := OfferProvider()
+    if OfferShown(*provider) != BACKUP_OFFER_NEW || ProviderState(*provider).busy { return 4 }
+    if !Finished(*provider, "backup_offer_later", "", "ok") || OfferShown(*provider) != BACKUP_OFFER_NONE { return 6 }
+    if !AccountBackedUpRead(folder, later_owner) || AccountBackedUpRead(folder, TextUntilNul(owner[:])) { return 7 }
+    // Remembered after a restart, and the sign-out reminder still speaks up.
+    restarted := OfferProvider()
+    if OfferShown(*restarted) != BACKUP_OFFER_NONE { return 8 }
+    state := ProviderState(*restarted)
+    if !ManagementSignOutWarns(*state) { return 9 }
+
+    // Another account on this device is still offered.
+    other: Recovery
+    defer { RecoveryClear(*other) }
+    if CreateAccountKeys(*other.keys) == 0 { return 10 }
+    current_id = other.keys.public_id
+    another := OfferProvider()
+    if OfferShown(*another) != BACKUP_OFFER_NEW { return 11 }
+    current_id = owner
+
+    // A sealed backup this device knows of: never offered.
+    if !AccountBackedUpWrite(folder, later_owner, false) || !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), true) { return 12 }
+    known := OfferProvider()
+    if OfferShown(*known) != BACKUP_OFFER_NONE { return 13 }
+    if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) { return 14 }
+
+    // A plain file from before passwords opens, and is offered a sealed copy
+    // even after an earlier "Not now".
+    if !AccountBackedUpWrite(folder, later_owner, true) { return 15 }
+    plain: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
+    defer { SecureWipe(*plain[0], plain.count) }
+    older := OfferProvider()
+    ProviderPump(*older)
+    if !RecoveryDeviceText(fixture, plain[:]) || !OfferImport(*older, TextUntilNul(plain[:]), "") { return 16 }
+    if OfferShown(*older) != BACKUP_OFFER_RESAVE { return 17 }
+    if !Finished(*older, "backup_offer_later", "", "ok") || OfferShown(*older) != BACKUP_OFFER_NONE { return 18 }
+    // A PBKDF2 file from before the sealed format does the same.
+    if AccountKeysEncryptedText(*fixture.keys, "old short", *plain[0], plain.count) == 0 ||
+    !OfferImport(*older, TextUntilNul(plain[:]), "old short") || OfferShown(*older) != BACKUP_OFFER_RESAVE { return 19 }
+    // Saving the sealed backup ends the offer.
+    if !Finished(*older, "backup", "Fixture password 1", "ok") || OfferShown(*older) != BACKUP_OFFER_NONE ||
+    !AccountBackedUpRead(folder, TextUntilNul(owner[:])) { return 20 }
+    // Opening a sealed file means the device knows one exists.
+    if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) || !AccountBackedUpWrite(folder, later_owner, false) { return 21 }
+    sealed_import := OfferProvider()
+    ProviderPump(*sealed_import)
+    if NativeRead(TextUntilNul(backup_path[:]), plain[:]) <= 0 || !RecoveryIsSealed(TextUntilNul(plain[:])) { return 22 }
+    if !OfferImport(*sealed_import, TextUntilNul(plain[:]), "Fixture password 1") || OfferShown(*sealed_import) != BACKUP_OFFER_NONE ||
+    !AccountBackedUpRead(folder, TextUntilNul(owner[:])) { return 23 }
+
+    // The rule behind the offer, and its way to the profile bundle.
+    if ManagementBackupOffer(false, true, false, false, false) != BACKUP_OFFER_NONE ||
+    ManagementBackupOffer(true, false, false, false, false) != BACKUP_OFFER_NONE ||
+    ManagementBackupOffer(true, true, true, false, true) != BACKUP_OFFER_NONE ||
+    ManagementBackupOffer(true, true, false, true, false) != BACKUP_OFFER_NONE ||
+    ManagementBackupOffer(true, true, false, false, false) != BACKUP_OFFER_NEW ||
+    ManagementBackupOffer(true, true, false, true, true) != BACKUP_OFFER_RESAVE { return 24 }
+    shown: Management
+    shown.backup_offer = BACKUP_OFFER_RESAVE
+    document := ManagementEncode(shown)
+    defer { EntityFree(document) }
+    decoded: Management
+    if !ManagementDecode(document, *decoded) || decoded.backup_offer != BACKUP_OFFER_RESAVE { return 25 }
+    if ManagementOperation("backup_offer_later") != (ACCOUNT_BACKUP | ACCOUNT_DRIVE) { return 26 }
+
+    unused AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false)
+    unused AccountBackedUpWrite(folder, later_owner, false)
+    unused RemoveFile(TextUntilNul(backup_path[:]))
+    current_id = .{}
+    apply_count = applied
+    return 0
+}
+
 // The online sign-in: exact node bodies, and a reply opens only with the right
 // password and only as the account the node named.
 AccountBackupCheck :: (fixture: *Recovery) -> s32 {
@@ -346,7 +542,7 @@ AccountBackupCheck :: (fixture: *Recovery) -> s32 {
     keys: RecoveryKeys
     defer { RecoveryKeysClear(*keys) }
     sealed: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
-    password := "correct horse battery"
+    password := "Correct horse battery 9"
     if !RecoverySeal(fixture, password, sealed[:], *keys) { return 5 }
     body: [ACCOUNT_BACKUP_BODY_MAX]u8
     if !AccountBackupUploadBody(TextUntilNul(sealed[:]), *keys, body[:]) { return 6 }
@@ -509,20 +705,6 @@ PasskeyAnswerCheck :: (fixture: *Recovery) -> s32 {
     return 0
 }
 
-PasswordMaskCheck :: () -> s32 {
-    mask: [160]u8
-    if PasswordMask("", mask[:]) != "" { return 1 }
-    if PasswordMask("a", mask[:]) != "*" { return 2 }
-    if PasswordMask("é中Ж", mask[:]) != "***" { return 3 }
-    if PasswordMask("é中", mask[:]) != "**" { return 4 }
-    if PasswordMask("", mask[:]) != "" { return 5 }
-    long_value := "é中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé"
-    if PasswordMask(long_value, mask[:]).count != 160 { return 8 }
-    if PasswordMask("a\u0308b", mask[:]) != "***" { return 6 }
-    if PasswordMask("abcdefghijkl", mask[:]) != "************" { return 7 }
-    return 0
-}
-
 #program_export
 Check :: () -> s32 {
     if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
@@ -531,32 +713,38 @@ Check :: () -> s32 {
     backup: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     opened: Recovery
     defer { RecoveryClear(*opened) }
-    if !RecoveryEncode(*fixture, "", backup[:]) || !RecoveryDecode(TextUntilNul(backup[:]), "", *opened) { return 2 }
+    if !RecoveryDeviceText(*fixture, backup[:]) || !RecoveryDecode(TextUntilNul(backup[:]), "", *opened) { return 2 }
     if TextUntilNul(opened.context[:]) != TextUntilNul(fixture.context[:]) ||
     TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 3 }
     legacy: AccountKeys
     if ParseAccountKeys(TextUntilNul(backup[:]), *legacy) == 0 { return 4 }
-    if !RecoveryEncode(*fixture, "fixture passphrase", backup[:]) { return 5 }
+    if !RecoveryEncode(*fixture, "Fixture passphrase 1", backup[:]) { return 5 }
     if RecoveryDecode(TextUntilNul(backup[:]), "wrong", *opened) { return 6 }
-    if !RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) ||
+    if !RecoveryDecode(TextUntilNul(backup[:]), "Fixture passphrase 1", *opened) ||
     TextUntilNul(opened.context[:]) != TextUntilNul(fixture.context[:]) { return 7 }
     // Backups made before the sealed format still open.
     older: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
-    if AccountKeysEncryptedText(*fixture.keys, "fixture passphrase", *older[0], older.count) == 0 ||
-    !RecoveryNeedsPassword(TextUntilNul(older[:])) || !RecoveryDecode(TextUntilNul(older[:]), "fixture passphrase", *opened) ||
+    if AccountKeysEncryptedText(*fixture.keys, "Fixture passphrase 1", *older[0], older.count) == 0 ||
+    !RecoveryNeedsPassword(TextUntilNul(older[:])) || !RecoveryDecode(TextUntilNul(older[:]), "Fixture passphrase 1", *opened) ||
     TextUntilNul(opened.keys.public_id[:]) != TextUntilNul(fixture.keys.public_id[:]) { return 8 }
     if RecoverySealedCheck(*fixture, TextUntilNul(backup[:])) != 0 { return 300 + RecoverySealedCheck(*fixture, TextUntilNul(backup[:])) }
     length := TextUntilNul(backup[:]).count
     backup[length - 2] = ifx backup[length - 2] == cast(u8)48 then cast(u8)49 else cast(u8)48
-    if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }
+    if RecoveryDecode(TextUntilNul(backup[:]), "Fixture passphrase 1", *opened) { return 9 }
     if opened.keys.private_key_hex[0] != cast(u8)0 { return 10 }
 
     passkey_answer_result := PasskeyAnswerCheck(*fixture)
     if passkey_answer_result != 0 { return 900 + passkey_answer_result }
     sign_out_result := SignOutCheck(*fixture)
     if sign_out_result != 0 { return 580 + sign_out_result }
+    rule_result := PassphraseRuleCheck()
+    if rule_result != 0 { return 700 + rule_result }
     mask_result := PasswordMaskCheck()
     if mask_result != 0 { return 760 + mask_result }
+    routes_result := BackupRoutesCheck(*fixture)
+    if routes_result != 0 { return 720 + routes_result }
+    offer_result := BackupOfferCheck(*fixture)
+    if offer_result != 0 { return 740 + offer_result }
     online_result := AccountBackupCheck(*fixture)
     if online_result != 0 { return 500 + online_result }
     shared_result := SharedAccountCheck(*fixture)

@@ -5,6 +5,7 @@
 #import "dew_model"
 #import "model"
 #import "recovery"
+#import "passphrase"
 #import "account_backup"
 #import "shared_account"
 #import "account_handoff"
@@ -91,6 +92,12 @@ ManagementProvider :: struct {
     shared_next: s64
     backed_up: bool
     backed_up_owner: [65]u8
+    // The answer to the backup offer for backed_up_owner: "Not now" or done.
+    offer_answered: bool
+    // INCOMING_* for the account waiting in incoming.
+    incoming_kind: s32
+    // The account just opened from an older file, offered a sealed copy.
+    older_owner: [65]u8
     // Passkey and Google sign-in. Nothing here is kept after the request ends.
     bridge_known: bool
     bridge_passkey: bool
@@ -110,6 +117,20 @@ ManagementProvider :: struct {
     methods_next: s64
     methods_url: [640]u8
     methods_reply: [512]u8
+}
+
+INCOMING_OTHER :: 0
+INCOMING_SEALED :: 1
+INCOMING_OLDER :: 2
+
+// What a new backup password still lacks, said plainly.
+ProviderPasswordProblem :: (passphrase: string) -> string {
+    missing := PassphraseMissing(passphrase)
+    if missing == 0 && passphrase.count <= 511 { return "" }
+    if (missing & PASSPHRASE_SHORT) != 0 || passphrase.count > 511 { return "Use a password of at least 12 characters" }
+    if (missing & PASSPHRASE_NO_NUMBER) != 0 { return "Add a number to the password" }
+    if (missing & PASSPHRASE_NO_UPPER) != 0 { return "Add an uppercase letter to the password" }
+    return "Add a lowercase letter to the password"
 }
 
 // The name to offer when saving this account's backup.
@@ -132,6 +153,9 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     state.password_needed = provider.held_backup[0] != cast(u8)0
     state.backed_up = state.account && provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
+    known := TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
+    state.backup_offer = ManagementBackupOffer(state.account && known, (state.capabilities & (ACCOUNT_BACKUP | ACCOUNT_DRIVE)) != 0,
+        state.backed_up, provider.offer_answered, TextUntilNul(state.public_id[:]) == TextUntilNul(provider.older_owner[:]))
     if provider.shared_name[0] != cast(u8)0 {
         state.shared_name = provider.shared_name
         state.capabilities |= ACCOUNT_CONTINUE
@@ -181,7 +205,10 @@ ProviderApplyIncoming :: (provider: *ManagementProvider, choice: s32) {
     }
     result := provider.apply(provider.context, *provider.incoming, choice)
     if result == 2 { ProviderFinish(provider, "switch", "Choose what to do with the local records"); return }
+    kind := provider.incoming_kind
+    provider.incoming_kind = INCOMING_OTHER
     if result != 1 { ProviderFinish(provider, "error", "Could not save the account"); return }
+    ProviderIncomingApplied(provider, kind)
     // A sign-in here signs in the other waozi.xyz sites too.
     ProviderSharedWebOffer(provider, *provider.incoming, false)
     provider.shared_name = .{}
@@ -236,6 +263,7 @@ ProviderImportText :: (provider: *ManagementProvider, text: string, passphrase: 
     }
     incoming: Recovery
     defer { RecoveryClear(*incoming) }
+    sealed := RecoveryIsSealed(text)
     if !RecoveryDecode(text, passphrase, *incoming) {
         // Authentication cannot tell a wrong password from a damaged file.
         if protected && CopyCString(text, provider.held_backup[:]) {
@@ -249,6 +277,7 @@ ProviderImportText :: (provider: *ManagementProvider, text: string, passphrase: 
     RecoveryClear(*provider.incoming)
     provider.incoming = incoming
     provider.has_incoming = true
+    provider.incoming_kind = ifx sealed then INCOMING_SEALED else INCOMING_OLDER
     state := ProviderState(provider)
     provider.incoming_owner = state.public_id
     ProviderApplyIncoming(provider, 0)
@@ -264,8 +293,9 @@ ProviderImportHeld :: (provider: *ManagementProvider, passphrase: string) {
 }
 
 ProviderBackup :: (provider: *ManagementProvider, passphrase: string) {
-    if !ManagementPasswordAccepted(passphrase) {
-        ProviderFinish(provider, "error", "Use a password of at least 12 characters")
+    problem := ProviderPasswordProblem(passphrase)
+    if problem != "" {
+        ProviderFinish(provider, "error", problem)
         return
     }
     recovery: Recovery
@@ -305,8 +335,9 @@ ProviderDriveStart :: (provider: *ManagementProvider, saving: bool) {
         password = provider.queue.request.value
         defer { SecureWipe(*password[0], password.count) }
         passphrase := TextUntilNul(password[:])
-        if !ManagementPasswordAccepted(passphrase) {
-            ProviderFinish(provider, "error", "Use a password of at least 12 characters")
+        problem := ProviderPasswordProblem(passphrase)
+        if problem != "" {
+            ProviderFinish(provider, "error", problem)
             return
         }
         if provider.load == null || !provider.load(provider.context, *recovery) {
@@ -397,7 +428,7 @@ ProviderSharedWebOffer :: (provider: *ManagementProvider, recovery: *Recovery, o
         if provider.shared_web_files { return }
         text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
         defer { SecureWipe(*text[0], text.count) }
-        if RecoveryEncode(recovery, "", text[:]) {
+        if RecoveryDeviceText(recovery, text[:]) {
             SharedWebShare(TextUntilNul(text[:]), TextUntilNul(recovery.keys.public_id[:]), only_if_empty)
         }
     }
@@ -479,6 +510,7 @@ ProviderHandoffPoll :: (provider: *ManagementProvider) {
         RecoveryClear(*provider.incoming)
         provider.incoming = incoming
         provider.has_incoming = true
+        provider.incoming_kind = INCOMING_OTHER
         state := ProviderState(provider)
         provider.incoming_owner = state.public_id
         ProviderApplyIncoming(provider, 0)
@@ -515,6 +547,7 @@ ProviderContinue :: (provider: *ManagementProvider) {
     RecoveryClear(*provider.incoming)
     provider.incoming = incoming
     provider.has_incoming = true
+    provider.incoming_kind = INCOMING_OTHER
     state := ProviderState(provider)
     provider.incoming_owner = state.public_id
     ProviderApplyIncoming(provider, 0)
@@ -533,14 +566,49 @@ ProviderBackedUpPump :: (provider: *ManagementProvider) {
     state := ProviderState(provider)
     if TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:]) { return }
     provider.backed_up_owner = state.public_id
-    provider.backed_up = state.account && ProviderBackedUpAction(provider, TextUntilNul(state.public_id[:]), "backup_marked")
+    owner := TextUntilNul(state.public_id[:])
+    provider.backed_up = state.account && ProviderBackedUpAction(provider, owner, "backup_marked")
+    offer: [80]u8
+    provider.offer_answered = state.account && ProviderBackedUpAction(provider, AccountBackupOfferOwner(owner, offer[:]), "backup_marked")
 }
 
 ProviderBackedUpSet :: (provider: *ManagementProvider, value: bool) {
     state := ProviderState(provider)
+    if TextUntilNul(state.public_id[:]) != TextUntilNul(provider.backed_up_owner[:]) {
+        offer: [80]u8
+        provider.offer_answered = ProviderBackedUpAction(provider, AccountBackupOfferOwner(TextUntilNul(state.public_id[:]), offer[:]), "backup_marked")
+    }
     provider.backed_up_owner = state.public_id
     provider.backed_up = value
+    if value { provider.older_owner = .{} }
     unused ProviderBackedUpAction(provider, TextUntilNul(state.public_id[:]), ifx value then "backup_mark" else "backup_unmark")
+}
+
+// "Not now" to the backup offer, remembered for this account on this device.
+// A host that cannot keep it still hides the offer until the app restarts.
+ProviderOfferLater :: (provider: *ManagementProvider) {
+    state := ProviderState(provider)
+    owner := TextUntilNul(state.public_id[:])
+    if owner != TextUntilNul(provider.backed_up_owner[:]) { ProviderBackedUpPump(provider) }
+    provider.offer_answered = true
+    provider.older_owner = .{}
+    offer: [80]u8
+    unused ProviderBackedUpAction(provider, AccountBackupOfferOwner(owner, offer[:]), "backup_mark")
+    ProviderFinish(provider, "ok", "")
+}
+
+// An account that just arrived: from a sealed copy the device now knows a
+// backup exists; from an older file it offers to save one sealed, even if an
+// earlier offer was put off.
+ProviderIncomingApplied :: (provider: *ManagementProvider, kind: s32) {
+    if kind == INCOMING_SEALED {
+        ProviderBackedUpSet(provider, true)
+        return
+    }
+    if kind != INCOMING_OLDER { return }
+    ProviderBackedUpPump(provider)
+    state := ProviderState(provider)
+    provider.older_owner = state.public_id
 }
 
 // Signing out goes ahead whatever else is in flight; that work is abandoned.
@@ -569,6 +637,9 @@ ProviderSignOutClear :: (provider: *ManagementProvider, owner: string, share: bo
     provider.session = .{}
     provider.backed_up = false
     provider.backed_up_owner = .{}
+    provider.offer_answered = false
+    provider.older_owner = .{}
+    provider.incoming_kind = INCOMING_OTHER
     ProviderForgetBackup(provider)
     RecoveryClear(*provider.incoming)
     provider.has_incoming = false
@@ -675,6 +746,8 @@ ProviderOnlineSignInPump :: (provider: *ManagementProvider) {
     RecoveryClear(*provider.incoming)
     provider.incoming = incoming
     provider.has_incoming = true
+    // The node released a sealed copy, so one exists.
+    provider.incoming_kind = INCOMING_SEALED
     current := ProviderState(provider)
     provider.incoming_owner = current.public_id
     ProviderApplyIncoming(provider, 0)
@@ -683,8 +756,9 @@ ProviderOnlineSignInPump :: (provider: *ManagementProvider) {
 // Seals on this device and sends only the sealed copy. Local saves never wait
 // for this: it is its own action and its failure changes nothing here.
 ProviderBackupOnline :: (provider: *ManagementProvider, passphrase: string) {
-    if !ManagementPasswordAccepted(passphrase) {
-        ProviderOnlineFinish(provider, "error", "Use a password of at least 12 characters")
+    problem := ProviderPasswordProblem(passphrase)
+    if problem != "" {
+        ProviderOnlineFinish(provider, "error", problem)
         return
     }
     recovery: Recovery
@@ -984,6 +1058,7 @@ ProviderSignInPump :: (provider: *ManagementProvider) {
     RecoveryClear(*provider.incoming)
     provider.incoming = incoming
     provider.has_incoming = true
+    provider.incoming_kind = INCOMING_OTHER
     current := ProviderState(provider)
     provider.incoming_owner = current.public_id
     ProviderApplyIncoming(provider, 0)
@@ -1409,6 +1484,7 @@ ProviderPump :: (provider: *ManagementProvider) {
     operation := TextUntilNul(operation_buffer[:])
     if operation == "create" {
         RecoveryClear(*provider.incoming)
+        provider.incoming_kind = INCOMING_OTHER
         provider.has_incoming = CreateAccountKeys(*provider.incoming.keys) != 0
         state := ProviderState(provider)
         provider.incoming_owner = state.public_id
@@ -1458,6 +1534,8 @@ ProviderPump :: (provider: *ManagementProvider) {
         SecureWipe(*passphrase[0], passphrase.count)
     } else if operation == "backup_online_remove" {
         ProviderBackupOnlineRemove(provider)
+    } else if operation == "backup_offer_later" {
+        ProviderOfferLater(provider)
     } else if operation == "sign_in_online" {
         ProviderOnlineSignIn(provider)
     } else if operation == "continue" {
@@ -1480,6 +1558,7 @@ ProviderPump :: (provider: *ManagementProvider) {
     } else if operation == "switch_cancel" {
         RecoveryClear(*provider.incoming)
         provider.has_incoming = false
+        provider.incoming_kind = INCOMING_OTHER
         ProviderFinish(provider, "cancelled", "Account switch cancelled")
     } else if operation == "alias_quote" || operation == "alias_purchase" {
         ProviderStartAlias(provider, operation == "alias_purchase")

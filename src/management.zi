@@ -3,6 +3,7 @@
 #import "model"
 #import "alias_model"
 #import "node_url"
+#import "passphrase"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
@@ -92,6 +93,8 @@ Management :: struct {
     passkeys: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
     // This device saved a backup of the account, so signing out need not warn.
     backed_up: bool
+    // BACKUP_OFFER_*: whether to suggest a password-sealed backup.
+    backup_offer: s32
     nodes: [ENTITY_NODE_LIMIT]ManagementNode
     node_count: s32
 }
@@ -120,10 +123,27 @@ ManagementSignOutWarns :: (state: *Management) -> bool {
     return !state.backed_up
 }
 
+// An account signed in before backups needed a password, or one opened from an
+// older file, is offered a sealed backup once. "Not now" is remembered for that
+// account; "Back up account" stays on the account screen either way. The offer
+// never blocks anything and is never shown once this device knows a sealed
+// backup exists.
+BACKUP_OFFER_NONE :: 0
+BACKUP_OFFER_NEW :: 1
+// An older plain or PBKDF2 file was just opened: save it again sealed.
+BACKUP_OFFER_RESAVE :: 2
+
+ManagementBackupOffer :: (account: bool, can_back_up: bool, backed_up: bool, answered: bool, older_file: bool) -> s32 {
+    if !account || !can_back_up || backed_up { return BACKUP_OFFER_NONE }
+    if older_file { return BACKUP_OFFER_RESAVE }
+    return ifx answered then BACKUP_OFFER_NONE else BACKUP_OFFER_NEW
+}
+
 ManagementOperation :: (operation: string) -> s32 {
     if operation == "create" { return ACCOUNT_CREATE }
     if operation == "import" { return ACCOUNT_IMPORT }
     if operation == "backup" || operation == "backup_online" || operation == "backup_online_remove" { return ACCOUNT_BACKUP }
+    if operation == "backup_offer_later" { return ACCOUNT_BACKUP | ACCOUNT_DRIVE }
     if operation == "sign_in_online" { return ACCOUNT_IMPORT | ACCOUNT_PASTE }
     if operation == "continue" { return ACCOUNT_CONTINUE }
     if operation == "passkey_sign_in" || operation == "passkey_add" || operation == "passkey_remove" { return ACCOUNT_PASSKEY }
@@ -146,13 +166,10 @@ ManagementOperation :: (operation: string) -> s32 {
 }
 
 // New backups always have a password: there is no reset, and a plain file
-// would be the account itself. Older files of any kind still open.
-MANAGEMENT_PASSWORD_MINIMUM :: 12
-
+// would be the account itself. Older files of any kind still open. The rule
+// itself is PassphraseMissing, shared with every native backup route.
 ManagementPasswordAccepted :: (password: string) -> bool {
-    characters: s64 = 0
-    for byte: password { if (byte & cast(u8)192) != cast(u8)128 { characters += 1 } }
-    return characters >= MANAGEMENT_PASSWORD_MINIMUM
+    return PassphraseAccepted(password)
 }
 
 ManagementRequestEncode :: (request: ManagementRequest) -> string {
@@ -241,7 +258,7 @@ ManagementEncode :: (state: Management) -> string {
         BuilderPrint(*out, ",\"%\":", names[index])
         EntityQuote(*out, strings[index])
     }
-    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"password_needed\":%,\"backed_up\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry, state.password_needed, state.backed_up)
+    BuilderPrint(*out, ",\"alias_pricing\":%,\"alias_retry\":%,\"password_needed\":%,\"backed_up\":%,\"backup_offer\":%,\"alias_offer\":", state.alias_pricing, state.alias_retry, state.password_needed, state.backed_up, state.backup_offer)
     AliasOfferAppend(*out, state.alias_offer)
     BuilderPrint(*out, ",\"google_linked\":%,\"passkeys\":[", state.google_linked)
     for index: 0..state.passkey_count - 1 {
@@ -318,6 +335,9 @@ ManagementDecode :: (text: string, output: *Management) -> bool {
     state.alias_retry = Json.MatchLiteral(text, Json.FieldAt(text, 0, "alias_retry"), "true")
     state.password_needed = Json.MatchLiteral(text, Json.FieldAt(text, 0, "password_needed"), "true")
     state.backed_up = Json.MatchLiteral(text, Json.FieldAt(text, 0, "backed_up"), "true")
+    // Older providers do not send it: no offer.
+    state.backup_offer = ManagementReadNumber(text, "backup_offer", BACKUP_OFFER_NONE, BACKUP_OFFER_RESAVE)
+    if state.backup_offer < 0 { state.backup_offer = BACKUP_OFFER_NONE }
     if Json.ReadStringText(text, Json.FieldAt(text, 0, "shared_name"), state.shared_name[:]) < 0 { state.shared_name = .{} }
     if Json.ReadStringText(text, Json.FieldAt(text, 0, "found_account"), state.found_account[:]) < 0 { state.found_account = .{} }
     state.google_linked = Json.MatchLiteral(text, Json.FieldAt(text, 0, "google_linked"), "true")

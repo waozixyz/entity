@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Every backup, including the .key file, is now protected by a password. A new password needs at least 12 characters, a number, an uppercase and a lowercase letter, and the field says what is still missing.
+- If you're signed in without a password-protected backup, the account screen offers to save one, with Not now. Older backup files still open and offer to save a protected copy.
+- Choosing your .key file comes first on the sign-in screen: it's your identity, and it signs you in without any server.
+
 - Show one star for each character typed in a shared password field, with no fake prefill or eight-star limit.
 
 - Messages such as a wrong password stay on screen on the website instead of disappearing within a second.

@@ -129,7 +129,7 @@ SharedAccountOffer :: (root: string, value: *Recovery, alias: string) -> bool {
     } else {
         text: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
         defer { SecureWipe(*text[0], text.count) }
-        if !RecoveryEncode(value, "", text[:]) || !NativeWrite(key, TextUntilNul(text[:])) { return false }
+        if !RecoveryDeviceText(value, text[:]) || !NativeWrite(key, TextUntilNul(text[:])) { return false }
     }
     name: [4096]u8
     return NativeWrite(NativeJoin(name[:], root, "account.name"), ifx alias == "" then TextUntilNul(value.keys.public_id[:]) else alias)
@@ -166,6 +166,22 @@ AccountBackedUpAppend :: (output: []u8, at: *s64, text: string) -> bool {
     }
     output[at.*] = cast(u8)0
     return true
+}
+
+// The answer to the backup offer is kept like a backup mark, under a name
+// derived from the public ID, so every host that keeps the mark keeps the
+// answer too and no host needs a new operation.
+ACCOUNT_BACKUP_OFFER_LABEL :: "waozi-backup-offer-v1\n"
+
+AccountBackupOfferOwner :: (owner: string, output: []u8) -> string {
+    if owner.count != 64 || output.count < 65 { return "" }
+    input: [128]u8
+    at: s64 = 0
+    if !AccountBackedUpAppend(input[:], *at, ACCOUNT_BACKUP_OFFER_LABEL) || !AccountBackedUpAppend(input[:], *at, owner) { return "" }
+    digest: [32]u8
+    Sha256(*input[0], at, *digest[0])
+    if BytesToHex(*digest[0], 32, *output[0], output.count) == 0 { return "" }
+    return TextUntilNul(output)
 }
 
 AccountBackedUpRead :: (root: string, owner: string) -> bool {

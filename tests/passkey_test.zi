@@ -83,7 +83,7 @@ main :: () -> s32 {
 
     // v3 and this format do not open as each other.
     v3: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
-    if !RecoveryEncode(*account, "correct horse battery", v3[:]) { return 19 }
+    if !RecoveryEncode(*account, "Correct horse battery 9", v3[:]) { return 19 }
     if PasskeyParse(TextUntilNul(v3[:])).valid { return 20 }
     if RecoverySealedParse(text).valid { return 21 }
     if RecoveryNeedsPassword(text) { return 22 }
