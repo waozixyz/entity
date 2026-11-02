@@ -26,7 +26,15 @@ EntityHostCommand :: (page: string) -> bool { command = page; calls += 1; return
 for name in ('EntityHostProfileRequest', 'EntityHostLeaderboard', 'EntityHostPage'):
     source += function(native, name) + '\n'
 source += '\n' + function(ROOT / 'src/browser_host.zi', 'BrowserServices') + '\n'
+source += function(ROOT / 'src/entity.zi', 'CurrentPageTitle').replace('#program_export\n', '') + '\n'
 source += '''
+telegram_open: bool;
+profile_leaderboard_open: bool;
+achievement_open: bool;
+dew_page: bool;
+management_page: s32;
+Label :: (key: string, fallback: string) -> string { return key }
+PageTitle :: () -> string { return "friends-title" }
 HostValue :: struct { text: string }
 browser_mini: bool;
 browser_profile: bool;
@@ -68,6 +76,27 @@ Check :: () -> s32 {
     if BrowserServices(null, null, null, *args[0], 2, *answer) != 0 { return 10 }
     browser_mini = false
     if BrowserServices(null, null, null, *args[0], 2, *answer) != 1 || answer.text != "shop" { return 11 }
+    if CurrentPageTitle() != "entity.title" { return 12 }
+    management_page = 1
+    if CurrentPageTitle() != "friends-title" { return 13 }
+    dew_page = true
+    if CurrentPageTitle() != "profile_dew_title" { return 14 }
+    achievement_open = true
+    if CurrentPageTitle() != "achievements_title" { return 15 }
+    profile_leaderboard_open = true
+    if CurrentPageTitle() != "leaderboard_title" { return 16 }
+    telegram_open = true
+    if CurrentPageTitle() != "Telegram" { return 17 }
+    telegram_open = false
+    if CurrentPageTitle() != "leaderboard_title" { return 18 }
+    profile_leaderboard_open = false
+    if CurrentPageTitle() != "achievements_title" { return 19 }
+    achievement_open = false
+    if CurrentPageTitle() != "profile_dew_title" { return 20 }
+    dew_page = false
+    if CurrentPageTitle() != "friends-title" { return 21 }
+    management_page = 0
+    if CurrentPageTitle() != "entity.title" { return 22 }
     return 42
 }
 '''

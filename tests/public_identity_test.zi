@@ -26,6 +26,9 @@ clipboard: [256]u8;
 pointer: PointerFrame;
 failures: s32;
 dew_enabled: bool;
+friends_enabled: bool;
+friends_snapshot: string;
+friend_identity :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 dew_snapshot: string;
 #if #defined(ENTITY_DEW_CAPTURE) {
     // Optional screenshots contain only the synthetic identity below.
@@ -47,7 +50,7 @@ dew_snapshot: string;
 }
 
 Allows :: (context: *void, name: string) -> bool {
-    return (dew_enabled && name == "entity.dew") || name == "ReadStoreHost" || name == "WriteStoreHost" ||
+    return (friends_enabled && name == "entity.friends") || (dew_enabled && name == "entity.dew") || name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppServiceHost" || name == "AppLocaleHost" || name == "ClipboardCopyHost" || name == "entity.management";
 }
 Answer :: (text: string) -> HostValue {
@@ -59,7 +62,7 @@ Services :: (context: *void, module: *u8, function: *u8,
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
-        result.* = Answer(ifx service == "entity.management" then snapshot else ifx service == "entity.dew" then dew_snapshot else "")
+        result.* = Answer(ifx service == "entity.management" then snapshot else ifx service == "entity.dew" then dew_snapshot else ifx service == "entity.friends" then friends_snapshot else "")
         return 1
     }
     if name == "AppLocaleHost" && count == 1 { result.* = Answer(AppArgumentText(arguments[0])); return 1 }
@@ -118,6 +121,15 @@ ClickKey :: (key: u64) {
     pointer = .{}
     Frame()
 }
+SetFriends :: (owner: string, present: bool) {
+    EntityFree(friends_snapshot)
+    friends: Vec(u8)
+    BuilderPrint(*friends, "{\"owner\":\"%\",\"busy\":false,\"list\":{\"friends\":[", owner)
+    if present { BuilderPrint(*friends, "{\"user_id_hash\":\"%\",\"alias\":\"river\"}", friend_identity) }
+    BuilderPrint(*friends, "]},\"requests\":{\"incoming\":[],\"outgoing\":[]}}")
+    friends_snapshot = BuilderFinish(friends)
+}
+
 Command :: (name: string) {
     app.command = name
     Expect(AppContextRun(*app, APP_COMMAND), "profile command runs")
@@ -257,6 +269,58 @@ main :: () -> s32 {
     Command("dew")
     for frame: 0..15 { Frame() }
     Expect(FindKey(19000) < 0, "another account never sees the previous payment QR")
+    friends_enabled = true
+    account.public_id[0] = #char "0"
+    EntityFree(snapshot)
+    snapshot = ManagementEncode(account)
+    SetFriends(identity, true)
+    Command("root:profile")
+    for frame: 0..15 { Frame() }
+    ClickKey(551)
+    app.command = "page-title"
+    Expect(AppContextRun(*app, APP_COMMAND) && app.reply == "Friends", "host receives Friends title")
+    Frame()
+    ClickKey(60100)
+    Expect(FindKey(19500) >= 0 && FindKey(19503) >= 0, "friend row opens complete public-ID dialog")
+    ClickKey(19503)
+    Expect(TextUntilNul(clipboard[:]) == friend_identity, "friend ID copies exactly, not the host ID")
+    account.public_id[0] = #char "a"
+    EntityFree(snapshot)
+    snapshot = ManagementEncode(account)
+    for frame: 0..15 { Frame() }
+    Expect(FindKey(19500) < 0, "account changes dismiss friend's ID")
+    account.public_id[0] = #char "0"
+    EntityFree(snapshot)
+    snapshot = ManagementEncode(account)
+    Command("root:profile")
+    for frame: 0..15 { Frame() }
+    ClickKey(551)
+    ClickKey(60100)
+    Expect(FindKey(19500) >= 0, "friend dialog can reopen for its owner")
+    // Back first dismisses the modal; a second Back leaves Friends.
+    Command("back")
+    Command("back")
+    Expect(FindKey(19500) < 0 && FindKey(60100) < 0, "leaving Friends clears its ID dialog")
+    ClickKey(551)
+    ClickKey(60100)
+    SetFriends(friend_identity, true)
+    Frame()
+    Expect(FindKey(19500) < 0 && FindKey(60100) < 0, "a forged other-owner response cannot retain friend ID")
+    SetFriends(identity, true)
+    Frame()
+    ClickKey(60100)
+    Expect(FindKey(19500) >= 0, "verified owner response restores the friend action")
+    SetFriends(identity, false)
+    Frame()
+    Expect(FindKey(19500) < 0, "removed friend dismisses stale ID")
+    Command("back")
+    app.command = "page-title"
+    Expect(AppContextRun(*app, APP_COMMAND) && app.reply == "Your profile", "Back restores Profile title")
+    Frame()
+    ClickKey(705)
+    ClickKey(19503)
+    Expect(TextUntilNul(clipboard[:]) == identity, "self ID still copies host ID after viewing a friend")
+    EntityFree(friends_snapshot)
     EntityFree(dew_snapshot)
     HostedAppClose(*app.app)
     unused SessionClose(app.session)

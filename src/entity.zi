@@ -87,6 +87,7 @@ qr_text: [1024]u8;
 qr_valid: bool;
 public_id_open: bool;
 public_id_owner: [65]u8;
+public_id_target: [65]u8;
 public_id_copied: bool;
 public_id_scroll: s32;
 public_id_display: [129]u8;
@@ -584,6 +585,7 @@ PublicIdLine :: (id: s32, bounds: Rectangle) {
     if Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
             .bounds = text_bounds, .label = Label("entity.public_id", "Public ID"), .invisible = true}) != 0 {
         public_id_owner = management.public_id
+        public_id_target = management.public_id
         public_id_copied = false
         public_id_scroll = 0
         public_id_open = true
@@ -600,8 +602,10 @@ PublicIdLine :: (id: s32, bounds: Rectangle) {
 
 PublicIdModal :: () {
     if !public_id_open { return }
-    identity := TextUntilNul(public_id_owner[:])
-    if !management.account || identity != TextUntilNul(management.public_id[:]) {
+    identity := TextUntilNul(public_id_target[:])
+    owner := TextUntilNul(public_id_owner[:])
+    if !management.account || owner != TextUntilNul(management.public_id[:]) ||
+    (identity != owner && !FriendPublicIdPresent(identity)) {
         public_id_open = false
         return
     }
@@ -1306,9 +1310,23 @@ Draw :: () {
     PictureModal()
 }
 
+// Match Draw's page precedence when a host owns the title bar.
+CurrentPageTitle :: () -> string {
+    if telegram_open { return "Telegram" }
+    if profile_leaderboard_open { return Label("leaderboard_title", "Leaderboard") }
+    if achievement_open { return Label("achievements_title", "Achievements") }
+    if dew_page { return Label("profile_dew_title", "Dew balance") }
+    if management_page != 0 { return PageTitle() }
+    return Label("entity.title", "Your profile")
+}
+
 #program_export
 Main :: () -> s64 {
     mode := AppMode()
+    if mode == APP_COMMAND && AppCommand() == "page-title" {
+        AppReply(CurrentPageTitle())
+        return 0
+    }
     if mode == APP_COMMAND && AppCommand() == "back" && choosing_picture {
         choosing_picture = false
         AppReply("handled")

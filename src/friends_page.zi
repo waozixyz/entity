@@ -38,6 +38,30 @@ FriendName :: (document: string, item: s32, name_key: string, id_key: string, ou
 }
 
 
+// A friend ID is public, but the modal must still belong to the current
+// account's current Friends response and close when that context changes.
+FriendPublicIdPresent :: (identity: string) -> bool {
+    if management_page != PAGE_FRIENDS || identity.count != 64 { return false }
+    for byte: identity {
+        if !(byte >= #char "0" && byte <= #char "9") &&
+        !(byte >= #char "a" && byte <= #char "f") { return false }
+    }
+    document := TextUntilNul(friends_page[:])
+    owner: [65]u8
+    if ReadStringText(document, FieldAt(document, 0, "owner"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != TextUntilNul(management.public_id[:]) { return false }
+    at := FieldAt(document, FieldAt(document, 0, "list"), "friends")
+    count := ArrayCount(document, at)
+    for index: cast(s32)0..count - 1 {
+        if index >= 128 { break }
+        id: [65]u8
+        item := ElementAt(document, at, index)
+        if ReadStringText(document, FieldAt(document, item, "user_id_hash"), id[:]) == 64 &&
+        TextUntilNul(id[:]) == identity { return true }
+    }
+    return false
+}
+
 FriendsPage :: (x: float32, y: *float32, width: float32) {
     if !management.account { SignInChoices(x, y, width); return }
     if TextUntilNul(friends_page_owner[:]) != TextUntilNul(management.public_id[:]) {
@@ -94,7 +118,15 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
             fallback := EntityAbstractFromPublicIcon(EntityFriendIcon(0, TextUntilNul(id[:])))
             Image(session, AbstractPicture(fallback, image_bounds))
         }
-        TextLine(cast(u64)(60100 + index * 4), FriendName(document, item, "alias", "user_id_hash", name[:]), x + 52.0 * scale, y.*, width - 152.0 * scale, 16)
+        if Action(60100 + index * 4, FriendName(document, item, "alias", "user_id_hash", name[:]),
+                Rectangle.{x + 52.0 * scale, y.*, width - 152.0 * scale, 44.0 * scale}) &&
+        FriendPublicIdPresent(TextUntilNul(id[:])) {
+            public_id_owner = management.public_id
+            public_id_target = id
+            public_id_scroll = 0
+            public_id_copied = false
+            public_id_open = true
+        }
         confirming := TextUntilNul(friends_remove[:]) == TextUntilNul(id[:])
         if !busy && Action(60101 + index * 4, Label(ifx confirming then "entity.confirm" else "profile_remove_friend", ifx confirming then "Confirm" else "Remove"),
                 Rectangle.{x + width - 96.0 * scale, y.*, 96.0 * scale, 44.0 * scale}) {

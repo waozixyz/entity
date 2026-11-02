@@ -26,7 +26,10 @@ through `AppReply`; the host accepts only its own routes. Send the `reload`
 command after returning from an extension. Run `APP_SAVE` before leaving Entity
 and keep the page open if saving fails. Hosts that supply their own title and Back
 control set `host_navigation` in `EntityState`; Entity then omits its duplicate
-navigation. Standalone Entity keeps its own navigation.
+navigation. Standalone Entity keeps its own navigation. The `page-title`
+command returns the current localized management page title for a host title bar.
+Friends rows open the same complete public-ID/QR dialog; it closes on account
+changes or when the selected friend leaves the current owner-scoped response.
 
 The default node is `https://api.waozi.xyz`. Selecting a node does not create an
 account or enable synchronization. A host maps the node selection to its own
