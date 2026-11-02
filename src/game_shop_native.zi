@@ -14,6 +14,7 @@
 #import "daochi_client/async_client"
 #import "daochi_client/client"
 Auth :: #import "daochi_client/auth";
+ShopWire :: #import "daochi_client/entity";
 #import "kryon/http_transfer"
 #import "kryon/open_uri"
 
@@ -29,6 +30,12 @@ shop_session: Auth.Session;
 shop_transfer: HttpTransfer;
 shop_response: [131072]u8;
 shop_answer: [1024]u8;
+// Kept only in memory, scoped to the authenticated owner. Never part of status.
+shop_grant: bool;
+shop_grant_status: string = "idle";
+shop_grant_token: [512]u8;
+shop_grant_expires: s64;
+shop_grant_answer: [1024]u8;
 shop_island_quote: bool;
 shop_island_price: s64;
 shop_island_confirmed: s64;
@@ -51,6 +58,9 @@ ShopOwner :: () {
     CancelRequest(*shop_request)
     HttpTransferCancel(*shop_transfer)
     shop_session = .{}
+    ShopGrantClear("idle")
+    shop_grant = false
+    shop_response = .{}
     shop_owner = account_recovery.keys.public_id
     shop_owned = 0
     shop_loaded = false
@@ -68,6 +78,69 @@ ShopOwner :: () {
     shop_island_price = 0
     shop_island_confirmed = 0
 }
+ShopGrantClear :: (status: string) {
+    shop_grant_token = .{}
+    shop_grant_expires = 0
+    shop_grant_answer = .{}
+    shop_grant_status = status
+}
+ShopGrantExpire :: (now: s64) {
+    if shop_grant_expires > 0 && now >= shop_grant_expires { ShopGrantClear("expired") }
+}
+// Grants remain opaque: the package node verifies the issuer signature and
+// product binding. Also bind the canonical payload here and bound its expiry.
+ShopGrantRead :: (response: string, now: s64) -> bool {
+    expiry := ReadNumber(response, FieldAt(response, 0, "expires_at"))
+    bytes: [512]u8
+    if ReadStringText(response, FieldAt(response, 0, "grant"), bytes[:]) < 0 { return false }
+    token := TextUntilNul(bytes[:])
+    if !expiry.valid || expiry.value <= cast(float64)now || expiry.value > cast(float64)(now + 3600) ||
+    expiry.value != cast(float64)cast(s64)expiry.value || token.count < 88 || token.count >= shop_grant_token.count { return false }
+    dot: s64 = -1
+    dots: s32 = 0
+    for c, index: token {
+        if c == #char "." { dots += 1; dot = index }
+        else if !(c >= #char "A" && c <= #char "Z") && !(c >= #char "a" && c <= #char "z") &&
+        !(c >= #char "0" && c <= #char "9") && c != #char "-" && c != #char "_" { return false }
+    }
+    if dots != 1 || token.count - dot - 1 != 86 { return false }
+    payload: Vec(u8)
+    BuilderPrint(*payload, "daochi-pack-grant-v1\nshovey.island\n%", cast(s64)expiry.value)
+    decoded: [256]u8
+    length := ShopWire.EntityRecordEnvelope(token[:dot], decoded[:])
+    matches := length > 0 && TextView(decoded[:length]) == TextView(VecSlice(payload, 0, payload.count))
+    VecFree(payload)
+    if !matches { return false }
+    unused CopyCString(token, shop_grant_token[:])
+    shop_grant_expires = cast(s64)expiry.value
+    shop_grant_status = "done"
+    return true
+}
+ShopGrantAnswer :: (start: bool) -> string {
+    ShopGrantExpire(UnixNow())
+    if !DewReady() { ShopGrantClear("signin") }
+    else if start && shop_grant_expires == 0 && !shop_grant {
+        ShopGrantClear("pending")
+        if shop_active || shop_requested { shop_grant_status = "failed" }
+        else {
+            // This operation never sets any purchase or quote state.
+            shop_product = 0
+            shop_pack = 0
+            shop_shovey_pack = 0
+            shop_island_quote = false
+            shop_grant = true
+            shop_requested = true
+        }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"product\":\"shovey.island\",\"owner\":\"%\",\"status\":\"%\",\"grant\":\"%\",\"expires_at\":%}",
+        TextUntilNul(shop_owner[:]), shop_grant_status, TextUntilNul(shop_grant_token[:]), shop_grant_expires)
+    text := BuilderFinish(out)
+    unused CopyCString(text, shop_grant_answer[:])
+    EntityFree(text)
+    return TextUntilNul(shop_grant_answer[:])
+}
+
 ShopStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     return HttpTransferStart(*shop_transfer, request, output, 15000)
 }
@@ -86,6 +159,9 @@ ShopChristmasClaim :: (now: s64) -> bool {
 
 EntityGameShopAnswer :: (request: string) -> string {
     ShopOwner()
+    if request == "shovey.island.grant" || request == "shovey.island.grant.status" {
+        return ShopGrantAnswer(request == "shovey.island.grant")
+    }
     holiday := EntityRecordsAnswer("{\"operation\":\"get\",\"kind\":\"wurm-cosmetics\",\"id\":\"00000000000000000000000000000001\"}")
     if MatchLiteral(holiday, FieldAt(holiday, FieldAt(holiday, 0, "document"), "christmas_2026"), "true") { shop_owned |= 256 }
     if request == "wurm.christmas-2026" {
@@ -159,7 +235,12 @@ EntityGameShopAnswer :: (request: string) -> string {
 EntityGameShopPump :: () {
     ShopOwner()
     if shop_visit { shop_visit = false; unused OpenUri("https://waozi.xyz/") }
+    ShopGrantExpire(UnixNow())
     if !DewReady() {
+        ShopGrantClear("signin")
+        shop_grant = false
+        shop_session = .{}
+        shop_response = .{}
         CancelRequest(*shop_request)
         HttpTransferCancel(*shop_transfer)
         shop_active = false
@@ -171,6 +252,19 @@ EntityGameShopPump :: () {
         if !PollRequest(*shop_request) { return }
         shop_active = false
         shop_status = "failed"
+        if shop_grant {
+            shop_grant = false
+            ShopGrantClear("failed")
+            if shop_request.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && shop_request.status == 200 {
+                unused ShopGrantRead(TextUntilNul(shop_response[:]), UnixNow())
+            } else if shop_request.stage == 3 && shop_request.failure == 0 {
+                if shop_request.status == 403 { shop_grant_status = "unowned" }
+                if shop_request.status == 401 { shop_grant_status = "signin" }
+            }
+            shop_response = .{}
+            shop_status = shop_grant_status
+            return
+        }
         if shop_request.result != cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK {
             // Distinguish an authenticated endpoint refusal from a login or transport failure.
             if shop_product == SHOVEY_ISLAND_PRODUCT && shop_request.stage == 3 && shop_request.failure == 0 &&
@@ -279,7 +373,9 @@ EntityGameShopPump :: () {
     client: Client
     body: Vec(u8)
     purchase := shop_product > 0 || shop_pack > 0 || shop_shovey_pack > 0
-    if shop_product == SHOVEY_ISLAND_PRODUCT {
+    if shop_grant {
+        BuilderPrint(*body, "{\"product\":\"shovey.island\"}")
+    } else if shop_product == SHOVEY_ISLAND_PRODUCT {
         BuilderPrint(*body, "{\"product\":\"shovey.island\",\"expected_units\":%}", shop_island_confirmed)
     } else if shop_pack > 0 {
         BuilderPrint(*body, "{\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"amount\":%,\"action\":\"%\",\"idempotency_key\":\"%\"}",
@@ -296,9 +392,12 @@ EntityGameShopPump :: () {
     if transport.start == null { transport = AsyncTransport.{.start = ShopStart, .poll = ShopPoll, .cancel = ShopCancel} }
     shop_response = .{}
     shop_active = AccountStoreClient(null, *client) && BeginRequest(*shop_request, client, *shop_session,
-        UnixNow(), transport, ifx purchase then "POST" else "GET",
-        ifx shop_island_quote then "/api/v1/unlocks/products" else ifx shop_product == SHOVEY_ISLAND_PRODUCT then "/api/v1/unlocks" else ifx purchase then "/api/v1/tokens/spend" else "/api/v1/tokens/ledger?app_id=entity",
+        UnixNow(), transport, ifx purchase || shop_grant then "POST" else "GET",
+        ifx shop_grant then "/api/v1/unlocks/grant" else ifx shop_island_quote then "/api/v1/unlocks/products" else ifx shop_product == SHOVEY_ISLAND_PRODUCT then "/api/v1/unlocks" else ifx purchase then "/api/v1/tokens/spend" else "/api/v1/tokens/ledger?app_id=entity",
         TextView(VecSlice(body, 0, body.count)), shop_response[:], headers[:])
     VecFree(body)
-    if !shop_active { shop_status = "failed" }
+    if !shop_active {
+        shop_status = "failed"
+        if shop_grant { shop_grant = false; ShopGrantClear("failed") }
+    }
 }

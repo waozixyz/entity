@@ -13,6 +13,7 @@
 #import "std/json_scan"
 #import "std/net_http"
 #import "std/timer_linux"
+#import "std/date_time_linux"
 #import "daochi_client/keys"
 #import "daochi_client/async_client"
 #import "kryon/http_transfer"
@@ -35,6 +36,23 @@ Start :: (context: *void, request: HttpRequest, output: []u8) -> bool {
 OfflineStart :: (context: *void, request: HttpRequest, output: []u8) -> bool { return false }
 Poll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*transfer, status) }
 Cancel :: (context: *void) { HttpTransferCancel(*transfer) }
+// Deterministic delayed transport retains a late response for cancellation tests.
+late_output: []u8;
+late_answer: [1024]u8;
+late_ready: bool;
+late_cancelled: bool;
+late_http: s32 = 200;
+LateStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    late_output = output
+    return request.method == "POST" && request.body == "{\"product\":\"shovey.island\"}"
+}
+LatePoll :: (context: *void, status: *s32) -> s32 {
+    if !late_ready { return -1 }
+    unused CopyCString(TextUntilNul(late_answer[:]), late_output)
+    status.* = late_http
+    return 1
+}
+LateCancel :: (context: *void) { late_cancelled = true }
 Wait :: () -> bool {
     for round: 0..1200 {
         EntityDewPump()
@@ -63,10 +81,77 @@ Check :: () -> s32 {
     shop_transport = AsyncTransport.{.start = Start, .poll = Poll, .cancel = Cancel}
     unused EntityDewAnswer("shop:refresh")
     if step == "local" {
+        unused EntityGameShopAnswer("shovey.island.grant")
+        if shop_grant_status != "signin" || shop_grant || shop_grant_expires != 0 { return 40 }
         EntityDewPump()
         return ifx shop_status == "signin" && !shop_active && !shop_requested then 0 else 13
     }
     if !Wait() { print("shop restore failed: %, stage %, HTTP %, result %\n", shop_status, shop_request.stage, shop_request.status, cast(s32)shop_request.result); return 6 }
+    if step == "grant_unowned" {
+        // Spoofing local ownership must not authorize delivery or buy anything.
+        shop_owned |= 1 << SHOVEY_ISLAND_PRODUCT
+        unused EntityGameShopAnswer("shovey.island.grant")
+        if Wait() || shop_grant_status != "unowned" || shop_grant_expires != 0 || shop_grant_token[0] != cast(u8)0 { return 31 }
+        return 0
+    }
+    if step == "grant_owned" {
+        // Exercise the actual hosted-browser route with the production handler.
+        args: [2]HostValue = .[HostValue.{"entity.game-shop"}, HostValue.{"shovey.island.grant"}]
+        answer: HostValue
+        browser_mini = true
+        if BrowserServices(null, null, null, *args[0], 2, *answer) != 0 || shop_grant { return 32 }
+        browser_mini = false
+        if BrowserServices(null, null, null, *args[0], 2, *answer) != 1 || !shop_grant || !Wait() { return 33 }
+        reply := EntityGameShopAnswer("shovey.island.grant.status")
+        if !GameShopField(reply, "status", "done") || !GameShopField(reply, "owner", TextUntilNul(shop_owner[:])) ||
+        shop_grant_expires <= UnixNow() || shop_grant_token[0] == cast(u8)0 { return 34 }
+        saved: Vec(u8)
+        BuilderPrint(*saved, "{\"grant\":\"%\",\"expires_at\":%}", TextUntilNul(shop_grant_token[:]), shop_grant_expires)
+        unused CopyCString(TextView(VecSlice(saved, 0, saved.count)), late_answer[:])
+        VecFree(saved)
+        // Ordinary status must not expose the download credential.
+        if FieldAt(EntityGameShopAnswer("status"), 0, "grant") >= 0 { return 35 }
+        // Repeated starts reuse the grant without sending another request.
+        unused EntityGameShopAnswer("shovey.island.grant")
+        if shop_grant || shop_requested { return 41 }
+        ShopGrantExpire(shop_grant_expires)
+        if shop_grant_expires != 0 || shop_grant_status != "expired" { return 36 }
+        // Malformed/expired endpoint answers fail closed with no credential.
+        if ShopGrantRead("{}", UnixNow()) || ShopGrantRead("{\"grant\":\"bad/path\",\"expires_at\":1}", UnixNow()) ||
+        shop_grant_token[0] != cast(u8)0 { return 42 }
+        if ShopGrantRead("{\"grant\":\"ZGFvY2hpLXBhY2stZ3JhbnQtdjEKb3RoZXIucHJvZHVjdAoxMDAx.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":1001}", 1000) { return 43 }
+        if ShopGrantRead("{\"grant\":\"ZGFvY2hpLXBhY2stZ3JhbnQtdjEKc2hvdmV5LmlzbGFuZAoxMDAx.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":1002}", 1000) { return 43 }
+        if ShopGrantRead("{\"grant\":\"ZGFvY2hpLXBhY2stZ3JhbnQtdjEKc2hvdmV5LmlzbGFuZAoxMDAx.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":1000}", 1000) { return 43 }
+        if ShopGrantRead("{\"grant\":\"ZGFvY2hpLXBhY2stZ3JhbnQtdjEKc2hvdmV5LmlzbGFuZAoxMDAx.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":4601}", 1000) { return 43 }
+        if ShopGrantRead("{\"grant\":\"ZGFvY2hpLXBhY2stZ3JhbnQtdjEKc2hvdmV5LmlzbGFuZAoxMDAx.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":1001.5}", 1000) { return 43 }
+        if ShopGrantRead("{\"grant\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"expires_at\":1001}", 1000) { return 43 }
+        shop_transport.start = OfflineStart
+        unused EntityGameShopAnswer("shovey.island.grant")
+        if Wait() || shop_grant_status != "failed" || shop_grant_token[0] != cast(u8)0 { return 37 }
+        shop_transport = AsyncTransport.{.start = LateStart, .poll = LatePoll, .cancel = LateCancel}
+        late_ready = true
+        late_http = 503
+        unused EntityGameShopAnswer("shovey.island.grant")
+        if Wait() || shop_grant_status != "failed" || shop_grant_expires != 0 { return 44 }
+        late_ready = false
+        late_http = 200
+        unused EntityGameShopAnswer("shovey.island.grant")
+        EntityGameShopPump()
+        // Switch identity while the request is in flight; no response may leak.
+        account_recovery.keys.public_id = .{}
+        reply = EntityGameShopAnswer("shovey.island.grant.status")
+        if shop_active || shop_grant || shop_grant_expires != 0 || !GameShopField(reply, "grant", "") { return 38 }
+        if !late_cancelled { return 45 }
+        // Even a stale transport writing the old response after cancellation
+        // cannot repopulate the new identity's grant state.
+        unused CopyCString(TextUntilNul(late_answer[:]), late_output)
+        late_ready = true
+        EntityGameShopPump()
+        if shop_grant_expires != 0 || shop_grant_token[0] != cast(u8)0 { return 46 }
+        account_standalone_ready = false
+        unused EntityGameShopAnswer("shovey.island.grant")
+        return ifx shop_grant_status == "signin" && !shop_requested then 0 else 39
+    }
     if step == "empty" { return ifx shop_owned == 0 then 0 else 7 }
     if step == "restored" {
         if shop_owned != 65166 { return 8 }

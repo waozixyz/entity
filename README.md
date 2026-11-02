@@ -253,6 +253,20 @@ queues opening `https://waozi.xyz/` after the guest frame.
 retries, fresh-device restoration and account isolation on a private local node
 with throwaway keys and Dew.
 
+For protected Island package delivery, send `shovey.island.grant` and poll
+`shovey.island.grant.status`. Both return JSON with `product` (`shovey.island`),
+`owner` (public account ID), `status`, `grant` (opaque URL-safe signed token or
+empty) and `expires_at` (Unix seconds, or zero). Status is `idle`, `pending`,
+`done`, `signin`, `unowned`, `failed` or `expired`. A busy shop returns `failed`;
+retry the start request after the other operation finishes. A valid grant is
+reused until expiry; an expired or failed grant requires another start request.
+The authenticated node checks ownership; this request never buys the product.
+Only these dedicated replies contain the grant. Keep it in memory, never log
+or persist it, and append it only to the trusted package node's protected route.
+The package node verifies the issuer signature and product binding. Account
+switches and logout cancel pending requests and discard cached grants. The
+same contract works through the hosted browser service and `shop:` Dew alias.
+
 Shovey Island uses the same service with a server-priced edition unlock.
 Send `shovey.island.quote`, pump until terminal, and read `island_price_units`,
 `island_regular_price_units`, `island_discount_percent` and `island_owned` in

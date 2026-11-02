@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import shutil
 import socket
 import sqlite3
@@ -30,6 +31,8 @@ def main():
     compiler, kryon, daochi, crypto, oqs, mono = (package(name) for name in
         ('ziran', 'kryon', 'daochi_client', 'crypto', 'oqs', 'monocypher'))
     generated = out / 'generated'
+    # This disposable output also held the previous fixture's module path.
+    shutil.rmtree(generated, ignore_errors=True)
     paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(compiler / 'std'),
              '--module-path', 'kryon=' + str(kryon / 'src/backend'),
              '--module-path', str(kryon / 'src/backend'),
@@ -43,10 +46,30 @@ def main():
     subprocess.run(['cc', '-std=c11', '-O2', '-I' + str(compiler / 'include'), '-I' + str(model),
                     *map(str, model.rglob('*.c')), '-lm', '-o', str(model / 'test')], env=ENV, check=True)
     subprocess.run([str(model / 'test')], env=ENV, check=True)
+    browser = (ROOT / 'src/browser_host.zi').read_text()
+    begin = browser.index('BrowserServices ::')
+    end = re.search(r'^\w+ ::', browser[begin + 18:], re.M)
+    router = browser[begin:begin + 18 + end.start()]
+    fixture_source = out / 'game_shop_integration.zi'
+    fixture_source.write_text((ROOT / 'tests/game_shop_integration.zi').read_text() + '\n' + router + r"""
+HostValue :: struct { text: string }
+browser_mini: bool;
+browser_profile: bool;
+PUBLICATIONS_READ_SERVICE :: "publications.read";
+ENTITY_RECORDS_SERVICE :: "entity.records";
+ENTITY_DEW_SERVICE :: "entity.dew";
+TextFromCString :: (value: *u8) -> string { return "AppServiceHost" }
+AppArgumentText :: (value: HostValue) -> string { return value.text }
+EntityHostText :: (value: string) -> HostValue { return HostValue.{value} }
+PublicationsReadAnswer :: (request: string) -> string { return "" }
+EntityRecordsAnswer :: (request: string) -> string { return "" }
+EntityHostProfileRequest :: (request: string) -> bool { return false }
+BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 { return 0 }
+""")
     subprocess.run(['ziran', 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
-                    'game_shop_integration:Check', '-o', str(generated), 'tests/game_shop_integration.zi'],
+                    'game_shop_integration:Check', '-o', str(generated), str(fixture_source)],
                    cwd=ROOT, env=ENV, check=True)
-    (generated / 'main.c').write_text('#include "tests/game_shop_integration.h"\n#include <stdio.h>\n#include <unistd.h>\n'
+    (generated / 'main.c').write_text('#include "work/game-shop-integration/game_shop_integration.h"\n#include <stdio.h>\n#include <unistd.h>\n'
         'int main(void) { int result = Check(); if (result) fprintf(stderr, "shop integration step failed: %d\\n", result); '
         'fflush(NULL); _exit(result != 0); }\n')
     executable = out / 'test'
@@ -96,6 +119,7 @@ def main():
             step('first', 'create')
             step('first', 'empty')
             step('other', 'local')
+            step('first', 'grant_unowned')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
             payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 296000000,
@@ -106,6 +130,7 @@ def main():
             for name in ('account.key', 'entity.json'):
                 shutil.copy2(devices['first'] / name, devices['second'] / name)
             step('first', 'buy')
+            step('first', 'grant_owned')
             step('second', 'restored')
             # Retrying from another installation also uses the same keys.
             step('second', 'buy')
@@ -115,6 +140,7 @@ def main():
             step('other', 'create')
             step('other', 'empty')
             step('other', 'insufficient')
+            step('other', 'grant_unowned')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
                 assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000, -10000000, -30000000, -5000000, -10000000, -51000000], events
@@ -127,8 +153,12 @@ def main():
             (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 13,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
                               'receipt restore on a fresh device', 'separate Wurm and Shovey coin packs',
-                              'unfunded account cannot acquire paid skins', 'different accounts have separate ownership']}, indent=2))
-            print('Game shop integration local tests: thirteen private-node debits including Shovey Island launch-sale unlock, separate coin packs, cross-device restore, retries, account isolation and December claim persistence passed.')
+                              'unfunded account cannot acquire paid skins', 'different accounts have separate ownership',
+                              'owned grants through production browser router and native service',
+                              'unowned spoofed flag refused without debit',
+                              'grant expiry, malformed product/expiry, offline and HTTP errors',
+                              'late cancelled grant response cannot cross account switch']}, indent=2))
+            print('Game shop integration local tests: thirteen private-node debits including Shovey Island launch-sale unlock, separate coin packs, cross-device restore, retries, account isolation December claim persistence, browser/native grants, expiry, errors and late account-switch isolation passed.')
         finally:
             node.terminate()
             node.wait(timeout=10)
