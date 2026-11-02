@@ -902,7 +902,6 @@ ProviderPasskeySignIn :: (provider: *ManagementProvider, answer: *SignInAnswer) 
         ProviderBridgeFinish(provider, "error", SIGN_IN_WRONG_PASSKEY)
         return
     }
-    provider.bridge_operation = 0
     if !ProviderOnlinePost(provider, PASSKEY_OPEN_PATH, 20) {
         ProviderBridgeFinish(provider, "error", "Could not reach the node. Try again, use a backup file or link a device.")
     }
@@ -912,7 +911,14 @@ ProviderBridgePoll :: (provider: *ManagementProvider) {
     answer: SignInAnswer
     defer { SignInAnswerClear(*answer) }
     if !SignInBridgePoll(*answer) { return }
+    ProviderBridgeAnswered(provider, *answer)
+}
+
+// The bridge has answered, so nothing waits on it any more: left set, the pump
+// would keep polling it and never read the request started from this answer.
+ProviderBridgeAnswered :: (provider: *ManagementProvider, answer: *SignInAnswer) {
     operation := provider.bridge_operation
+    provider.bridge_operation = 0
     google := operation >= 3
     if TextUntilNul(answer.status[:]) == "cancelled" { ProviderBridgeFinish(provider, "cancelled", ""); return }
     if TextUntilNul(answer.status[:]) == "no_prf" { ProviderBridgeFinish(provider, "error", SIGN_IN_NO_PRF); return }
@@ -920,13 +926,12 @@ ProviderBridgePoll :: (provider: *ManagementProvider) {
         ProviderBridgeFinish(provider, "error", ifx google then SIGN_IN_NO_GOOGLE else SIGN_IN_NO_PASSKEY)
         return
     }
-    if operation == 1 { ProviderPasskeyUpload(provider, *answer); return }
-    if operation == 2 { ProviderPasskeySignIn(provider, *answer); return }
+    if operation == 1 { ProviderPasskeyUpload(provider, answer); return }
+    if operation == 2 { ProviderPasskeySignIn(provider, answer); return }
     if !SignInTokenBody(TextUntilNul(answer.token[:]), provider.online_body[:]) {
         ProviderBridgeFinish(provider, "error", SIGN_IN_NO_GOOGLE)
         return
     }
-    provider.bridge_operation = 0
     started := ifx operation == 3 then ProviderOnlinePost(provider, SIGN_IN_GOOGLE_FIND_PATH, 21) else ProviderSignedRequest(provider, "POST", SIGN_IN_GOOGLE_PATH, TextUntilNul(provider.online_body[:]), 25)
     if !started { ProviderBridgeFinish(provider, "error", "Could not reach the node. Your account here is unchanged.") }
 }

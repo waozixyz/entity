@@ -1,6 +1,7 @@
 #import "model"
 #import "daochi_client/keys"
 #import "daochi_client/rewards"
+#import "daochi_client/client"
 #import "daochi_client/async_client"
 #import "account_store"
 #import "management"
@@ -21,6 +22,8 @@ Auth :: #import "daochi_client/auth";
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/file"
+#import "std/timer_linux"
+#import "sign_in_bridge"
 
 fixture: Recovery;
 current_id: [65]u8;
@@ -469,6 +472,43 @@ SharedAccountCheck :: (fixture: *Recovery) -> s32 {
     return 0
 }
 
+UnreachableNode :: (context: *void, output: *Client) -> bool {
+    output.server_url = "http://127.0.0.1:1"
+    output.app_id = "entity-test"
+    output.identity = Auth.Identity.{.account_id = TextUntilNul(fixture.keys.public_id[:]),
+        .public_key = TextUntilNul(fixture.keys.public_key_hex[:]), .client_id = "entity-test",
+        .signing_context = cast(*void)*fixture.keys}
+    return true
+}
+
+// A passkey's answer ends the wait on the bridge, so the upload's reply is read
+// and the next action on the page is not left queued behind it.
+PasskeyAnswerCheck :: (fixture: *Recovery) -> s32 {
+    current_id = fixture.keys.public_id
+    provider := ManagementProvider.{.snapshot = Snapshot, .load = LoadFixture, .client = UnreachableNode}
+    provider.queue.pending = true
+    provider.queue.request.owner_id = fixture.keys.public_id
+    unused CopyCString("passkey_add", provider.queue.request.operation[:])
+    provider.bridge_operation = 1
+    provider.passkey_account = fixture.keys.public_id
+    answer: SignInAnswer
+    defer { SignInAnswerClear(*answer) }
+    unused CopyCString("ok", answer.status[:])
+    unused CopyCString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", answer.credential[:])
+    unused CopyCString("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", answer.prf[:])
+    ProviderBridgeAnswered(*provider, *answer)
+    if provider.bridge_operation != 0 { return 2 }
+    if !provider.asynchronous { return 3 }
+    for round: 0..2000 {
+        ProviderPump(*provider)
+        if !provider.queue.pending { break }
+        unused SleepMilliseconds(5)
+    }
+    if provider.queue.pending { return 4 }
+    if TextUntilNul(provider.queue.message[:]) != "Could not reach the node. Your account here is unchanged." { return 5 }
+    return 0
+}
+
 #program_export
 Check :: () -> s32 {
     if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
@@ -497,6 +537,8 @@ Check :: () -> s32 {
     if RecoveryDecode(TextUntilNul(backup[:]), "fixture passphrase", *opened) { return 9 }
     if opened.keys.private_key_hex[0] != cast(u8)0 { return 10 }
 
+    passkey_answer_result := PasskeyAnswerCheck(*fixture)
+    if passkey_answer_result != 0 { return 900 + passkey_answer_result }
     sign_out_result := SignOutCheck(*fixture)
     if sign_out_result != 0 { return 580 + sign_out_result }
     online_result := AccountBackupCheck(*fixture)

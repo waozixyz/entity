@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Messages such as a wrong password stay on screen on the website instead of disappearing within a second.
+
 - Every waozi.xyz site with its own key store, such as Breeze and Werk, follows the shared sign-in and sign-out. A site signed in to a different account offers Continue as @name.
 
 - Sign in with a passkey in browsers and Google Play builds where the passkey provider supports PRF. It unlocks a sealed copy of your key that the node can't open. Elsewhere, use your password.
