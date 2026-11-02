@@ -277,7 +277,7 @@ EntityAbstractFromPublicIcon :: (icon: s32) -> s32 {
 }
 
 EntityAbstractPictureAsset :: (index: s32) -> string {
-    names: [3]string = .["assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png"]
+    names: [3]string = .["assets/entity/abstract-jade.webp", "assets/entity/abstract-amber.webp", "assets/entity/abstract-violet.webp"]
     return names[index]
 }
 

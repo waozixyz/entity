@@ -4,13 +4,27 @@
 #import "std/byte_text_linux"
 #program_export
 Check :: (bundle: *void, optional: bool) -> s32 {
-    if !EntityAssetPresent(bundle, "assets/entity/pfp.png") { return 1 }
-    if EntityAssetPresent(bundle, "assets/entity/wurm-base.png") != optional { return 2 }
-    paths: [5]string = .["", "/etc/passwd", "assets/entity/../pfp.png", "assets/entity/sub/pfp.png", "assets/entity/unknown.png"]
+    if !EntityAssetPresent(bundle, "assets/entity/pfp.webp") { return 1 }
+    if EntityAssetPresent(bundle, "assets/entity/wurm-base.webp") != optional { return 2 }
+    paths: [5]string = .["", "/etc/passwd", "assets/entity/../pfp.webp", "assets/entity/sub/pfp.webp", "assets/entity/unknown.png"]
     for path: paths {
         if EntityAssetPresent(bundle, path) { return 3 }
     }
-    if EntityAssetPresent(null, "assets/entity/pfp.png") { return 4 }
+    if EntityAssetPresent(null, "assets/entity/pfp.webp") { return 4 }
+    // Every declared profile or optional atlas survives staging and bundling.
+    for index: cast(s32)0..ENTITY_PROFILE_ASSET_COUNT - 1 {
+        path := EntityProfileAssetAt(index)
+        expected := index < 5 || optional
+        if !EntityProfileAssetName(path) || EntityAssetPresent(bundle, path) != expected { return 7 }
+    }
+    // Removed PNG payloads must not linger in either staged bundle.
+    old: [9]string = .["assets/entity/pfp.png", "assets/entity/flowers.png",
+    "assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png",
+    "assets/entity/wurm-special-skins.png", "assets/entity/wurm-skins.png",
+    "assets/entity/wurm-reward-skins.png", "assets/entity/wurm-base.png"]
+    for path: old {
+        if EntityProfileAssetName(path) || EntityAssetPresent(bundle, path) { return 8 }
+    }
     // Every published game portrait must use the same extraction/access policy.
     for index: 0..7 {
         output: Vec(u8)

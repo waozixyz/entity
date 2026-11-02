@@ -17,10 +17,10 @@ EntityIconImage :: (icon: s32, bounds: Rectangle, alt: string) -> ImageProps {
     if picture < 0 { picture = 0 }
     if picture == 9 {
         // Flowers has its own detailed image.
-        image.asset_path = "assets/entity/flowers.png"
+        image.asset_path = "assets/entity/flowers.webp"
         return image
     }
-    image.asset_path = "assets/entity/pfp.png"
+    image.asset_path = "assets/entity/pfp.webp"
     image.source = Rectangle.{cast(float32)(picture % 5) * 64.0, cast(float32)(picture / 5) * 64.0, 64.0, 64.0}
     return image
 }

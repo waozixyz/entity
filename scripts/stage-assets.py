@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage declared Entity asset groups for an embedding host."""
+"""Stage declared Entity asset groups, preserving their WebP/PNG payload bytes."""
 import argparse
 import json
 from pathlib import Path, PurePosixPath

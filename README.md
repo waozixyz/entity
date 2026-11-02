@@ -38,6 +38,11 @@ existing account and storage operations.
 The optional `entity.assets` service supplies an absolute extracted asset root to
 hosts that need one. Other hosts use the bundle-relative `assets/entity/` paths.
 The picture atlas comes from Kryon and the flower picture from Inner Breeze.
+The three abstract pictures use photo q80 WebP; flowers, the classic picture
+atlas and the four Wurm atlases use lossless WebP with unchanged dimensions and
+RGBA pixels. Hosts adopting this package must use the `.webp` paths in
+`asset-groups.json` and `EntityProfileAssetAt`, including `assets/entity/pfp.webp`;
+the previous nine PNG payloads are no longer packaged.
 
 Embedding hosts may stage `asset-groups.json` through
 `scripts/stage-assets.py --group profile --output HOST_STAGING`. The `profile`

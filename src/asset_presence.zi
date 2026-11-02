@@ -8,10 +8,10 @@
 ENTITY_PROFILE_ASSET_COUNT :: 17
 EntityProfileAssetAt :: (index: s32) -> string {
     names: [17]string = .[
-    "assets/entity/pfp.png", "assets/entity/flowers.png",
-    "assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png",
-    "assets/entity/wurm-special-skins.png", "assets/entity/wurm-skins.png",
-    "assets/entity/wurm-reward-skins.png", "assets/entity/wurm-base.png",
+    "assets/entity/pfp.webp", "assets/entity/flowers.webp",
+    "assets/entity/abstract-jade.webp", "assets/entity/abstract-amber.webp", "assets/entity/abstract-violet.webp",
+    "assets/entity/wurm-special-skins.webp", "assets/entity/wurm-skins.webp",
+    "assets/entity/wurm-reward-skins.webp", "assets/entity/wurm-base.webp",
     "assets/entity/shovey-0.png", "assets/entity/shovey-1.png", "assets/entity/shovey-2.png",
     "assets/entity/shovey-3.png", "assets/entity/shovey-4.png", "assets/entity/shovey-5.png",
     "assets/entity/shovey-6.png", "assets/entity/shovey-7.png"]

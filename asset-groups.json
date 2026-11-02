@@ -1,16 +1,16 @@
 {
   "profile": [
-    "assets/entity/abstract-amber.png",
-    "assets/entity/abstract-jade.png",
-    "assets/entity/abstract-violet.png",
-    "assets/entity/flowers.png",
-    "assets/entity/pfp.png"
+    "assets/entity/abstract-amber.webp",
+    "assets/entity/abstract-jade.webp",
+    "assets/entity/abstract-violet.webp",
+    "assets/entity/flowers.webp",
+    "assets/entity/pfp.webp"
   ],
   "leaderboard": [
-    "assets/entity/wurm-base.png",
-    "assets/entity/wurm-reward-skins.png",
-    "assets/entity/wurm-skins.png",
-    "assets/entity/wurm-special-skins.png",
+    "assets/entity/wurm-base.webp",
+    "assets/entity/wurm-reward-skins.webp",
+    "assets/entity/wurm-skins.webp",
+    "assets/entity/wurm-special-skins.webp",
     "assets/entity/shovey-0.png",
     "assets/entity/shovey-1.png",
     "assets/entity/shovey-2.png",
