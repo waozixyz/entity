@@ -16,6 +16,17 @@ MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 	--module-path qrcode=$(QRCODE_DIR)/src --module-path daochi_client=$(DAOCHI_CLIENT_DIR) \
 	--module-path $(DAOCHI_CLIENT_DIR) --module-path crypto=$(CRYPTO_DIR)/src --module-path oqs=$(OQS_DIR)/src
+ACHIEVEMENT_TEST_BINDS = --bind font_metrics:MeasureGlyphWidth=ziran_widget_noop_host:MeasureGlyphWidth \
+	--bind font_metrics:MeasureGlyphLineHeight=ziran_widget_noop_host:MeasureGlyphLineHeight \
+	--bind image_raster:ImageWidth=ziran_widget_noop_host:ImageWidth \
+	--bind image_raster:ImageHeight=ziran_widget_noop_host:ImageHeight \
+	--bind raster_shape:RasterRoundedRectangle=ziran_widget_noop_host:RasterRoundedRectangle \
+	--bind raster_shape:RasterRoundedRectangleOutline=ziran_widget_noop_host:RasterRoundedRectangleOutline \
+	--bind raster:RasterLine=ziran_widget_noop_host:RasterLine \
+	--bind raster_text:RasterText=ziran_widget_noop_host:RasterText \
+	--bind raster_text:RasterTextClipped=ziran_widget_noop_host:RasterTextClipped \
+	--bind paint_queue:RasterImage=ziran_widget_noop_host:RasterImage \
+	--bind paint_queue:RasterImageMesh=ziran_mesh_noop_host:RasterImageMesh
 SOURCES := $(wildcard src/*.zi)
 ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
@@ -79,7 +90,7 @@ dew-play-savings-test:
 .PHONY: achievement-view-test
 achievement-view-test:
 	mkdir -p build/achievement-view-test
-	$(ZIRAN) build --root . $(MODULE_PATHS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
+	$(ZIRAN) build --root . $(MODULE_PATHS) --module-path $(KRYON_DIR)/tests $(ACHIEVEMENT_TEST_BINDS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
 	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/achievement-view-test $$(rg --files build/achievement-view-test -g '*.c') -lm -o build/achievement-view-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/achievement-view-test/test
 build/liboqs/lib/liboqs.a: ziran.lock Makefile

@@ -1,5 +1,12 @@
 #import "achievement_view"
 #import "achievement_toast"
+#import "ziran_mesh_noop_host"
+#import "ziran_widget_noop_host"
+#import "kryon/geometry"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/tree_draw"
+#import "kryon/tree_input"
 #import "std/c_string"
 #import "std/text_buffer"
 
@@ -10,6 +17,7 @@ JSON
 FilteredPage :: #string JSON
 {"version":1,"owner":"profile-a","page":0,"pages":1,"total":1,"earned":1,"alerts":1,"app":"inbe.diary","apps":[{"id":"inbe.diary","title":"Diary"}],"rows":[{"group":"Diary","title":"First page","description":"Save a diary day.","progress":"1 / 1","date":"2026-10-20","earned":1,"icon":"S1.5rr:M4 4H20V20H4Z"}]}
 JSON
+
 
 #program_export
 Answer :: () -> s32 {
@@ -37,7 +45,96 @@ Answer :: () -> s32 {
 }
 
 #program_export
+AchievementToastAnswer :: () -> s32 {
+    session := SessionOpen()
+    if !SessionValid(session) { return 100 }
+    defer CloseSession(session)
+    pointer: PointerFrame
+    toast: AchievementToast
+
+    DrawToast :: (session: Session, toast: *AchievementToast, props: AchievementToastProps,
+        pointer: PointerFrame) -> bool {
+        unused TreePointerUpdate(session, pointer)
+        unused BeginFrame(session, 1, props.viewport)
+        showing := AchievementToastDraw(session, toast, props)
+        unused EndFrame(session)
+        return showing
+    }
+    FindKey :: (session: Session, key: u64) -> s32 {
+        for index: cast(s32)0..TreeCount(session) - 1 {
+            if TreeNodeAt(session, index).key == key { return index }
+        }
+        return -1
+    }
+
+    props: AchievementToastProps
+    props.key = cast(u64)91000
+    props.viewport = Rectangle.{0.0, 0.0, 220.0, 400.0}
+    props.scale = 1.0
+    props.now = 102.9
+    props.seconds = -2.0
+    props.fill.r = 32
+    props.fill.g = 36
+    props.fill.b = 42
+    props.fill.a = 255
+    props.border.r = 66
+    props.border.g = 74
+    props.border.b = 86
+    props.border.a = 255
+    props.accent.r = 236
+    props.accent.g = 145
+    props.accent.b = 76
+    props.accent.a = 255
+    AchievementToastShow(*toast, "Achievement unlocked", "First page",
+        "S1.5rr:M4 4H20V20H4Z", 100.0)
+    if !DrawToast(session, *toast, props, pointer) { return 101 }
+    default_root := TreeNodeAt(session, FindKey(session, props.key)).bounds
+    default_badge_index := FindKey(session, props.key + 1)
+    default_text := TreeNodeAt(session, FindKey(session, props.key + 2)).bounds
+    if default_badge_index < 0 || default_text.x != default_root.x + 64.0 ||
+    default_text.width != default_root.width - 76.0 { return 102 }
+    props.now = 103.5
+    if DrawToast(session, *toast, props, pointer) { return 103 }
+
+    props.plain = true
+    props.seconds = 10.0
+    props.now = 201.0
+    AchievementToastShow(*toast, "Achievement unlocked", "Saved list",
+        "S1.5rr:M4 4H20V20H4Z", 200.0)
+    if !DrawToast(session, *toast, props, pointer) { return 104 }
+    if FindKey(session, props.key + 1) >= 0 { return 105 }
+    root := TreeNodeAt(session, FindKey(session, props.key)).bounds
+    label := TreeNodeAt(session, FindKey(session, props.key + 2)).bounds
+    title := TreeNodeAt(session, FindKey(session, props.key + 3)).bounds
+    dismiss := TreeNodeAt(session, FindKey(session, props.key + 4)).bounds
+    if label.x != root.x + 12.0 || title.x != root.x + 12.0 { return 106 }
+    if label.width != root.width - 24.0 || title.width != root.width - 24.0 { return 107 }
+    if dismiss.x != root.x || dismiss.y != root.y || dismiss.width != root.width || dismiss.height != root.height { return 108 }
+
+    props.now = 209.9
+    if !DrawToast(session, *toast, props, pointer) { return 111 }
+    props.now = 210.0
+    if DrawToast(session, *toast, props, pointer) { return 112 }
+
+    props.now = 301.0
+    AchievementToastShow(*toast, "Achievement unlocked", "Saved list",
+        "S1.5rr:M4 4H20V20H4Z", 300.0)
+    if !DrawToast(session, *toast, props, pointer) { return 113 }
+    dismiss_index := FindKey(session, props.key + 4)
+    if dismiss_index < 0 { return 109 }
+    click := TreeNodeAt(session, dismiss_index).bounds
+    pointer = PointerFrame.{click.x + click.width * 0.5, click.y + click.height * 0.5, true, true, false}
+    props.now = 302.0
+    unused DrawToast(session, *toast, props, pointer)
+    pointer = PointerFrame.{pointer.x, pointer.y, false, false, true}
+    props.now = 303.0
+    if DrawToast(session, *toast, props, pointer) || toast.active { return 110 }
+    return 0
+}
+
+#program_export
 main :: () -> s32 {
     result := Answer()
-    return ifx result == 42 then 0 else result
+    if result != 42 { return result }
+    return AchievementToastAnswer()
 }
