@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show one star for each character typed in a shared password field, with no fake prefill or eight-star limit.
+
 - Messages such as a wrong password stay on screen on the website instead of disappearing within a second.
 
 - Every waozi.xyz site with its own key store, such as Breeze and Werk, follows the shared sign-in and sign-out. A site signed in to a different account offers Continue as @name.

@@ -6,6 +6,7 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
+Utf8 :: #import "std/utf8"
 Json :: #import "std/json_scan";
 
 ACCOUNT_CREATE :: 1
@@ -33,6 +34,18 @@ MANAGEMENT_PASSKEY_LIMIT :: 8
 ManagementPasskey :: struct {
     credential: [65]u8
     label: [41]u8
+}
+
+// Kryon's secure field maps the caret by Unicode scalar, so the mask does too.
+PasswordMask :: (value: string, output: []u8) -> string {
+    used: s32 = 0
+    star := "*"
+    for unused: 0..Utf8.Count(value) - 1 {
+        if used >= cast(s32)output.count { break }
+        output[used] = star[0]
+        used += 1
+    }
+    return TextView(output[:used])
 }
 
 ManagementNode :: struct {

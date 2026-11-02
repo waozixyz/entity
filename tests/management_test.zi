@@ -509,6 +509,20 @@ PasskeyAnswerCheck :: (fixture: *Recovery) -> s32 {
     return 0
 }
 
+PasswordMaskCheck :: () -> s32 {
+    mask: [160]u8
+    if PasswordMask("", mask[:]) != "" { return 1 }
+    if PasswordMask("a", mask[:]) != "*" { return 2 }
+    if PasswordMask("é中Ж", mask[:]) != "***" { return 3 }
+    if PasswordMask("é中", mask[:]) != "**" { return 4 }
+    if PasswordMask("", mask[:]) != "" { return 5 }
+    long_value := "é中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé中Жé"
+    if PasswordMask(long_value, mask[:]).count != 160 { return 8 }
+    if PasswordMask("a\u0308b", mask[:]) != "***" { return 6 }
+    if PasswordMask("abcdefghijkl", mask[:]) != "************" { return 7 }
+    return 0
+}
+
 #program_export
 Check :: () -> s32 {
     if CreateAccountKeys(*fixture.keys) == 0 { return 1 }
@@ -541,6 +555,8 @@ Check :: () -> s32 {
     if passkey_answer_result != 0 { return 900 + passkey_answer_result }
     sign_out_result := SignOutCheck(*fixture)
     if sign_out_result != 0 { return 580 + sign_out_result }
+    mask_result := PasswordMaskCheck()
+    if mask_result != 0 { return 760 + mask_result }
     online_result := AccountBackupCheck(*fixture)
     if online_result != 0 { return 500 + online_result }
     shared_result := SharedAccountCheck(*fixture)

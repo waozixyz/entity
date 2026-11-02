@@ -71,6 +71,7 @@ management_scroll: s32;
 account_alias: [40]u8;
 account_passphrase: [512]u8;
 account_passphrase_repeat: [512]u8;
+password_mask: [160]u8;
 sign_in_account: [80]u8;
 // The account Google last found, so the field fills once and can then be edited.
 sign_in_found: [65]u8;
@@ -138,7 +139,7 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
         .value = TextUntilNul(snapshot[:]), .cursor = field.cursor,
         .anchor = field.anchor, .scroll_x = field.scroll_x, .focused = field.focused,
         .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum, .secure = secure}
-    if secure && snapshot[0] != cast(u8)0 { props.display_value = "••••••••" }
+    if secure { props.display_value = PasswordMask(TextUntilNul(snapshot[:]), password_mask[:]) }
     if field.focused { props.input = AppFieldInput() }
     result := TextField(session, props)
     if result.edit.changed {
@@ -311,6 +312,7 @@ OpenManagement :: (page: s32) {
     management_page = page
     management_scroll = 0
     notice = ""
+    PasswordClear()
     fields = .{}
 }
 
@@ -323,6 +325,7 @@ ManagementHome :: (page: s32) {
         management_depth = 1
     }
     management_scroll = 0
+    PasswordClear()
     fields = .{}
 }
 
