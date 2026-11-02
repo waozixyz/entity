@@ -1,4 +1,7 @@
 #import "asset_presence"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/byte_text_linux"
 #program_export
 Check :: (bundle: *void, optional: bool) -> s32 {
     if !EntityAssetPresent(bundle, "assets/entity/pfp.png") { return 1 }
@@ -8,5 +11,21 @@ Check :: (bundle: *void, optional: bool) -> s32 {
         if EntityAssetPresent(bundle, path) { return 3 }
     }
     if EntityAssetPresent(null, "assets/entity/pfp.png") { return 4 }
+    // Every published game portrait must use the same extraction/access policy.
+    for index: 0..7 {
+        output: Vec(u8)
+        BuilderPrint(*output, "assets/entity/shovey-%.png", index)
+        text := BuilderFinish(output)
+        valid := EntityProfileAssetName(text) && EntityAssetPresent(bundle, text) == optional
+        descriptor := cast(*TextDescriptor)(*text)
+        ProfileAssetTestFree(descriptor.data)
+        if !valid { return 5 }
+    }
+    unsafe: [9]string = .["/etc/passwd", "assets/entity/../shovey-0.png", "assets/entity/sub/shovey-0.png",
+    "assets/entity/shovey-8.png", "assets/entity/shovey-0.png/extra", "assets/entity/shovey-0.png.new",
+    "assets/entity/shovey-0.png\0suffix", "assets/entity/shovey-0.png\\extra", "assets/entity/unknown.png"]
+    for path: unsafe { if EntityProfileAssetName(path) { return 6 } }
     return 0
 }
+profile_asset_test_c :: #system_library "c";
+ProfileAssetTestFree :: (bytes: *u8) #foreign profile_asset_test_c "free";

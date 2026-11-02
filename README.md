@@ -43,6 +43,12 @@ Full builds retain both. The native `entity.asset` service answers `available`
 only for a safe bundle-relative asset present in the current verified bundle,
 and `missing` otherwise. Leaderboards use the ordinary profile picture when
 optional game imagery is absent, including after updating a fuller install.
+Native extraction and image access share the exact `EntityProfileAssetAt`
+list in `asset_presence.zi`, including all eight Shovey leaderboard portraits.
+Run `scripts/profile-thumbnail-test.py --compiler COMPILER --bundle ENTITY_ZX`
+through the build queue to exercise those images with synthetic rows on private
+Xvfb; it never pumps an account or connects to a provider. `--project DIR` can
+exercise a consumer's pinned Entity host before adopting a fix.
 
 ## Visual reference and checks
 

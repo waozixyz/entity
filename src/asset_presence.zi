@@ -3,6 +3,29 @@
 #import "std/bundle_host"
 #import "std/byte_text_linux"
 
+// Native extraction and hosted image access must agree on this exact set.
+// Game thumbnails are optional, but may be used when the bundle contains them.
+ENTITY_PROFILE_ASSET_COUNT :: 17
+EntityProfileAssetAt :: (index: s32) -> string {
+    names: [17]string = .[
+    "assets/entity/pfp.png", "assets/entity/flowers.png",
+    "assets/entity/abstract-jade.png", "assets/entity/abstract-amber.png", "assets/entity/abstract-violet.png",
+    "assets/entity/wurm-special-skins.png", "assets/entity/wurm-skins.png",
+    "assets/entity/wurm-reward-skins.png", "assets/entity/wurm-base.png",
+    "assets/entity/shovey-0.png", "assets/entity/shovey-1.png", "assets/entity/shovey-2.png",
+    "assets/entity/shovey-3.png", "assets/entity/shovey-4.png", "assets/entity/shovey-5.png",
+    "assets/entity/shovey-6.png", "assets/entity/shovey-7.png"]
+    if index < 0 || index >= names.count { return "" }
+    return names[index]
+}
+
+EntityProfileAssetName :: (path: string) -> bool {
+    for index: cast(s32)0..ENTITY_PROFILE_ASSET_COUNT - 1 {
+        if path == EntityProfileAssetAt(index) { return true }
+    }
+    return false
+}
+
 EntityAssetPathValid :: (path: string) -> bool {
     if path.count <= 14 || path[:14] != "assets/entity/" { return false }
     for index: cast(s64)14..path.count - 1 {
