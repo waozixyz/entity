@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fix Android linking for shared Profile apps that use prebuilt renderer packages.
 - Every backup, including the .key file, is now protected by a password. A new password needs at least 12 characters, a number, an uppercase and a lowercase letter, and the field says what is still missing.
 - If you're signed in without a password-protected backup, the account screen offers to save one, with Not now. Older backup files still open and offer to save a protected copy.
 - Choosing your .key file comes first on the sign-in screen: it's your identity, and it signs you in without any server.
