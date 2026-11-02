@@ -761,7 +761,11 @@ ProviderBridgeState :: (provider: *ManagementProvider, state: *Management) {
 
 // Asks the node once which Google client it accepts, beside everything else:
 // nothing waits for this, and a node without the route means no Google button.
+// Only Waozi's own node is ever offered Google: see SignInGoogleNodeAllowed.
 ProviderMethodsPump :: (provider: *ManagementProvider) {
+    active: [512]u8
+    allowed := ProviderOnlineNode(provider, active[:]) && SignInGoogleNodeAllowed(TextUntilNul(active[:]))
+    if !allowed { provider.google_client[0] = cast(u8)0 }
     if !provider.bridge_known || !provider.bridge_google || provider.google_client[0] != cast(u8)0 { return }
     if provider.methods_asked {
         status: s32 = 0
@@ -769,12 +773,12 @@ ProviderMethodsPump :: (provider: *ManagementProvider) {
         if state < 0 { return }
         provider.methods_asked = false
         provider.methods_next = UnixNow() + 60
-        if state != 0 && status == 200 {
+        if state != 0 && status == 200 && allowed {
             unused SignInGoogleClient(TextUntilNul(provider.methods_reply[:]), provider.google_client[:])
         }
         return
     }
-    if UnixNow() < provider.methods_next { return }
+    if !allowed || UnixNow() < provider.methods_next { return }
     provider.methods_next = UnixNow() + 60
     node: [512]u8
     if !ProviderOnlineNode(provider, node[:]) { return }
@@ -830,6 +834,11 @@ ProviderPasskeyStart :: (provider: *ManagementProvider, adding: bool) {
 
 ProviderGoogleStart :: (provider: *ManagementProvider, linking: bool) {
     client := TextUntilNul(provider.google_client[:])
+    active: [512]u8
+    if !ProviderOnlineNode(provider, active[:]) || !SignInGoogleNodeAllowed(TextUntilNul(active[:])) {
+        ProviderBridgeFinish(provider, "error", SIGN_IN_NO_GOOGLE)
+        return
+    }
     nonce: [65]u8
     if linking {
         state := ProviderState(provider)

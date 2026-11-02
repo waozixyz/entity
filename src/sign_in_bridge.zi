@@ -122,12 +122,21 @@ SignInRemoveBody :: (credential: string, output: []u8) -> bool {
     return true
 }
 
+SIGN_IN_GOOGLE_NODE :: "https://api.waozi.xyz"
+SIGN_IN_GOOGLE_NODE_SLASH :: "https://api.waozi.xyz/"
+
 SignInGoogleClient :: (reply: string, output: []u8) -> bool {
     if Json.ReadStringText(reply, Json.FieldAt(reply, 0, "google_client_id"), output) <= 0 {
         output[0] = cast(u8)0
         return false
     }
     return true
+}
+
+// Google's token names the person and works on any node for about an hour, so
+// it only ever goes to Waozi's own node. Another node never gets to ask for one.
+SignInGoogleNodeAllowed :: (node: string) -> bool {
+    return node == SIGN_IN_GOOGLE_NODE || node == SIGN_IN_GOOGLE_NODE_SLASH
 }
 
 // The account a node named for a Google sign-in: a public ID and nothing else.

@@ -160,6 +160,10 @@ main :: () -> s32 {
     client: [SIGN_IN_GOOGLE_CLIENT_MAX]u8
     if SignInGoogleClient("{}", client[:]) || !SignInGoogleClient("{\"google_client_id\":\"id.example\"}", client[:]) { return 56 }
 
+    // A Google token only ever goes to Waozi's own node.
+    if !SignInGoogleNodeAllowed("https://api.waozi.xyz") || !SignInGoogleNodeAllowed("https://api.waozi.xyz/") { return 90 }
+    if SignInGoogleNodeAllowed("https://node.example") || SignInGoogleNodeAllowed("http://api.waozi.xyz") || SignInGoogleNodeAllowed("https://api.waozi.xyz.example") || SignInGoogleNodeAllowed("") { return 91 }
+
     // The node's list reaches the screens; a garbled entry is dropped.
     entries: [MANAGEMENT_PASSKEY_LIMIT]ManagementPasskey
     listed := SignInPasskeyList("{\"passkeys\":[{\"credential\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"label\":\"Phone\",\"created_at\":1},{\"credential\":\"bad\",\"label\":\"x\"}]}", entries[:])

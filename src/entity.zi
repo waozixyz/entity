@@ -204,8 +204,10 @@ PollManagement :: () {
                 // A finished key, link or alias step returns to the account.
                 page := management_page
                 // Link steps finish one by one; only an arriving account ends that page.
+                // Sign-in options stay open, and Google finding an account still needs it unlocked here.
+                found_only := page == PAGE_IMPORT && !owner_changed && management.found_account[0] != cast(u8)0
                 if page != 0 && page != PAGE_ACCOUNT && page != PAGE_NODES && page != PAGE_NODE && page != PAGE_ADD_NODE &&
-                (page != PAGE_LINK || owner_changed) {
+                page != PAGE_SIGN_IN_METHODS && !found_only && (page != PAGE_LINK || owner_changed) {
                     ManagementHome(PAGE_ACCOUNT)
                 }
                 // There is no reset, so saving a backup comes first.
