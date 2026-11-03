@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {readFile, mkdir, rm} from 'node:fs/promises';
-import {dirname, basename, join, extname} from 'node:path';
+import {dirname, basename, join, extname, resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-const html=process.argv[2], root=dirname(html), profile=join(root,'browser');
+const html=resolve(process.argv[2]), root=dirname(html), profile=join(root,'browser');
 const bare=process.argv[3]==='bare';
 await rm(profile,{recursive:true,force:true}); await mkdir(profile,{recursive:true});
 const server=createServer(async(req,res)=>{
@@ -22,15 +22,15 @@ const url='http://127.0.0.1:'+server.address().port+'/'+basename(html);
 const env={...process.env};
 for(const key of ['DISPLAY','WAYLAND_DISPLAY','XAUTHORITY','DBUS_SESSION_BUS_ADDRESS','SESSION_MANAGER','GDK_DISPLAY','DESKTOP_SESSION','XDG_SESSION_ID','XDG_SESSION_TYPE'])delete env[key];
 env.YUE_DESKTOP_RECOVERY='0';
-const browser=spawn(process.env.CHROMIUM||'chromium',['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{env,stdio:['ignore','ignore','pipe']});
+const browser=spawn(process.env.CHROMIUM||'chromium',['--headless=new','--no-sandbox','--disable-gpu','--disable-webgl','--disable-software-rasterizer','--disable-gpu-compositing','--use-gl=disabled','--disable-extensions','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{env,stdio:['ignore','ignore','pipe']});
 let errors='',socket,diagnostics='';browser.stderr.on('data',v=>errors=(errors+v).slice(-2000));
 try{
   const deadline=Date.now()+45000; let port;
   while(Date.now()<deadline){try{port=(await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];break;}catch{} if(browser.exitCode!==null)throw Error(errors);await delay(50);}
   assert(port,'No private browser endpoint: '+errors);
-  const pages=await(await fetch('http://127.0.0.1:'+port+'/json/list')).json();
+  const pages=await(await fetch('http://127.0.0.1:'+port+'/json/list',{signal:AbortSignal.timeout(10000)})).json();
   socket=new WebSocket(pages.find(p=>p.type==='page').webSocketDebuggerUrl);
-  await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});});
+  await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Private browser WebSocket timed out: '+errors)),10000);socket.addEventListener('open',()=>{clearTimeout(timeout);resolve();},{once:true});socket.addEventListener('error',error=>{clearTimeout(timeout);reject(error);},{once:true});});
   let seq=0;const pending=new Map();
   socket.addEventListener('message',e=>{const m=JSON.parse(e.data);
     if(m.method==='Runtime.consoleAPICalled')diagnostics=(diagnostics+m.params.args.map(a=>a.value||a.description||'').join(' ')+'\n').slice(-6000);
@@ -104,5 +104,12 @@ try{
   console.log('Generated canvas Profile local tests passed: Profile key 20400, shared referrals/sign-in, real account creation/reload, input isolation, IDB documents and mini mode');
   }
 }finally{
-  socket?.close();browser.kill('SIGTERM');await new Promise(resolve=>{if(browser.exitCode!==null)resolve();else browser.once('exit',resolve);});server.close();
+  socket?.close();
+  if(browser.exitCode===null&&browser.signalCode===null){
+    const stopped=new Promise(resolve=>browser.once('exit',resolve));
+    browser.kill('SIGTERM');
+    await Promise.race([stopped,delay(3000)]);
+    if(browser.exitCode===null&&browser.signalCode===null){browser.kill('SIGKILL');await Promise.race([stopped,delay(3000)]);}
+  }
+  server.closeAllConnections();server.close();
 }
