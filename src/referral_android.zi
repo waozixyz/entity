@@ -1,0 +1,49 @@
+// Untrusted launch data only. This module has no account, auth or claim state.
+#import "referral_model"
+#import "kryon/android_jni"
+#import "std/c_string"
+#import "std/text_buffer"
+
+ReferralJniFailed :: (env: *JniEnv) -> bool {
+    if env.functions.ExceptionCheck(env) == 0 { return false }
+    env.functions.ExceptionClear(env)
+    return true
+}
+// Separate from attachment so the exact static JNI path can be tested on desktop.
+ReferralTakeActivityInvitation :: (env: *JniEnv, activity: *void, output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = 0
+    if env == null || activity == null { return false }
+    klass := env.functions.GetObjectClass(env, activity)
+    if ReferralJniFailed(env) || klass == null { return false }
+    defer { env.functions.DeleteLocalRef(env, klass) }
+    name: [32]u8
+    signature: [32]u8
+    unused CopyCString("takeLaunchUri", name[:])
+    unused CopyCString("()Ljava/lang/String;", signature[:])
+    method := env.functions.GetStaticMethodID(env, klass, *name[0], *signature[0])
+    if ReferralJniFailed(env) || method == null { return false }
+    value := env.functions.CallStaticObjectMethodA(env, klass, method, null)
+    if ReferralJniFailed(env) || value == null { return false }
+    defer { env.functions.DeleteLocalRef(env, value) }
+    bytes := env.functions.GetStringUTFChars(env, value, null)
+    if ReferralJniFailed(env) || bytes == null { return false }
+    defer { env.functions.ReleaseStringUTFChars(env, value, bytes) }
+    uri: [4096]u8
+    for i: cast(s32)0..uri.count - 1 {
+        if bytes[i] == 0 { return ReferralCodeFromLink(TextUntilNul(uri[:]), output) }
+        uri[i] = bytes[i]
+    }
+    return false
+}
+EntityTakeReferralInvitation :: (output: []u8) -> bool {
+    if output.count == 0 { return false }
+    output[0] = 0
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_ANDROID) {
+        session: AndroidJniSession
+        if AndroidJniAttachCurrent(*session) == 0 { return false }
+        defer { AndroidJniDetachCurrent(*session) }
+        return ReferralTakeActivityInvitation(session.env, session.activity, output)
+    }
+    return false
+}

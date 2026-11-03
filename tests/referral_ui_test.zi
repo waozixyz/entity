@@ -1,0 +1,128 @@
+// Disposable private-display host of the actual Entity bundle, fake public service.
+#import "native_host"
+#import "native_files"
+#import "management"
+#import "referral_model"
+#import "model"
+#import "std/file"
+#import "std/byte_text_linux"
+#import "std/bundle_host"
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "kryon/Desktop"
+#import "kryon/Frame"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/tree_input"
+#import "kryon/input_protocol"
+#import "kryon/geometry"
+#import "kryon/text_input_props"
+#import "kryon/hosted_values"
+#import "kryon/app_context_host"
+F :: #import "referral_test";
+fixture_owner: string;
+fixture_answer: string;
+fixture_claims: s32;
+fixture_generation: s32 = 1;
+fixture_next: bool;
+fixture_session: Session;
+fixture_frame: u64;
+FixtureServices :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(function) != "AppServiceHost" || count != 2 { return EntityHostServices(context, module, function, arguments, count, result) }
+    service := AppArgumentText(arguments[0])
+    request := AppArgumentText(arguments[1])
+    if service != "entity.management" && service != REFERRAL_SERVICE { return EntityHostServices(context, module, function, arguments, count, result) }
+    EntityFree(fixture_answer)
+    fixture_answer = ""
+    if service == "entity.management" {
+        m: Management
+        m.available = true
+        m.account = fixture_owner != ""
+        m.capabilities = ACCOUNT_CREATE
+        unused CopyCString(fixture_owner, m.public_id[:])
+        fixture_answer = ManagementEncode(m)
+    } else if request != "" {
+        operation: [16]u8
+        unused ReadStringText(request, FieldAt(request, 0, "operation"), operation[:])
+        if TextUntilNul(operation[:]) == "claim" { fixture_claims += 1 }
+        if TextUntilNul(operation[:]) == "accepted" && FieldAt(request, 0, "cursor") >= 0 {
+            cursor: [24]u8
+            unused ReadStringText(request, FieldAt(request, 0, "cursor"), cursor[:])
+            fixture_next = cursor[0] != 0
+        }
+        result.* = EntityHostText("queued")
+        return 1
+    } else {
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"owner\":\"%\",\"generation\":%,\"ready\":true,\"can_claim\":true,\"busy\":false,\"error\":\"\",\"me\":%,\"page\":%,\"receipt\":%}", fixture_owner, fixture_generation,
+            ifx fixture_owner == F.A then F.ME else "{}",
+            ifx fixture_owner != F.A then "{}" else ifx fixture_next then "{\"accepted\":[],\"next_cursor\":\"\"}" else F.PAGE,
+            ifx fixture_owner == F.A && fixture_claims > 0 then F.RECEIPT else "{}")
+        fixture_answer = BuilderFinish(out)
+    }
+    result.* = EntityHostText(fixture_answer)
+    return 1
+}
+Frame :: (pointer: PointerFrame = .{}) -> bool {
+    BeginDesktopFrame()
+    area := Rectangle.{0.0, 0.0, 480.0, 2400.0}
+    TreePointerUpdate(fixture_session, pointer)
+    fixture_frame += 1
+    if BeginFrame(fixture_session, cast(u64)1, area) != FrameStatus.FrameOk { return false }
+    if !EntityHostFrame(fixture_session, area, 0, 0, TextFieldInput.{}) { return false }
+    return EndFrame(fixture_session) == FrameStatus.FrameOk && EndDesktopFrame()
+}
+Bounds :: (key: u64) -> Rectangle {
+    for i: cast(s32)0..TreeCount(fixture_session) - 1 {
+        node := TreeNodeAt(fixture_session, i)
+        if node.key == key { return node.bounds }
+    }
+    return .{}
+}
+Press :: (key: u64) -> bool {
+    bounds := Bounds(key)
+    if bounds.width <= 0.0 || bounds.height <= 0.0 { print("Missing widget %\n", key); return false }
+    x := bounds.x + bounds.width * 0.5
+    y := bounds.y + bounds.height * 0.5
+    print("Press % x=% y=% hit=%\n", key, x, y, TreeHitAt(fixture_session, x, y))
+    hit := TreeNodeAt(fixture_session, TreeHitAt(fixture_session, x, y))
+    print("Hit key=% label=%\n", hit.key, hit.semantic_label)
+    return Frame(PointerFrame.{.x = x, .y = y}) && Frame(PointerFrame.{.x = x, .y = y, .pressed = true, .down = true}) &&
+    Frame(PointerFrame.{.x = x, .y = y, .released = true}) && Frame()
+}
+#program_export
+main :: () -> s32 {
+    bytes, found := ReadEntireFile("build/entity.zx")
+    if !found { return 1 }
+    defer { EntityFree(bytes) }
+    root: [4096]u8
+    if !EntityHostOpen(bytes, NativeRoot(root[:]), "entity", false) { return 2 }
+    defer { unused EntityHostClose() }
+    portable.services = FixtureServices
+    if !EntityHostReferrals("abc123") || !EntityHostCommand("root:profile") { return 3 }
+    if !OpenDesktopSized(480, 2400) { return 4 }
+    defer { CloseDesktop() }
+    fixture_session = SessionOpen()
+    defer { SessionClose(fixture_session) }
+    for i: 0..3 { if !Frame() { return 5 } }
+    // Both the shared Profile entry and the full Dew entry work while signed out.
+    if !Press(78030) || Bounds(78005).width <= 0.0 { return 14 }
+    if !EntityHostCommand("root:dew") || !Frame() { return 15 }
+    if !Press(78030) { return 13 }
+    if fixture_claims != 0 || !Press(78005) || Bounds(820).width <= 0.0 || Bounds(78005).width > 0.0 { return 11 }
+    fixture_owner = F.A
+    fixture_generation += 1
+    for i: 0..18 { if !Frame() { return 12 } }
+    if fixture_claims != 0 || Bounds(78100).width <= 0.0 { return 6 }
+    if !Press(78024) || fixture_claims != 0 || Bounds(78022).width <= 0.0 { print("Review result claims=% confirmWidth=%\n", fixture_claims, Bounds(78022).width); return 7 }
+    if !Press(78022) || fixture_claims != 1 || Bounds(78006).width <= 0.0 { return 8 }
+    if !Press(78027) || Bounds(78100).width > 0.0 { return 9 }
+    fixture_owner = F.B
+    fixture_generation += 1
+    if !Frame() || Bounds(78006).width > 0.0 || Bounds(78100).width > 0.0 || Bounds(78022).width > 0.0 { return 10 }
+    print("Referral private-Xvfb UI local tests: prefill never claims, review/confirm, immediate receipt, nonpurchaser row, pagination and owner reset passed\n")
+    return 0
+}

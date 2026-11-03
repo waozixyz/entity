@@ -252,3 +252,47 @@ account-handoff-test: $(LIBOQS_LIBRARY)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS ACCOUNT_HANDOFF_TEST_ROOT=$(abspath build/account-handoff-test/store) build/account-handoff-test/test
 
 test: account-handoff-test
+
+# Signed referral adapter with fake transport, no accounts or network.
+.PHONY: referral-test
+referral-test:
+	LDLIBS='-l:libcurl.so.4 -lm -lpthread' $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry referral_test:main --exe -o build/referral-test tests/referral_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/referral-test/referral_test
+
+test: referral-test
+
+.PHONY: referral-ui-test
+referral-ui-test: build/entity.zx build/ziran/libziran.a $(LIBOQS_LIBRARY)
+	LDLIBS='$(abspath build/ziran/libziran.a) $(abspath $(LIBOQS_LIBRARY)) $(MONOCYPHER_SOURCES) -I$(MONOCYPHER_DIR)/src $(shell pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -lz' $(ZIRAN) build --project $(LOCK_FLAGS) --define PLATFORM_DESKTOP --target=c --entry referral_ui_test:main --exe -o build/referral-ui-test tests/referral_ui_test.zi
+	git check-ignore -q work/referral-ui
+	mkdir -p work/referral-ui/tmp
+	rm -f work/referral-ui/referral-pending.txt work/referral-ui/referral-suggestion.txt
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 TMPDIR=$(abspath work/referral-ui/tmp) ENTITY_DATA=$(abspath work/referral-ui) XDG_DATA_HOME=$(abspath work/referral-ui/xdg) xvfb-run -a -s '-screen 0 800x2800x24' build/referral-ui-test/referral_ui_test
+
+test: referral-ui-test
+
+.PHONY: game-shop-model-test
+game-shop-model-test:
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry game_shop_test:main --exe -o build/game-shop-test tests/game_shop_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/game-shop-test/game_shop_test
+
+test: game-shop-model-test
+
+.PHONY: referral-android-test
+referral-android-test:
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry referral_android_test:main --exe -o build/referral-android-test tests/referral_android_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/referral-android-test/referral_android_test
+
+test: referral-android-test
+
+# The ordinary compiled-canvas entry links and runs the real shared provider.
+.PHONY: canvas-profile-host-test
+canvas-profile-host-test: build/entity.zx
+	ZIRAN='$(ZIRAN)' python3 scripts/canvas-profile-host-test.py
+
+test: canvas-profile-host-test
+
+.PHONY: canvas-profile-lifecycle-test
+canvas-profile-lifecycle-test:
+	ZIRAN='$(ZIRAN)' python3 scripts/canvas-profile-lifecycle-test.py
+canvas-profile-host-test: canvas-profile-lifecycle-test

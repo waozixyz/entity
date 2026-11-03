@@ -582,3 +582,113 @@ validates descriptor hashes and actual C-host compile/link output. Windows also
 links an ordinary Ziran import graph against descriptor-only support metadata,
 retaining curl and checking platform archive member uniqueness. Cross binaries
 are never executed; compile/link success does not establish runtime behavior.
+
+## Referrals
+
+The shared profile supplies My referrals (invite code/link, explicit permanent
+referrer confirmation, immediate server-issued 20 Dew welcome receipt and
+paginated names/public IDs with acceptance dates, including nonpurchasers).
+Commission totals come from the issuer; Entity never reads friends' purchases
+or calculates credits. Pending codes are public prefill in the host-scoped
+`referral-pending.txt` store; `referral-suggestion.txt` remembers the last link
+suggestion so manual edits survive reloading the same link and a new link can
+replace its suggestion. Opening a link never accepts it.
+
+Native hosts use `EntityHostReferrals(code: string) -> bool` after opening the
+host. Empty code opens the dashboard. `EntityHostReferralsLocale(locale)` selects
+the shared translations (cs/de/en/es/fr/id/it/ja/ko/pt/ru/zh). Hosts with their
+own locale service call `entity/referral_locales.ReferralLabel(locale, key)`
+for `referral.*` keys. `EntityReferralsSource(platform, app)` sets validated
+invite-link routing hints (direct/fdroid/play/apple/amazon); these are never
+proof of purchase origin. Account keys remain native.
+
+A custom signed-account provider imports `entity/referral_native` and calls
+`EntityReferralsConnect(client, context)` with `(context: *void, output: *Client)
+-> bool`, returning the current verified Daochi Client, false when signed out.
+Forward `entity.referrals` to `EntityReferralsAnswer(request)` and pump
+`EntityReferralsPump()` after each frame. Call `EntityReferralsReset()` on
+logout/relogin (even the same key), account replacement, callback reconfiguration and disposal. The
+adapter also detects owner, node and device changes before queueing, before
+sending and after polling, and clears receipts and private lists. Shared
+AccountStore/native hosts do this automatically. It uses the existing signed
+Daochi challenge/login and Bearer request protocol through BeginRequest.
+
+The empty service request returns a bounded snapshot: owner, generation,
+ready, can_claim, busy, operation, error, share_url, me, page and receipt.
+Commands are JSON `{owner,operation}` with operation `me`, `accepted` (optional
+decimal cursor), or `claim` (required code). Only current-owner commands queue;
+busy/malformed/wrong-owner commands return `rejected`. A queued operation
+returns `queued`; snapshots expose its completion. No operation automatically
+retries. Explicit claim retries retain account/code idempotency at the issuer,
+which returns the original binding and receipt. A timeout never awards locally.
+The UI clears confirmation on account/generation changes and displays only the
+current owner's snapshot. Next page replaces the bounded 50-person page;
+Refresh returns to the first page. Errors preserve the last confirmed page
+within that owner, with an explicit retry action.
+
+Wire endpoints are GET `/api/v1/referrals/me`, POST
+`/api/v1/referrals/claim` with `{code,request_id}`, and GET
+`/api/v1/referrals/accepted?cursor=0&limit=50`. The authoritative node enforces
+one referrer and atomic immediate 20 Dew exactly once. Paid commissions and
+refund adjustments are entirely server-owned. The adapter refuses any
+noncanonical account node before sending, clears its private referral state and
+reports `wrong_node`; there is no fallback issuer or local grant.
+
+`build-queue -- make referral-test` exercises strict response parsing, fake
+transport, explicit queueing, stable retries, offline behavior and owner
+changes. `referral-ui-test` uses a disposable fake host on private Xvfb.
+
+Android hosts import `entity/referral_android` and poll
+`EntityTakeReferralInvitation(output: []u8) -> bool` with a 129-byte code buffer.
+It consumes the actual Activity's static `takeLaunchUri(): String`, using JNI
+signature `()Ljava/lang/String;`, bounds its UTF8 data to 4095 bytes plus NUL,
+and applies `ReferralCodeFromLink`. Missing methods, exceptions, oversized or
+noncanonical links clear the output and return false. Non-Android returns false.
+This module owns no account state. A true result is public prefill only; hosts
+open their shared referral view and never automatically accept it.
+`referral-android-test` exercises the exact static JNI call with a fake table.
+
+Game shop debits identify the actual catalog title (`wurm`, `shovey` or
+`choano`), independently of the account host's authentication app. The issuer
+must already have those apps registered through its existing trusted registry
+provisioning. Entity does not register apps or grant spending permissions.
+The private `game-shop-test` fixture provisions its disposable issuer using
+its own admin token and the existing PUT `/api/v1/apps/{app_id}` API.
+
+Restore reads all of the account's signed ledger receipts with
+`GET /api/v1/tokens/ledger?since=SEQ&limit=100` and advances by `ledger_seq`.
+New receipts must match the product's actual title. Historical `entity`
+receipts remain valid only for the known product, exact price and stable key.
+A full valid page stages the next page; malformed or out-of-order pages never
+replace the confirmed coin totals. Purchase keys remain unchanged across devices.
+
+## Compiled canvas web apps
+
+`entity/canvas_profile_host` supplies the existing shared Profile to an
+AppContext app compiled into a canvas page. Select `canvas_profile_host:main`
+as the entry and keep `--bind canvas_app_run:CanvasAppMain=game:Main`. Include
+Kryon's `canvas_raster.zi` in the generated graph. A custom entry may call
+`EntityCanvasMain(client_id)`; the default client is `arcade`, matching the
+existing game browser host. The profile keeps `/kryon-apps/profile`, including
+shared-account handling, while the runner keeps each app's private documents
+under `/kryon-apps/<app id>`. Mini pages skip the account provider and Profile.
+
+Embed the normal Entity bundle at `/entity.zx` and the renderer font at
+`/kryon-font.ttf`. Link the generated whole graph with the ordinary
+`entity:native-crypto` support descriptor and Kryon's renderer descriptor;
+never add `libentity.a` to a graph that already imports the provider. Services
+are `entity.profile` (`open`, `leaderboard`, `dew`), `entity.records`,
+`entity.dew`, `entity.game-shop` and the existing public publications reader.
+The adapter owns navigation only: account, referral and funding policies stay
+in Entity's existing provider. Opening Profile replaces the whole game frame,
+so the game receives neither account keystrokes nor password text.
+
+For a package-based build, `scripts/build-web.py --canvas-app game:Main
+--source src/web/game.zi --profile build/entity.zx --output build/web/index.html`
+links this entry directly. Apps with extra host bindings can use the same
+entry in their own whole-graph generation and consume the support descriptors.
+Run `build-queue -- make canvas-profile-host-test ZIRAN=/path/to/ziran` for a
+real generated browser host test of the cover, shared referrals/sign-in, input
+isolation, document reload and mini behavior. Signed referral acceptance and
+cross-device assertions must also run through the adopting application's
+fresh private Daochi browser integration fixture.

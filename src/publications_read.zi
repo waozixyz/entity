@@ -56,6 +56,12 @@ PublicationsReadIdValid :: (id: string) -> bool {
     return true
 }
 
+PublicationsReadStop :: () {
+    HttpTransferCancel(*publications_read_transfer)
+    publications_read_state = 0
+    publications_read_done = -1
+}
+
 PublicationsReadPump :: () {
     if publications_read_state != 1 { return }
     status: s32

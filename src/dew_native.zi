@@ -133,7 +133,7 @@ DewEnqueue :: (text: string) -> bool {
     if op == "play" {
         // Play's own sheet takes the payment; no node request until it completes.
         unused ReadStringText(text, FieldAt(text, 0, "size"), size[:])
-        if !DewPlayBuy(*dew_play, TextUntilNul(size[:])) { return false }
+        if !DewPlayBuy(*dew_play, TextUntilNul(size[:]), TextUntilNul(owner[:])) { return false }
         dew_sequence = cast(s32)sequence
         return true
     }

@@ -1,0 +1,95 @@
+#import "std/text_buffer"
+// Public referral responses only. Keys, purchases and credits belong to Daochi.
+#import "model"
+#import "std/json_scan"
+#import "std/c_string"
+#import "dew_model"
+REFERRAL_SERVICE :: "entity.referrals"
+ReferralSummary :: struct {
+    known: bool
+    code: [129]u8
+    invite_url: [512]u8
+    referrer: [65]u8
+    accepted_count: s64
+    earned: s64
+    reversed: s64
+    offset: s64
+}
+ReferralPerson :: struct { id: [65]u8; name: [256]u8; date: [40]u8 }
+ReferralPage :: struct { count: s32; people: [50]ReferralPerson; cursor: [24]u8 }
+ReferralToken :: (text: string) -> bool {
+    if text.count < 1 || text.count > 128 { return false }
+    for b: text {
+        if !((b >= #char "a" && b <= #char "z") || (b >= #char "A" && b <= #char "Z") ||
+            (b >= #char "0" && b <= #char "9") || b == #char "_" || b == #char "-") { return false }
+    }
+    return true
+}
+ReferralDocument :: (text: string) -> bool {
+    return text.count > 1 && text[0] == #char "{" && Space(text, ValueEnd(text, 0, 0)) == text.count
+}
+ReferralParseSummary :: (text: string, owner: string, output: *ReferralSummary) -> bool {
+    value: ReferralSummary
+    id: [65]u8
+    authority: [64]u8
+    if ReadStringText(text, FieldAt(text, 0, "authority"), authority[:]) <= 0 || TextUntilNul(authority[:]) != DewNode { return false }
+    if !ReferralDocument(text) || ReadStringText(text, FieldAt(text, 0, "account_id"), id[:]) != 64 ||
+    TextUntilNul(id[:]) != owner || ReadStringText(text, FieldAt(text, 0, "code"), value.code[:]) <= 0 ||
+    !ReferralToken(TextUntilNul(value.code[:])) ||
+    ReadStringText(text, FieldAt(text, 0, "invite_url"), value.invite_url[:]) <= 0 ||
+    ReadStringText(text, FieldAt(text, 0, "referrer_id"), value.referrer[:]) < 0 ||
+    !DewInteger(text, FieldAt(text, 0, "accepted_count"), *value.accepted_count) ||
+    !DewInteger(text, FieldAt(text, 0, "earned_units"), *value.earned) ||
+    !DewInteger(text, FieldAt(text, 0, "reversed_units"), *value.reversed) ||
+    !DewInteger(text, FieldAt(text, 0, "pending_offset_units"), *value.offset) { return false }
+    url := TextUntilNul(value.invite_url[:])
+    code := TextUntilNul(value.code[:])
+    prefix := "https://dew.waozi.xyz/invite/"
+    if url.count != prefix.count + code.count || url[:prefix.count] != prefix || url[prefix.count:] != code { return false }
+    value.known = true
+    output.* = value
+    return true
+}
+ReferralParsePage :: (text: string, output: *ReferralPage) -> bool {
+    page: ReferralPage
+    at := FieldAt(text, 0, "accepted")
+    if !ReferralDocument(text) || at < 0 || text[at] != #char "[" ||
+    ReadStringText(text, FieldAt(text, 0, "next_cursor"), page.cursor[:]) < 0 { return false }
+    for b: TextUntilNul(page.cursor[:]) { if b < #char "0" || b > #char "9" { return false } }
+    page.count = ArrayCount(text, at)
+    if page.count < 0 || page.count > 50 { return false }
+    for i: cast(s32)0..page.count - 1 {
+        row := ElementAt(text, at, i)
+        person := *page.people[i]
+        if ReadStringText(text, FieldAt(text, row, "account_id"), person.id[:]) != 64 ||
+        ReadStringText(text, FieldAt(text, row, "accepted_at"), person.date[:]) <= 0 { return false }
+        unused ReadStringText(text, FieldAt(text, row, "display_name"), person.name[:])
+        if person.name[0] == 0 { unused CopyCString(TextUntilNul(person.id[:]), person.name[:]) }
+    }
+    output.* = page
+    return true
+}
+ReferralReceipt :: (text: string) -> bool {
+    status: [24]u8
+    receipt: [256]u8
+    referrer: [65]u8
+    units: s64
+    unused ReadStringText(text, FieldAt(text, 0, "status"), status[:])
+    return ReferralDocument(text) && (TextUntilNul(status[:]) == "bound" || TextUntilNul(status[:]) == "already_bound") &&
+    ReadStringText(text, FieldAt(text, 0, "referrer_id"), referrer[:]) == 64 &&
+    ReadStringText(text, FieldAt(text, 0, "welcome_receipt_id"), receipt[:]) > 0 &&
+    DewInteger(text, FieldAt(text, 0, "welcome_units"), *units) && units == 20000000
+}
+
+// Accept only a raw code or the canonical invitation URL. Routing hints are
+// deliberately ignored here: a link can never select an account or claim.
+ReferralCodeFromLink :: (value: string, output: []u8) -> bool {
+    prefix := "https://dew.waozi.xyz/invite/"
+    code := value
+    if value.count >= prefix.count && value[:prefix.count] == prefix {
+        end := prefix.count
+        while end < value.count && value[end] != #char "?" && value[end] != #char "#" { end += 1 }
+        code = value[prefix.count:end]
+    }
+    return ReferralToken(code) && code != "-" && CopyCString(code, output)
+}

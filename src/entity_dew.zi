@@ -57,6 +57,17 @@ DewRewardStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
 DewRewardPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*dew_reward_transfer, status) }
 DewRewardCancel :: (context: *void) { HttpTransferCancel(*dew_reward_transfer) }
 
+EntityDewStop :: () {
+    CancelRequest(*dew_reward.request)
+    HttpTransferCancel(*dew_reward_transfer)
+    SecureWipe(*dew_reward_migration_body[0], dew_reward_migration_body.count)
+    dew_reward_active = false
+    dew_reward_migration_stage = 0
+    dew_reward_session = .{}
+    dew_reward_owner = .{}
+    dew_reward_answer = .{}
+}
+
 #scope_export
 EntityDewAnswer :: (request: string) -> string {
     // Existing hosts already forward entity.dew. Keep the shop available to

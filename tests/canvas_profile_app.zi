@@ -1,0 +1,51 @@
+// A compiled game-shaped host fixture, using only the public app context.
+#import "kryon/app_context"
+#import "kryon/app_protocol"
+#import "kryon/button_widget"
+#import "kryon/button_props"
+#import "kryon/text_widget"
+#import "kryon/text_props"
+#import "kryon/geometry"
+#import "std/vec"
+#import "std/text_buffer"
+#import "rewards"
+#program_export
+Main :: () -> s64 {
+    if AppMode() == APP_IDENTIFY {
+        if CanvasRewardsFixture() != "consumer rewards" { return 0 }
+        AppIdentity("entity.canvas.test")
+        return APP_PROTOCOL
+    }
+    if AppMode() == APP_FRAME {
+        session := AppSession()
+        if AppSupports("entity.profile") {
+            if Button(session, ButtonProps.{.key = 20400, .id = 20400, .label = "Profile",
+                    .bounds = Rectangle.{20.0, 20.0, 160.0, 48.0}}) != 0 { unused AppService("entity.profile", "open") }
+        }
+        Text(session, TextProps.{.key = 20401, .text = "Compiled canvas app", .bounds = Rectangle.{20.0, 90.0, 300.0, 40.0}})
+        if Button(session, ButtonProps.{.key = 20405, .id = 20405, .label = "Save marker",
+                .bounds = Rectangle.{20.0, 150.0, 160.0, 48.0}}) != 0 {
+            value: Vec(u8)
+            BuilderPrint(*value, "marker-%", AppNow())
+            unused DocumentWrite("continuity", TextView(VecSlice(value, 0, value.count)))
+            VecFree(value)
+            unused DocumentFlush()
+        }
+        input := AppFieldInput()
+        if input.text != "" { unused DocumentWrite("received-input", input.text) }
+        // Direct requests must also be denied when capability discovery says no.
+        if !AppSupports("entity.profile") && AppService("entity.profile", "open") != "{\"status\":\"unavailable\"}" {
+            unused DocumentWrite("mini-service-leak", "profile")
+        }
+        if !AppSupports("entity.records") && AppService("entity.records", "status") != "{\"status\":\"unavailable\"}" {
+            unused DocumentWrite("mini-service-leak", "records")
+        }
+        if !AppSupports("entity.dew") && AppService("entity.dew", "balance") != "{\"status\":\"unavailable\"}" {
+            unused DocumentWrite("mini-service-leak", "dew")
+        }
+        if !AppSupports("entity.game-shop") && AppService("entity.game-shop", "status") != "{\"status\":\"unavailable\"}" {
+            unused DocumentWrite("mini-service-leak", "shop")
+        }
+    }
+    return 0
+}

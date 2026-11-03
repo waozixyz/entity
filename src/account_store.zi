@@ -1,6 +1,7 @@
 // Standalone Entity keeps its own private account key. Common preferences are
 // shared only through the verified account's public profile directory.
 #import "model"
+#import "referral_native"
 #import "management"
 #import "native_management"
 #import "native_files"
@@ -156,6 +157,23 @@ AccountStorePersist :: () -> bool {
         return BundleStorageFlush()
     }
     return true
+}
+
+// Release this host's transient account state without changing disk or the
+// shared sign-in. A later open reloads the existing account normally.
+AccountStoreStop :: () {
+    EntityReferralsReset()
+    CancelRequest(*alias_pending)
+    HttpTransferCancel(*alias_transfer)
+    EntityPicturePublishCancel(*picture_publisher)
+    DeviceLinkCancel()
+    ProviderClose(*account_provider)
+    RecoveryClear(*account_recovery)
+    account_standalone_ready = false
+    alias_active = false
+    alias_owner = .{}
+    alias_session = .{}
+    account_alias = .{}
 }
 
 AccountStoreSaveKey :: (recovery: *Recovery) -> bool {
@@ -339,6 +357,7 @@ AccountStoreSnapshot :: (context: *void, output: *Management) {
     }
 }
 AccountStoreApply :: (context: *void, recovery: *Recovery, choice: s32) -> s32 {
+    EntityReferralsReset()
     id := TextUntilNul(recovery.keys.public_id[:])
     same := id == TextUntilNul(account_recovery.keys.public_id[:])
     local_data := account_profile.name[0] != cast(u8)0 || account_profile.intention[0] != cast(u8)0
@@ -409,6 +428,7 @@ AccountStoreClient :: (context: *void, output: *Client) -> bool {
 AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
     operation := TextUntilNul(request.operation[:])
     if operation == "logout" || operation == "remote_cleared" {
+        EntityReferralsReset()
         path: [4096]u8
         address := AccountStorePath("account.key", path[:])
         if PathExists(address) && !RemoveFile(address) { return 0 }

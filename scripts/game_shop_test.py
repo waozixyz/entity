@@ -118,13 +118,27 @@ BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *Ho
                 except OSError:
                     assert time.monotonic() < deadline, 'Private node not ready'
                     time.sleep(.1)
+            # Provision this disposable issuer's catalog through its existing
+            # authenticated registry API, just as an operator registers apps.
+            for app_id, display_name in (('wurm', 'Wurm'), ('shovey', 'Shovey'), ('choano', 'Choano')):
+                registration = json.dumps({'app_id': app_id, 'display_name': display_name, 'status': 'active'}).encode()
+                request = urllib.request.Request(url + '/api/v1/apps/' + app_id, data=registration,
+                    headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='PUT')
+                urllib.request.urlopen(request, timeout=10).read()
             step('first', 'create')
             step('first', 'empty')
             step('other', 'local')
             step('first', 'grant_unowned')
             account = next(line.split('=', 1)[1] for line in (devices['first'] / 'account.key').read_text().splitlines()
                            if line.startswith('public_id='))
-            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 296000000,
+            # Force the actual authenticated restore through more than one bounded page.
+            for index in range(101):
+                seed = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 1,
+                                   'source_ref': 'pagination-seed-' + str(index)}).encode()
+                request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=seed,
+                    headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
+                urllib.request.urlopen(request, timeout=10).read()
+            payload = json.dumps({'account_id': account, 'app_id': 'entity', 'amount': 296000000 - 101,
                                   'source_ref': 'game-shop-test-funding'}).encode()
             request = urllib.request.Request(url + '/api/v1/admin/tokens/manual-credit', data=payload,
                 headers={'Content-Type': 'application/json', 'X-Daochi-Admin': admin}, method='POST')
@@ -145,6 +159,8 @@ BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *Ho
             step('other', 'grant_unowned')
             with sqlite3.connect(fixture / 'node.db') as db:
                 events = db.execute("SELECT amount_delta,source_ref FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
+                titles = db.execute("SELECT app_id FROM token_ledger WHERE account_id=? AND event_type='debit' ORDER BY ledger_seq", (account,)).fetchall()
+                assert [row[0] for row in titles] == ['wurm'] * 5 + ['choano'] * 3 + ['shovey'] * 2 + ['wurm', 'shovey', 'shovey'], titles
                 assert [row[0] for row in events] == [-10000000, -20000000, -30000000, -50000000, -20000000, -10000000, -20000000, -30000000, -10000000, -30000000, -5000000, -10000000, -51000000], events
                 assert [row[1] for row in events[5:]] == [
                     'choano.pearl:decoration-choano-pearl-v1', 'choano.flower:decoration-choano-flower-v1',
@@ -154,7 +170,7 @@ BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *Ho
                 assert db.execute('SELECT SUM(amount_delta) FROM token_ledger WHERE account_id=?', (account,)).fetchone()[0] == 0
             (out / 'result.json').write_text(json.dumps({'passed': True, 'purchases': 13,
                 'behaviors': ['real authenticated fixed-price debits', 'retries on two devices debit once',
-                              'receipt restore on a fresh device', 'separate Wurm and Shovey coin packs',
+                              'receipt restore on a fresh device across 100-event pages', 'actual title allocation for each catalog debit', 'separate Wurm and Shovey coin packs',
                               'unfunded account cannot acquire paid skins', 'different accounts have separate ownership',
                               'owned grants through production browser router and native service',
                               'unowned spoofed flag refused without debit',

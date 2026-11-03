@@ -2,9 +2,9 @@
 #import "std/vec"
 #import "std/text_buffer"
 
-Receipt :: (product: s32, owner: string, amount: s64, reference: string = "") -> string {
+Receipt :: (product: s32, owner: string, amount: s64, reference: string = "", app: string = "entity") -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"entity\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"%\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, ifx product == SHOVEY_ISLAND_PRODUCT then "unlock" else "spend", ifx reference == "" then GameShopReference(product) else reference, amount)
+    BuilderPrint(*out, "{\"account_id\":\"%\",\"app_id\":\"%\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"%\",\"source_ref\":\"%\",\"amount_delta\":%}", owner, app, ifx product == SHOVEY_ISLAND_PRODUCT then "unlock" else "spend", ifx reference == "" then GameShopReference(product) else reference, amount)
     return BuilderFinish(out)
 }
 #program_export
@@ -15,6 +15,8 @@ main :: () -> s32 {
         p := cast(s32)product
         text := Receipt(p, owner, -GameShopPrice(p))
         if GameShopReceipt(text, owner) != p { return 1 }
+        if GameShopReceipt(Receipt(p, owner, -GameShopPrice(p), "", GameShopTitle(p)), owner) != p { return 51 }
+        if GameShopReceipt(Receipt(p, owner, -GameShopPrice(p), "", "other-title"), owner) != 0 { return 52 }
         if GameShopReceipt(text, other) != 0 { return 2 }
         if GameShopReceipt(Receipt(p, owner, -1), owner) != 0 { return 3 }
         if GameShopReceipt(Receipt(p, owner, GameShopPrice(p)), owner) != 0 { return 4 }
@@ -60,6 +62,8 @@ main :: () -> s32 {
         BuilderPrint(*ref, "%:%", COIN_PACK_ACTION, CoinPackKey(pack, 3, key[:]))
         reference := BuilderFinish(ref)
         if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack), reference), owner) != CoinPackCoins(pack) { return 12 }
+        if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack), reference, "wurm"), owner) != CoinPackCoins(pack) ||
+        CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack), reference, "shovey"), owner) != 0 { return 53 }
         if CoinPackReceipt(Receipt(1, other, -CoinPackPrice(pack), reference), owner) != 0 { return 13 }
         if CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(pack) + 1, reference), owner) != 0 { return 14 }
     }
@@ -74,6 +78,8 @@ main :: () -> s32 {
         BuilderPrint(*ref, "%:%", SHOVEY_COIN_PACK_ACTION, ShoveyCoinPackKey(pack, 3, shovey_key[:]))
         reference := BuilderFinish(ref)
         if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference), owner) != ShoveyCoinPackCoins(pack) { return 25 }
+        if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference, "shovey"), owner) != ShoveyCoinPackCoins(pack) ||
+        ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference, "wurm"), owner) != 0 { return 59 }
         if ShoveyCoinPackReceipt(Receipt(14, other, -ShoveyCoinPackPrice(pack), reference), owner) != 0 { return 26 }
         if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack) + 1, reference), owner) != 0 { return 27 }
     }
@@ -88,5 +94,22 @@ main :: () -> s32 {
     CoinPackReceipt(Receipt(1, owner, -CoinPackPrice(1), wurm_ref), owner) == 0 ||
     ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(1), shovey_ref), owner) == 0 { return 28 }
     print("Game shop local tests: exact paid receipt, account isolation, amount validation, stable purchase keys, game masks and coin packs.\n")
+    if GameShopPackSuffix("wurm.coins:coins-wurm-1-0-v1", "wurm.coins:coins-wurm-1-") ||
+    GameShopPackSuffix("wurm.coins:coins-wurm-1-1-v1evil", "wurm.coins:coins-wurm-1-") ||
+    !GameShopPackSuffix("wurm.coins:coins-wurm-1-12-v1", "wurm.coins:coins-wurm-1-") { return 58 }
+    // Replay title and legacy receipts across a full first page atomically.
+    restore: GameShopRestore
+    page: Vec(u8)
+    BuilderPrint(*page, "{\"events\":[")
+    for i: cast(s32)1..100 {
+        if i > 1 { BuilderPrint(*page, ",") }
+        BuilderPrint(*page, "{\"ledger_seq\":%,\"account_id\":\"%\",\"app_id\":\"wurm\",\"asset_id\":\"waozi:token\",\"event_type\":\"debit\",\"source_type\":\"spend\",\"source_ref\":\"wurm.coins:coins-wurm-1-%-v1\",\"amount_delta\":-2000000}", i, owner, i)
+    }
+    BuilderPrint(*page, "]}")
+    if GameShopRestorePage(TextView(VecSlice(page, 0, page.count)), owner, *restore) != 1 || restore.cursor != 100 || restore.coins != 15000 || restore.packs != 100 { return 54 }
+    VecFree(page)
+    if GameShopRestorePage("{\"events\":[{\"ledger_seq\":100}]}", owner, *restore) != -1 || restore.coins != 15000 { return 55 }
+    if GameShopRestorePage("{\"events\":[{\"ledger_seq\":101}]}", owner, *restore) != 0 || restore.cursor != 101 { return 56 }
+    if GameShopRestorePage("{\"events\":[]}", owner, *restore) != 0 || restore.coins != 15000 { return 57 }
     return 0
 }

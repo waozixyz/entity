@@ -1,6 +1,7 @@
 // Fixed-price cosmetic purchases use the existing Dew ledger. The product's
 // stable idempotency key makes retries and purchases on two devices one debit.
 #import "std/json_scan"
+#import "dew_model"
 #import "std/text_buffer"
 #import "std/c_string"
 #import "std/vec"
@@ -18,6 +19,16 @@ GAME_SHOP_SHOVEY_BITS :: 24576;
 GameShopWurmOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_WURM_BITS }
 GameShopDecorations :: (owned: s32) -> s32 { return owned & GAME_SHOP_CHOANO_BITS }
 GameShopShoveyOwned :: (owned: s32) -> s32 { return owned & GAME_SHOP_SHOVEY_BITS }
+// Actual catalog title; account-host identity remains independent.
+GameShopTitle :: (product: s32) -> string {
+    if product >= 10 && product <= 12 { return "choano" }
+    if product >= 13 && product <= 15 { return "shovey" }
+    if product == 1 || product == 2 || product == 3 || product == 7 || product == 9 { return "wurm" }
+    return ""
+}
+GameShopReceiptTitle :: (text: string, title: string) -> bool {
+    return title != "" && (GameShopField(text, "app_id", title) || GameShopField(text, "app_id", "entity"))
+}
 GameShopPrice :: (product: s32) -> s64 {
     if product == SHOVEY_ISLAND_PRODUCT { return SHOVEY_ISLAND_REGULAR_UNITS }
     if product >= 10 && product <= 12 { return cast(s64)(product - 9) * 10000000 }
@@ -82,7 +93,7 @@ GameShopField :: (text: string, field: string, expected: string) -> bool {
 }
 GameShopReceipt :: (text: string, owner: string) -> s32 {
     if owner.count == 64 && GameShopField(text, "account_id", owner) &&
-    GameShopField(text, "app_id", "entity") && GameShopField(text, "asset_id", "waozi:token") &&
+    GameShopReceiptTitle(text, "shovey") && GameShopField(text, "asset_id", "waozi:token") &&
     GameShopField(text, "event_type", "debit") && GameShopField(text, "source_type", "unlock") &&
     GameShopField(text, "source_ref", "shovey.island") {
         // Historical sale receipts stay valid after the server's sale ends.
@@ -92,14 +103,14 @@ GameShopReceipt :: (text: string, owner: string) -> s32 {
         return 0
     }
     if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
-    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopField(text, "asset_id", "waozi:token") ||
     !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
     amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
     for product: GAME_SHOP_PRODUCTS {
         if product == SHOVEY_ISLAND_PRODUCT { continue }
-        if amount.valid && amount.value == -cast(float64)GameShopPrice(cast(s32)product) &&
+        if GameShopReceiptTitle(text, GameShopTitle(cast(s32)product)) && amount.valid && amount.value == -cast(float64)GameShopPrice(cast(s32)product) &&
         GameShopField(text, "source_ref", GameShopReference(cast(s32)product)) { return cast(s32)product }
-        if product <= 3 && amount.valid && amount.value == -cast(float64)(GameShopPrice(cast(s32)product) / 10) &&
+        if product <= 3 && GameShopField(text, "app_id", "entity") && amount.valid && amount.value == -cast(float64)(GameShopPrice(cast(s32)product) / 10) &&
         GameShopField(text, "source_ref", GameShopLegacyReference(cast(s32)product)) { return cast(s32)product }
     }
     return 0
@@ -129,10 +140,17 @@ CoinPackKey :: (pack: s32, number: s32, output: []u8) -> string {
     unused CopyCString(text, output)
     return TextUntilNul(output)
 }
+GameShopPackSuffix :: (reference: string, prefix: string) -> bool {
+    if reference.count <= prefix.count || reference[:prefix.count] != prefix { return false }
+    at := prefix.count
+    if reference[at] < #char "1" || reference[at] > #char "9" { return false }
+    while at < reference.count && reference[at] >= #char "0" && reference[at] <= #char "9" { at += 1 }
+    return reference[at:] == "-v1"
+}
 // The coins a debit receipt bought, or 0 when it is not a coin pack.
 CoinPackReceipt :: (text: string, owner: string) -> s32 {
     if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
-    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopReceiptTitle(text, "wurm") || !GameShopField(text, "asset_id", "waozi:token") ||
     !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
     amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
     reference: [128]u8
@@ -142,7 +160,7 @@ CoinPackReceipt :: (text: string, owner: string) -> s32 {
         prefix: Vec(u8)
         BuilderPrint(*prefix, "%:coins-wurm-%-", COIN_PACK_ACTION, pack)
         start := BuilderFinish(prefix)
-        matched := ref.count > start.count && ref[:start.count] == start
+        matched := GameShopPackSuffix(ref, start)
         if matched && amount.valid && amount.value == -cast(float64)CoinPackPrice(pack) { return CoinPackCoins(pack) }
     }
     return 0
@@ -171,7 +189,7 @@ ShoveyCoinPackKey :: (pack: s32, number: s32, output: []u8) -> string {
 }
 ShoveyCoinPackReceipt :: (text: string, owner: string) -> s32 {
     if !GameShopField(text, "account_id", owner) || owner.count != 64 ||
-    !GameShopField(text, "app_id", "entity") || !GameShopField(text, "asset_id", "waozi:token") ||
+    !GameShopReceiptTitle(text, "shovey") || !GameShopField(text, "asset_id", "waozi:token") ||
     !GameShopField(text, "event_type", "debit") || !GameShopField(text, "source_type", "spend") { return 0 }
     amount := ReadNumber(text, FieldAt(text, 0, "amount_delta"))
     reference: [128]u8
@@ -181,7 +199,7 @@ ShoveyCoinPackReceipt :: (text: string, owner: string) -> s32 {
         prefix: Vec(u8)
         BuilderPrint(*prefix, "%:coins-shovey-%-", SHOVEY_COIN_PACK_ACTION, pack)
         start := BuilderFinish(prefix)
-        matched := ref.count > start.count && ref[:start.count] == start
+        matched := GameShopPackSuffix(ref, start)
         if matched && amount.valid && amount.value == -cast(float64)ShoveyCoinPackPrice(pack) { return ShoveyCoinPackCoins(pack) }
     }
     return 0
@@ -190,4 +208,41 @@ ShoveyCoinPackReceipt :: (text: string, owner: string) -> s32 {
 ChristmasClaimWindow :: (unix_seconds: s64) -> bool {
     // December 2026, UTC. A claimed skin remains owned after the window.
     return unix_seconds >= 1796083200 && unix_seconds < 1798761600
+}
+
+// A complete, bounded replay across all title and historical Entity receipts.
+GameShopRestore :: struct {
+    cursor: s64
+    owned: s32
+    coins: s32
+    packs: s32
+    shovey_coins: s32
+    shovey_packs: s32
+}
+GameShopRestorePage :: (document: string, owner: string, state: *GameShopRestore) -> s32 {
+    at := FieldAt(document, 0, "events")
+    if Space(document, ValueEnd(document, 0, 0)) != document.count || at < 0 { return -1 }
+    if MatchLiteral(document, at, "null") { return 0 }
+    if document[at] != #char "[" { return -1 }
+    count := ArrayCount(document, at)
+    if count < 0 || count > 100 { return -1 }
+    next := state.*
+    for i: cast(s32)0..count - 1 {
+        start := ElementAt(document, at, i)
+        end := ValueEnd(document, start, 0)
+        if start < 0 || end <= start { return -1 }
+        item := document[start:end]
+        sequence: s64
+        if !DewInteger(item, FieldAt(item, 0, "ledger_seq"), *sequence) || sequence <= next.cursor { return -1 }
+        next.cursor = sequence
+        product := GameShopReceipt(item, owner)
+        if product > 0 { next.owned |= 1 << product }
+        coins := CoinPackReceipt(item, owner)
+        shovey := ShoveyCoinPackReceipt(item, owner)
+        if coins > 2147483647 - next.coins || shovey > 2147483647 - next.shovey_coins { return -1 }
+        if coins > 0 { next.coins += coins; next.packs += 1 }
+        if shovey > 0 { next.shovey_coins += shovey; next.shovey_packs += 1 }
+    }
+    state.* = next
+    return ifx count == 100 then 1 else 0
 }

@@ -1,0 +1,60 @@
+#import "referral_android"
+#import "kryon/android_jni"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+functions: JniFunctions;
+env: JniEnv;
+uri: [5000]u8;
+calls: s32;
+releases: s32;
+deleted: s32;
+missing: bool;
+exception: bool;
+bad_method: bool;
+ObjectClass :: (input: *JniEnv, activity: *void) -> *void { return activity }
+Delete :: (input: *JniEnv, value: *void) { deleted += 1 }
+Exception :: (input: *JniEnv) -> u8 { return ifx exception then 1 else 0 }
+Clear :: (input: *JniEnv) { exception = false }
+Method :: (input: *JniEnv, klass: *void, name: *u8, signature: *u8) -> *void {
+    bad_method = TextFromCString(name) != "takeLaunchUri" || TextFromCString(signature) != "()Ljava/lang/String;"
+    return ifx missing then null else klass
+}
+Call :: (input: *JniEnv, klass: *void, method: *void, args: *JniValue) -> *void {
+    calls += 1
+    if args != null { bad_method = true }
+    return klass
+}
+Chars :: (input: *JniEnv, value: *void, copy: *u8) -> *u8 { return *uri[0] }
+Release :: (input: *JniEnv, value: *void, bytes: *u8) { releases += 1; uri = .{} }
+#program_export
+main :: () -> s32 {
+    functions.GetObjectClass = ObjectClass
+    functions.DeleteLocalRef = Delete
+    functions.GetStaticMethodID = Method
+    functions.CallStaticObjectMethodA = Call
+    functions.GetStringUTFChars = Chars
+    functions.ReleaseStringUTFChars = Release
+    functions.ExceptionCheck = Exception
+    functions.ExceptionClear = Clear
+    env.functions = *functions
+    activity := cast(*void)cast(usize)1
+    output: [129]u8
+    unused CopyCString("https://dew.waozi.xyz/invite/abc123?app=wurm", uri[:])
+    if !ReferralTakeActivityInvitation(*env, activity, output[:]) || TextUntilNul(output[:]) != "abc123" ||
+    bad_method || calls != 1 || releases != 1 || deleted != 2 { return 1 }
+    if ReferralTakeActivityInvitation(*env, activity, output[:]) || output[0] != 0 { return 2 }
+    unused CopyCString("https://dew.waozi.xyz.evil/invite/abc123", uri[:])
+    if ReferralTakeActivityInvitation(*env, activity, output[:]) || output[0] != 0 { return 3 }
+    for i: cast(s32)0..4998 { uri[i] = #char "a" }
+    if ReferralTakeActivityInvitation(*env, activity, output[:]) || output[0] != 0 || releases != 4 { return 4 }
+    missing = true
+    before := calls
+    if ReferralTakeActivityInvitation(*env, activity, output[:]) || calls != before { return 5 }
+    missing = false
+    exception = true
+    if ReferralTakeActivityInvitation(*env, activity, output[:]) || exception { return 6 }
+    if EntityTakeReferralInvitation(output[:]) || output[0] != 0 { return 7 }
+    print("Referral Android JNI local tests: actual activity static signature, consume once, canonical allowlist, bounded UTF8, missing method/exception and nonAndroid passed\n")
+    return 0
+}

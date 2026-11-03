@@ -113,6 +113,18 @@ NativeLeaderboardSave :: () -> bool {
     return name != "" && NativeWrite(name, document)
 }
 
+EntityLeaderboardStop :: () {
+    CancelRequest(*native_leaderboard_pending)
+    HttpTransferCancel(*native_leaderboard_transfer)
+    native_leaderboard_session = .{}
+    native_leaderboard_owner = .{}
+    native_leaderboard_node = .{}
+    native_leaderboard_stage = 0
+    native_leaderboard_requested = false
+    native_leaderboard_page = .{}
+    native_leaderboard_selected = .{}
+}
+
 NativeLeaderboardOwner :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
     if owner == "" { owner = "local" }

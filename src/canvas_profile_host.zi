@@ -1,0 +1,124 @@
+// Shared Entity provider for an AppContext app compiled into a canvas page.
+// The game supplies only CanvasAppMain; account policy stays in native_host.
+#import "kryon/canvas_app_run"
+#import "kryon/canvas_app_hooks"
+#import "kryon/bundle_storage_web"
+#import "kryon/app_files"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/text_input_props"
+#import "kryon/button_widget"
+#import "kryon/button_props"
+#import "kryon/page_core"
+#import "native_host"
+#import "publications_read"
+#import "entity_records"
+#import "entity_dew"
+#import "game_shop_native"
+#import "std/file"
+#import "std/web"
+
+entity_canvas_ready: bool;
+entity_canvas_visible: bool;
+entity_canvas_client: string = "arcade";
+entity_canvas_saved: float64;
+
+EntityCanvasStatus :: (ready: bool) {
+    module := WebGetObject(WebGlobal, WebName("Module"))
+    WebSet(module, WebName("profileReady"), WebBool(ready))
+    WebSet(module, WebName("profileVisible"), WebBool(entity_canvas_visible))
+}
+
+EntityCanvasStart :: (mini: bool) -> bool {
+    scope := WebScope()
+    defer { WebEnd(scope) }
+    entity_canvas_ready = false
+    entity_canvas_visible = false
+    if mini { EntityCanvasStatus(true); return true }
+    bytes, found := ReadEntireFile("/entity.zx")
+    defer { AppFileFree(bytes) }
+    if !found { return false }
+    if !EntityHostOpen(bytes, "/kryon-apps/profile", entity_canvas_client, true) {
+        EntityHostDispose()
+        return false
+    }
+    entity_canvas_ready = true
+    entity_canvas_saved = PageNow()
+    EntityCanvasStatus(true)
+    return true
+}
+EntityCanvasStop :: () -> bool {
+    scope := WebScope()
+    defer { WebEnd(scope) }
+    saved := true
+    PublicationsReadStop()
+    if entity_canvas_ready {
+        saved = EntityHostClose()
+        if !saved { EntityHostDispose() }
+    }
+    entity_canvas_ready = false
+    entity_canvas_visible = false
+    EntityCanvasStatus(false)
+    return saved
+}
+EntityCanvasPump :: () {
+    scope := WebScope()
+    defer { WebEnd(scope) }
+    PublicationsReadPump()
+    EntityCanvasStatus(true)
+    if !entity_canvas_ready { return }
+    EntityHostPump()
+    if PageNow() - entity_canvas_saved >= 1000.0 {
+        unused BundleStorageSync(false)
+        entity_canvas_saved = PageNow()
+    }
+}
+EntityCanvasSupports :: (capability: string) -> bool {
+    if capability == PUBLICATIONS_READ_SERVICE { return true }
+    return entity_canvas_ready && (capability == "entity.profile" || capability == "entity.game-shop" ||
+        capability == ENTITY_RECORDS_SERVICE || capability == ENTITY_DEW_SERVICE)
+}
+EntityCanvasService :: (name: string, request: string) -> string {
+    scope := WebScope()
+    defer { WebEnd(scope) }
+    if name == PUBLICATIONS_READ_SERVICE { return PublicationsReadAnswer(request) }
+    if !entity_canvas_ready { return "{\"status\":\"unavailable\"}" }
+    if name == "entity.profile" {
+        opened := EntityHostProfileRequest(request)
+        if opened { entity_canvas_visible = true }
+        return ifx opened then "queued" else "unavailable"
+    }
+    if name == "entity.game-shop" { return EntityGameShopAnswer(request) }
+    if name == ENTITY_RECORDS_SERVICE { return EntityRecordsAnswer(request) }
+    if name == ENTITY_DEW_SERVICE { return EntityDewAnswer(request) }
+    return "{\"status\":\"unavailable\"}"
+}
+EntityCanvasFrame :: (session: Session, bounds: Rectangle, key: s32,
+    modifiers: s32, input: TextFieldInput) -> s32 {
+    if !entity_canvas_visible { return 0 }
+    scope := WebScope()
+    defer { WebEnd(scope) }
+    // Replace the whole game frame, including its input callback. Passwords
+    // and account actions never pass through the game's AppFieldInput.
+    area := Rectangle.{bounds.x, bounds.y + 56.0, bounds.width, bounds.height - 56.0}
+    if !EntityHostFrame(session, area, key, modifiers, input) { return -1 }
+    if Button(session, ButtonProps.{.key = cast(u64)49001, .id = 49001, .label = "‹",
+            .bounds = Rectangle.{bounds.x + 8.0, bounds.y + 6.0, 76.0, 44.0}}) != 0 || key == 256 || key == 4 {
+        if !EntityHostBack() && EntityHostSave() { entity_canvas_visible = false }
+    }
+    return 1
+}
+
+// Bind canvas_app_run:CanvasAppMain to the app's Main, as for the bare
+// runner. Embed the ordinary Entity bundle at /entity.zx and link the
+// provider's native-crypto artifact with this complete generated graph.
+EntityCanvasMain :: (client_id: string = "arcade") -> s32 {
+    entity_canvas_client = client_id
+    CanvasAppUseHooks(CanvasAppHooks.{.start = EntityCanvasStart, .stop = EntityCanvasStop,
+            .pump = EntityCanvasPump, .supports = EntityCanvasSupports,
+            .service = EntityCanvasService, .frame = EntityCanvasFrame})
+    return CanvasAppMainLoop(false)
+}
+
+#program_export
+main :: () -> s32 { return EntityCanvasMain() }

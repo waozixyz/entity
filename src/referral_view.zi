@@ -1,0 +1,199 @@
+// Loaded by Entity: all hosts share the same explicit acceptance flow.
+referrals_open: bool;
+referrals_resume: bool;
+referral_code: [129]u8;
+referral_confirm: bool;
+referral_ui_owner: [65]u8;
+referral_ui_generation: s64;
+referral_ui_json: [76000]u8;
+referral_ui_me: ReferralSummary;
+referral_ui_page: ReferralPage;
+referral_ui_gift: bool;
+referral_ui_asked: bool;
+referral_ui_list_asked: bool;
+referral_ui_scroll: s32;
+referral_ui_height: float32;
+ReferralViewReset :: () {
+    referral_ui_owner = .{}
+    referral_ui_me = .{}
+    referral_ui_page = .{}
+    referral_ui_gift = false
+    referral_ui_asked = false
+    referral_ui_list_asked = false
+    referral_confirm = false
+    referral_ui_scroll = 0
+}
+ReferralCommand :: (operation: string, code: string = "", cursor: string = "") -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":\"%\",\"operation\":\"%\",\"code\":", TextUntilNul(referral_ui_owner[:]), operation)
+    EntityQuote(*out, code)
+    BuilderPrint(*out, ",\"cursor\":")
+    EntityQuote(*out, cursor)
+    BuilderPrint(*out, "}")
+    request := TextView(VecSlice(out, 0, out.count))
+    defer { VecFree(out) }
+    return AppService(REFERRAL_SERVICE, request) == "queued"
+}
+ReferralRead :: () {
+    if !CopyCString(AppService(REFERRAL_SERVICE, ""), referral_ui_json[:]) {
+        ReferralViewReset()
+        referral_ui_json = .{}
+        return
+    }
+    text := TextUntilNul(referral_ui_json[:])
+    owner: [65]u8
+    unused ReadStringText(text, FieldAt(text, 0, "owner"), owner[:])
+    generation := cast(s64)ReadNumber(text, FieldAt(text, 0, "generation")).value
+    if generation != referral_ui_generation || TextUntilNul(owner[:]) != TextUntilNul(referral_ui_owner[:]) {
+        ReferralViewReset()
+        referral_ui_generation = generation
+        referral_ui_owner = owner
+    }
+    if owner[0] == 0 { return }
+    busy := MatchLiteral(text, FieldAt(text, 0, "busy"), "true")
+    at := FieldAt(text, 0, "me")
+    end := ValueEnd(text, at, 0)
+    if at >= 0 && end > at { unused ReferralParseSummary(text[at:end], TextUntilNul(owner[:]), *referral_ui_me) }
+    at = FieldAt(text, 0, "page")
+    end = ValueEnd(text, at, 0)
+    if at >= 0 && end > at { unused ReferralParsePage(text[at:end], *referral_ui_page) }
+    at = FieldAt(text, 0, "receipt")
+    end = ValueEnd(text, at, 0)
+    if !referral_ui_gift && at >= 0 && end > at && ReferralReceipt(text[at:end]) {
+        referral_ui_gift = true
+        referral_code = .{}
+        unused WriteStore("referral-pending.txt", "-")
+    }
+    if !busy && !referral_ui_asked { referral_ui_asked = ReferralCommand("me") }
+    else if !busy && referral_ui_me.known && !referral_ui_list_asked {
+        referral_ui_list_asked = ReferralCommand("accepted")
+    }
+}
+DrawReferrals :: () {
+    session = AppSession()
+    scale = AppScale()
+    if scale <= 0.0 { scale = 1.0 }
+    ReferralRead()
+    text := TextUntilNul(referral_ui_json[:])
+    busy := MatchLiteral(text, FieldAt(text, 0, "busy"), "true")
+    area := AppBounds()
+    Box(session, BoxProps.{.key = cast(u64)78000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
+    scroll := Scroll(session, ScrollProps.{.key = cast(u64)78001, .bounds = area,
+            .content_height = cast(s32)(ifx referral_ui_height > 0.0 then referral_ui_height else 1200.0 * scale), .scroll_offset = referral_ui_scroll})
+    referral_ui_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    defer { End(session) }
+    width := scroll.content.width - 32.0 * scale
+    if width > 600.0 * scale { width = 600.0 * scale }
+    x := scroll.content.x + (scroll.content.width - width) * 0.5
+    y := scroll.content.y + 16.0 * scale
+    if !state.host_navigation {
+        if WideButton(78002, Label("entity.back", "Back"), x, *y, width) { referrals_open = false }
+    }
+    TextLine(78003, Label("referral.title", "My referrals"), x, y, width, 26)
+    y += 48.0 * scale
+    Paragraph(78004, Label("referral.terms", "Invite unlimited friends. Earn 5% in Dew on their paid purchases. Each friend gets 20 Dew immediately when they accept."), x, y, width, 100.0)
+    y += 108.0 * scale
+    scope_error: [80]u8
+    unused ReadStringText(text, FieldAt(text, 0, "error"), scope_error[:])
+    if TextUntilNul(scope_error[:]) == "wrong_node" {
+        Paragraph(78031, Label("referral.issuer", "Referrals require the account’s node to be https://api.waozi.xyz. Change the node in Profile to continue."), x, y, width, 110.0)
+        referral_ui_height = y - scroll.content.y + 160.0 * scale
+        return
+    }
+    if referral_code[0] != 0 {
+        TextLine(78028, Label("referral.pending", "Pending invitation"), x, y, width)
+        y += 28.0 * scale
+        TextLine(78029, TextUntilNul(referral_code[:]), x, y, width)
+        y += 36.0 * scale
+    }
+    if referral_ui_owner[0] == 0 {
+        if WideButton(78005, Label("referral.signin", "Sign in to accept or invite"), x, *y, width, true) { referrals_open = false; referrals_resume = true; ManagementHome(PAGE_ACCOUNT) }
+    } else {
+        if referral_ui_gift {
+            Paragraph(78006, Label("referral.success", "Accepted — your 20 Dew welcome gift is credited."), x, y, width, 70.0)
+            y += 78.0 * scale
+        }
+        error: [80]u8
+        unused ReadStringText(text, FieldAt(text, 0, "error"), error[:])
+        if error[0] != 0 {
+            Paragraph(78007, Label("referral.error", "Could not complete this request. Check the code and connection, then retry. Your account can have only one referrer."), x, y, width, 100.0)
+            y += 108.0 * scale
+        }
+        if busy { TextLine(78008, Label("entity.working", "Working…"), x, y, width); y += 36.0 * scale }
+        if !busy && WideButton(78009, Label("entity.refresh", "Refresh"), x, *y, width) {
+            referral_ui_asked = false
+            referral_ui_list_asked = false
+        }
+        if referral_ui_me.known {
+            TextLine(78010, TextUntilNul(referral_ui_me.code[:]), x, y, width, 22)
+            y += 40.0 * scale
+            if WideButton(78011, Label("referral.copy_code", "Copy invite code"), x, *y, width) { unused ClipboardCopy(TextUntilNul(referral_ui_me.code[:]), 0) }
+            if WideButton(78012, Label("referral.share", "Copy invite link"), x, *y, width) {
+                link: [768]u8
+                unused ReadStringText(text, FieldAt(text, 0, "share_url"), link[:])
+                unused ClipboardCopy(ifx link[0] == 0 then TextUntilNul(referral_ui_me.invite_url[:]) else TextUntilNul(link[:]), 0)
+            }
+            amount: [80]u8
+            unused DewFormat(referral_ui_me.earned, DewUnits, amount[:], "Dew")
+            TextLine(78013, Label("referral.earned", "Total earned"), x, y, width)
+            y += 28.0 * scale
+            TextLine(78014, TextUntilNul(amount[:]), x, y, width)
+            y += 36.0 * scale
+            if referral_ui_me.reversed > 0 || referral_ui_me.offset > 0 {
+                TextLine(78015, Label("referral.adjustments", "Refund adjustments / pending offset"), x, y, width)
+                y += 28.0 * scale
+                unused DewFormat(referral_ui_me.reversed, DewUnits, amount[:], "Dew")
+                TextLine(78016, TextUntilNul(amount[:]), x, y, width)
+                y += 28.0 * scale
+                unused DewFormat(referral_ui_me.offset, DewUnits, amount[:], "Dew")
+                TextLine(78017, TextUntilNul(amount[:]), x, y, width)
+                y += 36.0 * scale
+            }
+        }
+        if referral_ui_me.referrer[0] != 0 || referral_ui_gift {
+            TextLine(78018, Label("referral.bound", "Your account already has a referrer."), x, y, width)
+            y += 40.0 * scale
+        } else if !MatchLiteral(text, FieldAt(text, 0, "can_claim"), "true") {
+            Paragraph(78019, Label("referral.store", "Referral acceptance is unavailable in this edition."), x, y, width, 70.0)
+            y += 78.0 * scale
+        } else if !busy {
+            changed: bool
+            unused EditField(7, referral_code[:], Label("referral.code", "Invite code"), Rectangle.{x, y, width, 48.0 * scale}, 128, false, *changed)
+            if changed {
+                referral_confirm = false
+                unused WriteStore("referral-pending.txt", ifx referral_code[0] == 0 then "-" else TextUntilNul(referral_code[:]))
+            }
+            y += 56.0 * scale
+            if referral_confirm {
+                TextLine(78020, TextUntilNul(referral_code[:]), x, y, width)
+                y += 32.0 * scale
+                Paragraph(78021, Label("referral.confirm", "Accept this code's referrer permanently? They will see your public name or ID and acceptance date. You can have only one referrer."), x, y, width, 110.0)
+                y += 118.0 * scale
+                if WideButton(78022, Label("referral.accept", "Confirm referrer and receive 20 Dew"), x, *y, width, true) {
+                    unused ReferralCommand("claim", TextUntilNul(referral_code[:]))
+                    referral_confirm = false
+                }
+                if WideButton(78023, Label("entity.cancel", "Cancel"), x, *y, width) { referral_confirm = false }
+            } else if ReferralToken(TextUntilNul(referral_code[:])) && WideButton(78024, Label("referral.review", "Review invitation"), x, *y, width, true) { referral_confirm = true }
+        }
+        y += 16.0 * scale
+        TextLine(78025, Label("referral.accepted", "Who accepted"), x, y, width, 22)
+        y += 40.0 * scale
+        if referral_ui_page.count == 0 {
+            TextLine(78026, Label("referral.empty", "No accepted invitations yet."), x, y, width)
+            y += 36.0 * scale
+        }
+        for i: cast(s32)0..referral_ui_page.count - 1 {
+            person := referral_ui_page.people[i]
+            Paragraph(cast(u64)(78100 + i * 2), TextUntilNul(person.name[:]), x, y, width, 56.0)
+            y += 60.0 * scale
+            TextLine(cast(u64)(78101 + i * 2), TextUntilNul(person.date[:]), x, y, width, 13)
+            y += 36.0 * scale
+        }
+        if !busy && referral_ui_page.cursor[0] != 0 && WideButton(78027, Label("referral.next", "Next page"), x, *y, width) {
+            unused ReferralCommand("accepted", "", TextUntilNul(referral_ui_page.cursor[:]))
+        }
+    }
+    referral_ui_height = y - scroll.content.y + 40.0 * scale
+}

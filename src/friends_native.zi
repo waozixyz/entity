@@ -45,6 +45,19 @@ EntityFriendsGame :: (game: string) {
     friend_refresh = true
 }
 
+EntityFriendsStop :: () {
+    CancelRequest(*friend_pending)
+    HttpTransferCancel(*friend_transfer)
+    friend_session = .{}
+    friend_stage = 0
+    friend_refresh = false
+    friend_queued = false
+    friend_owner = .{}
+    friend_node = .{}
+    friend_list = .{}
+    friend_requests = .{}
+}
+
 FriendsScope :: () {
     owner := TextUntilNul(account_recovery.keys.public_id[:])
     node := TextUntilNul(account_profile.nodes[account_profile.preferred][:])

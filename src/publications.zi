@@ -176,6 +176,21 @@ PublicationsStart :: (context: *void, request: HttpRequest, output: []u8) -> boo
 PublicationsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*publication_transfer, status) }
 PublicationsCancel :: (context: *void) { HttpTransferCancel(*publication_transfer) }
 
+PublicationsStop :: () {
+    CancelRequest(*publication_pending)
+    HttpTransferCancel(*publication_transfer)
+    for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+        EntityFree(publication_requests[index].body)
+        EntityFree(publication_requests[index].reply)
+        publication_requests[index] = .{}
+    }
+    EntityFree(publication_reply)
+    publication_reply = ""
+    publication_sending = -1
+    publication_session = .{}
+    publication_session_owner = .{}
+}
+
 // Signs as client's account over this device's own HTTP connection, as
 // native hosts do; a transport already set, such as a test's, stays.
 PublicationsConnect :: (client: PublicationsClient) {

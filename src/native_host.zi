@@ -9,6 +9,10 @@
 #import "entity_records"
 #import "publications"
 #import "entity_dew"
+#import "game_shop_native"
+#import "referral_model"
+#import "referral_native"
+#import "referral_locales"
 #import "leaderboard_native"
 #import "leaderboard_model"
 #import "friends_native"
@@ -51,6 +55,9 @@ entity_topup_url: [256]u8;
 entity_topup_custom: bool;
 entity_topup_requested: bool;
 
+entity_referral_locale: [8]u8;
+EntityHostReferralsLocale :: (locale: string) { unused CopyCString(locale, entity_referral_locale[:]) }
+
 EntityHostAllowFunding :: (allowed: bool) { DewAllowFunding(allowed) }
 
 // The app's edition decides how Dew is bought: the direct and F-Droid
@@ -61,6 +68,7 @@ ENTITY_EDITION_DIRECT :: 0
 ENTITY_EDITION_FDROID :: 1
 ENTITY_EDITION_GOOGLE_PLAY :: 2
 EntityHostEdition :: (edition: s32) {
+    unused EntityReferralsPlatform(ifx edition == ENTITY_EDITION_GOOGLE_PLAY then "play" else ifx edition == ENTITY_EDITION_FDROID then "fdroid" else "direct")
     DewUseGooglePlay(edition == ENTITY_EDITION_GOOGLE_PLAY)
     if edition != ENTITY_EDITION_GOOGLE_PLAY { DewAllowFunding(true) }
 }
@@ -71,13 +79,18 @@ EntityHostText :: (text: string) -> HostValue {
 }
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
-    name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.asset" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
+    name == REFERRAL_SERVICE || name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.asset" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
     name == PUBLICATIONS_SERVICE
 }
 EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     name := TextFromCString(function)
     if name == "AppServiceHost" && count == 2 {
         service := AppArgumentText(arguments[0])
+        if service == REFERRAL_SERVICE {
+            EntityReferralsConnect(AccountStoreClient)
+            result.* = EntityHostText(EntityReferralsAnswer(AppArgumentText(arguments[1])))
+            return 1
+        }
         if service == "entity.friends" { result.* = EntityHostText(EntityFriendsAnswer(AppArgumentText(arguments[1]))); return 1 }
         if service == PUBLICATIONS_SERVICE {
             // Publications sign as this device's Entity account.
@@ -114,9 +127,37 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
             return 1
         }
     }
-    if name == "AppLocaleHost" && count == 1 { result.* = EntityHostText(AppArgumentText(arguments[0])); return 1 }
+    if name == "AppLocaleHost" && count == 1 {
+        key := AppArgumentText(arguments[0])
+        value := ReferralLabel(TextUntilNul(entity_referral_locale[:]), key)
+        result.* = EntityHostText(ifx value == "" then key else value)
+        return 1
+    }
     if name == "ClipboardCopyHost" && count == 2 {
         result.* = HostScalar("bool", ifx SystemClipboardSet(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
+    if (name == "ReadStoreHost" || name == "WriteStoreHost") && count == 2 &&
+    (AppArgumentText(arguments[0]) == "referral-pending.txt" || AppArgumentText(arguments[0]) == "referral-suggestion.txt") {
+        path: [4096]u8
+        file := AccountStorePath(AppArgumentText(arguments[0]), path[:])
+        if name == "WriteStoreHost" {
+            value := AppArgumentText(arguments[1])
+            saved := (value == "-" || ReferralToken(value)) && NativeWrite(file, value) && AccountStorePersist()
+            result.* = HostScalar("bool", ifx saved then 1 else 0)
+        } else {
+            bytes: [129]u8
+            read := NativeRead(file, bytes[:])
+            output := arguments[1]
+            if read < 0 { read = 0 }
+            if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)read { return 0 }
+            for index: 0..read {
+                byte := ifx index < read then bytes[index] else cast(u8)0
+                output.elements[index].bits = cast(u64)byte
+                output.elements[index].integer = cast(s64)byte
+            }
+            result.* = HostScalar("s32", read)
+        }
         return 1
     }
     if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
@@ -395,6 +436,8 @@ EntityHostPump :: () {
     AccountStorePump()
     DewPump()
     EntityDewPump()
+    EntityReferralsConnect(AccountStoreClient)
+    EntityReferralsPump()
     EntityRecordsPump()
     PublicationsConnect(AccountStoreClient)
     PublicationsPump()
@@ -404,9 +447,42 @@ EntityHostPump :: () {
 
 EntityHostClose :: () -> bool {
     if !EntityHostSave() { return false }
+    EntityHostDispose()
+    return true
+}
+
+// Unconditional teardown for terminal shutdown or a partially failed open.
+// Interactive navigation still uses EntityHostSave and keeps the page open
+// when saving fails; disposal never reports that an unsuccessful save worked.
+EntityHostDispose :: () {
+    EntityReferralsReset()
     DewReset()
+    EntityDewStop()
+    EntityGameShopStop()
+    EntityRecordsStop()
+    PublicationsStop()
+    EntityLeaderboardStop()
+    EntityFriendsStop()
     HostedAppClose(*portable.app)
     EntityFree(profile_document)
     profile_document = ""
-    return true
+    EntityFree(entity_referral_command)
+    entity_referral_command = ""
+    portable = .{}
+    AccountStoreStop()
+}
+
+entity_referral_command: string;
+EntityHostReferrals :: (code: string) -> bool {
+    if code != "" && !ReferralToken(code) { return false }
+    out: Vec(u8)
+    BuilderPrint(*out, "referrals:%", code)
+    next := BuilderFinish(out)
+    entity_host_page = ""
+    portable.command = ""
+    EntityFree(entity_referral_command)
+    entity_referral_command = next
+    entity_host_page = entity_referral_command
+    entity_host_may_restart = true
+    return EntityHostCommand(entity_host_page)
 }

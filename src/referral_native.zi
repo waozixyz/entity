@@ -1,0 +1,190 @@
+#import "std/byte_text_linux"
+// One bounded, owner-scoped adapter. Only explicit claims mutate the server.
+#import "referral_model"
+#import "dew_model"
+#import "model"
+#import "daochi_client/client"
+#import "daochi_client/async_client"
+#import "kryon/http_transfer"
+#import "std/net_http"
+#import "std/date_time_linux"
+#import "std/c_string"
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+Auth :: #import "daochi_client/auth";
+ReferralClient :: #type (context: *void, output: *Client) -> bool;
+referral_client: ReferralClient;
+referral_context: *void;
+referral_owner: [65]u8;
+referral_node: [512]u8;
+referral_device: [129]u8;
+referral_auth_app: [65]u8;
+referral_pending: PendingRequest;
+referral_session: Auth.Session;
+referral_transfer: HttpTransfer;
+referral_response: [65536]u8;
+referral_me: [4096]u8;
+referral_page: [65536]u8;
+referral_receipt: [2048]u8;
+referral_error: [80]u8;
+referral_operation: [16]u8;
+referral_path: [256]u8;
+referral_body: [512]u8;
+referral_stage: s32;
+referral_generation: s64;
+referral_answer: string;
+referral_allowed: bool = true;
+referrals_transport: AsyncTransport;
+referral_source_platform: [24]u8;
+referral_source_app: [65]u8;
+// Routing hints for the invitation page only, never backend provenance.
+EntityReferralsPlatform :: (platform: string) -> bool {
+    if platform != "direct" && platform != "fdroid" && platform != "play" && platform != "apple" && platform != "amazon" { return false }
+    return CopyCString(platform, referral_source_platform[:])
+}
+EntityReferralsSource :: (platform: string, app: string) -> bool {
+    if app.count > 64 { return false }
+    for b: app {
+        if !((b >= #char "a" && b <= #char "z") || (b >= #char "0" && b <= #char "9") || b == #char "." || b == #char "-" || b == #char "_") { return false }
+    }
+    if !EntityReferralsPlatform(platform) { return false }
+    return CopyCString(app, referral_source_app[:])
+}
+
+EntityReferralsReset :: () {
+    referral_generation += 1
+    CancelRequest(*referral_pending)
+    HttpTransferCancel(*referral_transfer)
+    referral_session = .{}
+    referral_stage = 0
+    referral_owner = .{}
+    referral_node = .{}
+    referral_device = .{}
+    referral_auth_app = .{}
+    referral_me = .{}
+    referral_page = .{}
+    referral_receipt = .{}
+    referral_response = .{}
+    referral_error = .{}
+    referral_body = .{}
+    referral_operation = .{}
+}
+EntityReferralsConnect :: (client: ReferralClient, context: *void = null) {
+    if referral_context != context { EntityReferralsReset() }
+    if referrals_transport.start == null { referrals_transport = AsyncTransport.{.start = ReferralsStart, .poll = ReferralsPoll, .cancel = ReferralsCancel} }
+    referral_client = client
+    referral_context = context
+}
+// Until a store's isolated reward pool is available, it must disable claims.
+EntityReferralsAllowClaim :: (allowed: bool) { referral_allowed = allowed }
+ReferralsScope :: (client: *Client) -> bool {
+    ready := referral_client != null && referral_client(referral_context, client)
+    if ready && client.server_url != DewNode {
+        EntityReferralsReset()
+        unused CopyCString("wrong_node", referral_error[:])
+        return false
+    }
+    if !ready || TextUntilNul(referral_owner[:]) != client.identity.account_id ||
+    TextUntilNul(referral_node[:]) != client.server_url || TextUntilNul(referral_device[:]) != client.identity.client_id || TextUntilNul(referral_auth_app[:]) != client.app_id {
+        EntityReferralsReset()
+        if ready {
+            unused CopyCString(client.identity.account_id, referral_owner[:])
+            unused CopyCString(client.server_url, referral_node[:])
+            unused CopyCString(client.identity.client_id, referral_device[:])
+            unused CopyCString(client.app_id, referral_auth_app[:])
+        }
+    }
+    return ready
+}
+ReferralsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool { return HttpTransferStart(*referral_transfer, request, output, 15000) }
+ReferralsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*referral_transfer, status) }
+ReferralsCancel :: (context: *void) { HttpTransferCancel(*referral_transfer) }
+EntityReferralsAnswer :: (request: string) -> string {
+    client: Client
+    ready := ReferralsScope(*client)
+    if request != "" {
+        owner: [65]u8
+        op: [16]u8
+        code: [129]u8
+        cursor: [24]u8
+        if !ready || referral_stage != 0 || !ReferralDocument(request) ||
+        ReadStringText(request, FieldAt(request, 0, "owner"), owner[:]) != 64 ||
+        TextUntilNul(owner[:]) != client.identity.account_id ||
+        ReadStringText(request, FieldAt(request, 0, "operation"), op[:]) <= 0 { return "rejected" }
+        operation := TextUntilNul(op[:])
+        path: Vec(u8)
+        body: Vec(u8)
+        if operation == "me" { BuilderPrint(*path, "/api/v1/referrals/me") }
+        else if operation == "accepted" {
+            at := FieldAt(request, 0, "cursor")
+            if at >= 0 && ReadStringText(request, at, cursor[:]) < 0 { return "rejected" }
+            for b: TextUntilNul(cursor[:]) { if b < #char "0" || b > #char "9" { return "rejected" } }
+            BuilderPrint(*path, "/api/v1/referrals/accepted?cursor=%&limit=50", ifx cursor[0] == 0 then "0" else TextUntilNul(cursor[:]))
+        } else if operation == "claim" {
+            if !referral_allowed || ReadStringText(request, FieldAt(request, 0, "code"), code[:]) <= 0 ||
+            !ReferralToken(TextUntilNul(code[:])) { return "rejected" }
+            BuilderPrint(*path, "/api/v1/referrals/claim")
+            // Account/code is itself idempotent at the issuer, including across restarts.
+            BuilderPrint(*body, "{\"code\":\"%\",\"request_id\":\"referral-%\"}", TextUntilNul(code[:]), TextUntilNul(code[:]))
+        } else { return "rejected" }
+        referral_path = .{}
+        referral_body = .{}
+        unused CopyCString(TextView(VecSlice(path, 0, path.count)), referral_path[:])
+        unused CopyCString(TextView(VecSlice(body, 0, body.count)), referral_body[:])
+        VecFree(path)
+        VecFree(body)
+        referral_operation = op
+        referral_error = .{}
+        referral_stage = 1
+        return "queued"
+    }
+    EntityFree(referral_answer)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"generation\":%,\"owner\":\"%\",\"ready\":%,\"can_claim\":%,\"busy\":%,\"operation\":\"%\",\"error\":", referral_generation, TextUntilNul(referral_owner[:]), ready, referral_allowed, referral_stage != 0, TextUntilNul(referral_operation[:]))
+    EntityQuote(*out, TextUntilNul(referral_error[:]))
+    BuilderPrint(*out, ",\"share_url\":")
+    summary: ReferralSummary
+    link: Vec(u8)
+    if ReferralParseSummary(TextUntilNul(referral_me[:]), TextUntilNul(referral_owner[:]), *summary) {
+        BuilderPrint(*link, "%", TextUntilNul(summary.invite_url[:]))
+        if referral_source_platform[0] != 0 {
+            BuilderPrint(*link, "?platform=%&app=%", TextUntilNul(referral_source_platform[:]), TextUntilNul(referral_source_app[:]))
+        }
+    }
+    EntityQuote(*out, TextView(VecSlice(link, 0, link.count)))
+    VecFree(link)
+    BuilderPrint(*out, ",\"me\":%,\"page\":%,\"receipt\":%}", ifx referral_me[0] == 0 then "{}" else TextUntilNul(referral_me[:]), ifx referral_page[0] == 0 then "{}" else TextUntilNul(referral_page[:]), ifx referral_receipt[0] == 0 then "{}" else TextUntilNul(referral_receipt[:]))
+    referral_answer = BuilderFinish(out)
+    return referral_answer
+}
+EntityReferralsPump :: () {
+    client: Client
+    if !ReferralsScope(*client) { return }
+    if referral_stage == 2 {
+        if !PollRequest(*referral_pending) { return }
+        // Re-read identity after the transport, before retaining any response.
+        if !ReferralsScope(*client) || referral_stage != 2 { return }
+        referral_stage = 0
+        text := TextUntilNul(referral_response[:])
+        valid := referral_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && referral_pending.status == 200
+        op := TextUntilNul(referral_operation[:])
+        summary: ReferralSummary
+        page: ReferralPage
+        if valid && op == "me" { valid = ReferralParseSummary(text, TextUntilNul(referral_owner[:]), *summary) && CopyCString(text, referral_me[:]) }
+        else if valid && op == "accepted" { valid = ReferralParsePage(text, *page) && CopyCString(text, referral_page[:]) }
+        else if valid && op == "claim" { valid = ReferralReceipt(text) && CopyCString(text, referral_receipt[:]) }
+        if !valid {
+            if !ReferralDocument(text) || ReadStringText(text, FieldAt(text, 0, "error"), referral_error[:]) <= 0 { unused CopyCString("unavailable", referral_error[:]) }
+        }
+        return
+    }
+    if referral_stage != 1 { return }
+    headers: [0]HttpHeader
+    transport := referrals_transport
+    referral_response = .{}
+    if BeginRequest(*referral_pending, client, *referral_session, UnixNow(), transport,
+        ifx TextUntilNul(referral_operation[:]) == "claim" then "POST" else "GET", TextUntilNul(referral_path[:]),
+        TextUntilNul(referral_body[:]), referral_response[:], headers[:]) { referral_stage = 2 }
+    else { referral_stage = 0; unused CopyCString("unavailable", referral_error[:]) }
+}

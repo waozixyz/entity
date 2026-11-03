@@ -1123,6 +1123,22 @@ ProviderCancelTransfer :: (context: *void) {
     HttpTransferCancel(*provider.transfer)
 }
 
+// Abandon in-memory work when a host is disposed. This never signs the
+// account out, changes its shared identity, or removes its stored key.
+ProviderClose :: (provider: *ManagementProvider) {
+    if provider.drive_pending { DriveBackupCancel() }
+    if provider.handoff_pending { AccountHandoffCancel() }
+    if provider.bridge_operation != 0 { SignInBridgeCancel() }
+    CancelRequest(*provider.pending_request)
+    HttpTransferCancel(*provider.transfer)
+    HttpTransferCancel(*provider.methods_transfer)
+    ProviderOnlineForget(provider)
+    ProviderPasskeyForget(provider)
+    RecoveryClear(*provider.incoming)
+    EntityFree(provider.document)
+    provider.* = .{}
+}
+
 ProviderTransport :: (provider: *ManagementProvider) -> AsyncTransport {
     return AsyncTransport.{.context = cast(*void)provider, .start = ProviderStartTransfer,
         .poll = ProviderPollTransfer, .cancel = ProviderCancelTransfer}

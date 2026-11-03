@@ -1,0 +1,143 @@
+Auth :: #import "daochi_client/auth";
+#import "referral_model"
+#import "model"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/net_http"
+#import "daochi_client/async_client"
+#import "daochi_client/client"
+#import "std/byte_text_linux"
+#import "referral_native"
+#import "referral_locales"
+#import "std/c_string"
+#import "std/date_time_linux"
+A :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+B :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+ME :: "{\"authority\":\"https://api.waozi.xyz\",\"account_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"code\":\"abc123\",\"invite_url\":\"https://dew.waozi.xyz/invite/abc123\",\"referrer_id\":\"\",\"accepted_count\":0,\"earned_units\":0,\"reversed_units\":0,\"pending_offset_units\":0}"
+PAGE :: "{\"accepted\":[{\"account_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"display_name\":\"\",\"accepted_at\":\"2026-11-02T00:00:00Z\",\"cursor\":1}],\"next_cursor\":\"1\"}"
+RECEIPT :: "{\"status\":\"bound\",\"referrer_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"welcome_units\":20000000,\"welcome_receipt_id\":\"fixture-receipt\"}"
+fake_owner: string = A;
+fake_node: string = "https://api.waozi.xyz";
+fake_ready: bool = true;
+fake_reply: string = ME;
+fake_status: s32 = 200;
+fake_calls: s32;
+fake_posts: s32;
+fake_cancel: s32;
+fake_switch: bool;
+fake_body: [512]u8;
+fake_path: [1024]u8;
+FakeClient :: (context: *void, output: *Client) -> bool {
+    output.server_url = fake_node
+    output.app_id = "entity"
+    output.identity.account_id = fake_owner
+    output.identity.client_id = "fixture"
+    return fake_ready
+}
+FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    fake_calls += 1
+    if request.method == "POST" { fake_posts += 1 }
+    unused CopyCString(request.body, fake_body[:])
+    unused CopyCString(request.url, fake_path[:])
+    return CopyCString(fake_reply, output)
+}
+FakePoll :: (context: *void, status: *s32) -> s32 {
+    status.* = fake_status
+    if fake_switch { fake_owner = B }
+    return 1
+}
+FakeCancel :: (context: *void) { fake_cancel += 1 }
+Session :: () {
+    unused EntityReferralsAnswer("")
+    unused CopyCString("fixture-token", referral_session.token[:])
+    referral_session.expires_at_local = UnixNow() + 1000
+}
+Request :: (operation: string, code: string = "") -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":\"%\",\"operation\":\"%\",\"code\":\"%\"}", fake_owner, operation, code)
+    return BuilderFinish(out)
+}
+Queue :: (operation: string, code: string = "") -> bool {
+    request := Request(operation, code)
+    defer { EntityFree(request) }
+    return EntityReferralsAnswer(request) == "queued"
+}
+#program_export
+main :: () -> s32 {
+    summary: ReferralSummary
+    page: ReferralPage
+    if !ReferralParseSummary(ME, A, *summary) || ReferralParseSummary(ME, B, *summary) { return 1 }
+    if !ReferralParsePage(PAGE, *page) || page.count != 1 || TextUntilNul(page.people[0].name[:]) != B { return 2 }
+    if !ReferralReceipt(RECEIPT) || ReferralReceipt("{}") || ReferralToken("code/evil") { return 3 }
+    code: [129]u8
+    if !ReferralCodeFromLink("https://dew.waozi.xyz/invite/abc123?platform=play&app=shovey", code[:]) || TextUntilNul(code[:]) != "abc123" ||
+    ReferralCodeFromLink("https://evil.invalid/invite/abc123", code[:]) || ReferralCodeFromLink("https://dew.waozi.xyz.evil/invite/abc123", code[:]) ||
+    ReferralCodeFromLink("https://dew.waozi.xyz/invite/../abc123", code[:]) || ReferralCodeFromLink("abc%20", code[:]) { return 21 }
+    langs: [12]string = .["cs", "de", "en", "es", "fr", "id", "it", "ja", "ko", "pt", "ru", "zh"]
+    for lang: langs { if ReferralLabel(lang, "referral.confirm") == "" || ReferralLabel(lang, "referral.success") == "" { return 4 } }
+    referrals_transport = AsyncTransport.{.start = FakeStart, .poll = FakePoll, .cancel = FakeCancel}
+    EntityReferralsConnect(FakeClient)
+    Session()
+    if !Queue("me") || fake_calls != 0 { return 5 }
+    if Queue("claim", "abc123") { return 6 }
+    EntityReferralsConnect(FakeClient)
+    EntityReferralsPump()
+    EntityReferralsPump()
+    if fake_calls != 1 || !ReferralParseSummary(TextUntilNul(referral_me[:]), A, *summary) { print("Adapter calls=% stage=% error=%\n", fake_calls, referral_stage, TextUntilNul(referral_error[:])); return 7 }
+    fake_reply = RECEIPT
+    if !Queue("claim", "abc123") { return 8 }
+    EntityReferralsPump()
+    EntityReferralsPump()
+    if fake_posts != 1 || !ReferralReceipt(TextUntilNul(referral_receipt[:])) { return 9 }
+    original := fake_body
+    if !Queue("claim", "abc123") { return 10 }
+    EntityReferralsPump()
+    EntityReferralsPump()
+    if fake_posts != 2 || TextUntilNul(fake_body[:]) != TextUntilNul(original[:]) { return 11 }
+    fake_reply = "{\"error\":\"unavailable\"}"
+    fake_status = 503
+    if !Queue("claim", "abc123") { return 12 }
+    EntityReferralsPump()
+    EntityReferralsPump()
+    calls := fake_calls
+    for i: 0..10 { EntityReferralsPump() }
+    if fake_calls != calls || TextUntilNul(referral_error[:]) != "unavailable" { return 13 }
+    fake_status = 200
+    fake_reply = PAGE
+    if !Queue("accepted") { return 14 }
+    EntityReferralsPump()
+    EntityReferralsPump()
+    if !ReferralParsePage(TextUntilNul(referral_page[:]), *page) { return 15 }
+    if !Queue("accepted") { return 16 }
+    EntityReferralsPump()
+    fake_switch = true
+    EntityReferralsPump()
+    if referral_page[0] != 0 || referral_me[0] != 0 || referral_receipt[0] != 0 || TextUntilNul(referral_owner[:]) != B { return 17 }
+    fake_switch = false
+    fake_ready = false
+    unused EntityReferralsAnswer("")
+    if referral_owner[0] != 0 || referral_stage != 0 { return 18 }
+    fake_ready = true
+    Session()
+    fake_reply = PAGE
+    if !Queue("accepted") { return 22 }
+    EntityReferralsPump()
+    old_generation := referral_generation
+    fake_node = "http://127.0.0.1:1"
+    unused EntityReferralsAnswer("")
+    if referral_generation == old_generation || referral_page[0] != 0 || referral_stage != 0 || TextUntilNul(referral_error[:]) != "wrong_node" { return 23 }
+    calls = fake_calls
+    fake_reply = RECEIPT
+    if Queue("claim", "abc123") { return 24 }
+    EntityReferralsPump()
+    if fake_calls != calls || referral_receipt[0] != 0 { return 25 }
+    fake_node = "https://api.waozi.xyz"
+    Session()
+    if !Queue("accepted") { return 19 }
+    EntityReferralsReset()
+    calls = fake_calls
+    EntityReferralsPump()
+    if fake_calls != calls { return 20 }
+    print("Referral local tests: strict model, nonpurchaser ID fallback, explicit queue, stable retry, offline no replay, owner switch and reset passed\n")
+    return 0
+}

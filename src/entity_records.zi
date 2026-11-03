@@ -817,6 +817,18 @@ RecordsStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
 RecordsPoll :: (context: *void, status: *s32) -> s32 { return HttpTransferPoll(*records_transfer, status) }
 RecordsCancel :: (context: *void) { HttpTransferCancel(*records_transfer) }
 
+EntityRecordsStop :: () {
+    if records_running { CancelSync(*records_pending) }
+    HttpTransferCancel(*records_transfer)
+    records_running = false
+    records_session = .{}
+    records_owner = .{}
+    records_count = 0
+    records_kind_count = 0
+    EntityFree(records_reply)
+    records_reply = ""
+}
+
 // One dirty record as the sync request carries it, sealed now; false when
 // it cannot be sealed.
 RecordsUploadText :: (index: s32, out: *Vec(u8)) -> bool {

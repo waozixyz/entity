@@ -7,6 +7,7 @@ program as C (zi2zx native-c) and the page links it, registered under the
 identity of those exact bundle bytes. Any other bundle still runs on the VM.
 """
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -20,10 +21,11 @@ def main():
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--profile', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--entry', default='runtime:main')
+    parser.add_argument('--entry', default='runtime:main', help='project MODULE:FUNCTION entry')
     parser.add_argument('--source', default='src/web/runtime.zi')
     parser.add_argument('--linked', type=Path, action='append', default=[],
                         help='a bundle the page runs as compiled code')
+    parser.add_argument('--canvas-app', help='compile --source as an AppContext canvas app (MODULE:Main)')
     args = parser.parse_args()
     project = Path.cwd()
     ziran = os.environ.get('ZIRAN', 'ziran')
@@ -46,9 +48,63 @@ def main():
     emar = str(Path(emcc).with_name('emar')) if '/' in emcc else 'emar'
     emcmake = str(Path(emcc).with_name('emcmake')) if '/' in emcc else 'emcmake'
     env = {**os.environ, 'EM_CACHE': str(work / 'emscripten-cache')}
-    subprocess.run([ziran, 'build', '--project', *locked, '--target=c', '--define', 'PLATFORM_WEB',
-                    '--define', 'BUNDLE_NATIVE_RENDERER', '--entry', args.entry,
-                    '-o', str(generated), args.source], check=True, env=env)
+    canvas = []
+    bindings = []
+    entry = args.entry
+    if args.canvas_app:
+        if args.bundle or args.linked:
+            parser.error('--canvas-app uses compiled source without --bundle/--linked')
+        if (project / 'src/canvas_profile_host.zi').exists():
+            parser.error('--canvas-app needs an app project with an entity dependency; use make canvas-profile-host-test here')
+        bindings = ['--bind', 'kryon/canvas_app_run:CanvasAppMain=' + args.canvas_app]
+        if args.entry == 'runtime:main':
+            # Native --entry names a project module. Import the dependency's
+            # public entry instead of guessing its internal package identity.
+            entry_dir = work / 'entry'
+            entry_dir.mkdir(parents=True, exist_ok=True)
+            source = entry_dir / 'entity_canvas_entry.zi'
+            source.write_text('using Host :: #import "entity/canvas_profile_host";\n'
+                              '#program_export\n'
+                              'main :: () -> s32 { return Host.EntityCanvasMain() }\n')
+            canvas = [str(source)]
+            entry = 'entity_canvas_entry:main'
+    imports = ['--project', *locked]
+    if args.canvas_app and canvas:
+        imports += ['--module-path', str(entry_dir)]
+    # Keep every module's package identity, including explicit dependency entry
+    # files. Flattening private dependency roots here collides with app modules
+    # such as rewards and bypasses the lock's transitive namespace resolution.
+    subprocess.run([ziran, 'build', *imports, '--target=c', '--define', 'PLATFORM_WEB',
+                    '--define', 'BUNDLE_NATIVE_RENDERER', '--entry', entry, *bindings,
+                    '-o', str(generated), args.source, *canvas], check=True, env=env)
+    if args.canvas_app:
+        # The complete provider is already generated above. Consume only its
+        # foreign support artifact, never a second copy through libentity.a.
+        def helper(name, path):
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        artifacts = helper('ziran_artifacts', toolchain / 'scripts/ziran_artifacts.py')
+        renderers = helper('renderer_artifact', kryon / 'scripts/renderer_artifact.py')
+        env.update(CC=str(Path(shutil.which(emcc) or emcc).absolute()), AR=emar)
+        target = 'emscripten-wasm32-emscripten'
+        crypto = artifacts.request('entity:native-crypto',
+                                   target, project=project, ziran=ziran, env=env)
+        renderer = renderers.renderer_metadata(artifacts.request('kryon:renderer-web', target,
+                                                 project=project, ziran=ziran, env=env))
+        sources = sorted(generated.rglob('*.c'))
+        includes = sorted({generated, *(path.parent for path in sources)})
+        subprocess.run([emcc, '-O2', '-I' + str(toolchain / 'include'),
+                        *['-iquote' + str(path) for path in includes], *renderer['compile_flags'],
+                        *map(str, sources), *renderers.renderer_link(renderer, preloads=False),
+                        *crypto.link_flags(env=env),
+                        '--embed-file', renderer['resources']['font'] + '@/kryon-font.ttf',
+                        '--embed-file', str(args.profile.resolve()) + '@/entity.zx',
+                        '-sSTACK_SIZE=16777216', '-sASYNCIFY_STACK_SIZE=1048576',
+                        '-sENVIRONMENT=web', '-sEXPORTED_RUNTIME_METHODS=FS', '-sEXPORTED_FUNCTIONS=_main',
+                        '--shell-file', str(kryon / 'mk/zx-shell.html'), '-o', str(output)], check=True, env=env)
+        return
     runtime = work / 'runtime/libziran.a'
     subprocess.run(['make', '-C', str(toolchain), 'BOOTSTRAP=1', 'BUILD_DIR=' + str(runtime.parent),
                     'CC=' + emcc, 'AR=' + emar, 'OBJCOPY=true', 'TARGET_MACHINE=wasm32-unknown-emscripten',

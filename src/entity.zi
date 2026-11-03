@@ -11,6 +11,7 @@
 #import "passphrase"
 #import "alias_model"
 #import "dew_model"
+#import "referral_model"
 #import "dew_play_pricing"
 #import "dew_packs"
 #import "dew_view"
@@ -92,6 +93,7 @@ public_id_copied: bool;
 public_id_scroll: s32;
 public_id_display: [129]u8;
 #load "alias_view.zi";
+#load "referral_view.zi";
 
 Label :: (key: string, fallback: string) -> string {
     value := AppLocale(key)
@@ -131,7 +133,8 @@ Save :: () -> bool {
     return true
 }
 
-EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximum: s32, secure: bool = false) -> bool {
+EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximum: s32, secure: bool = false, edited: *bool = null) -> bool {
+    if edited != null { edited.* = false }
     field := *fields[index]
     snapshot: [1024]u8
     for byte: 0..buffer.count - 1 { snapshot[byte] = buffer[byte] }
@@ -150,6 +153,7 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
         while length < buffer.count && buffer[length] != cast(u8)0 { length += 1 }
         new_length := length - (edit.end - edit.start) + edit.replacement.count
         if edit.start >= 0 && edit.end >= edit.start && edit.end <= length && new_length < buffer.count {
+            if edited != null { edited.* = true }
             tail := length - edit.end
             if new_length > length {
                 for offset: 0..tail { buffer[new_length - offset] = buffer[length - offset] }
@@ -197,6 +201,7 @@ PollManagement :: () {
         public_id_open = false
         public_id_copied = false
         AliasViewReset()
+        ReferralViewReset()
     }
     if !fields[3].focused && management_page != PAGE_ALIAS { account_alias = management.alias }
     if management.completed > management_seen || (result_changed && management.completed > 0) {
@@ -749,37 +754,37 @@ SYNC_SHAPE :: "S1.7rr:M7 19C4.2 19 2 16.8 2 14C2 11.4 4 9.3 6.5 9C7.3 6.1 9.9 4 
 // Account controls are part of Profile, with one navigation stack.
 AccountActions :: (x: float32, y: *float32, width: float32) {
     if !management.account { return }
-        if CanManage(ACCOUNT_SYNC) {
-            // Laid out like ListRow: icon, label and divider, with the toggle for its arrow.
-            SvgIcon(session, SvgIconProps.{.shape = SYNC_SHAPE, .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff),
-                    .bounds = Rectangle.{x + 4.0 * scale, y.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
-            TextLine(815, Label("entity.sync", "Sync"), x + 44.0 * scale, y.* + 16.0 * scale, width - 120.0 * scale, 16)
-            result := Toggle(session, ToggleProps.{.key = cast(u64)816, .id = 816,
-                    .bounds = Rectangle.{x + width - 64.0 * scale, y.* + 10.0 * scale, 64.0 * scale, 40.0 * scale},
-                    .label = Label("entity.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
-            if result.changed { Manage("set_sync", "", "", ifx result.value then 1 else 0) }
-            Box(session, BoxProps.{.key = cast(u64)36815,
-                    .bounds = Rectangle.{x + 44.0 * scale, y.* + 60.0 * scale, width - 44.0 * scale, 1.0},
-                    .fill = ThemeOr("border", 0x34514aff, 0xdde7e3ff)})
-            y.* += 68.0 * scale
-            if management.queued > 0 {
-                out: Vec(u8)
-                BuilderPrint(*out, "%: %", Label("entity.queued", "Waiting to sync"), management.queued)
-                Muted(817, BuilderFinish(out), x + 44.0 * scale, y.*, width - 44.0 * scale)
-                y.* += 32.0 * scale
-            }
-            if ListRow(818, Label("entity.sync_now", "Sync now"), "", x, y, width) { Manage("sync") }
+    if CanManage(ACCOUNT_SYNC) {
+        // Laid out like ListRow: icon, label and divider, with the toggle for its arrow.
+        SvgIcon(session, SvgIconProps.{.shape = SYNC_SHAPE, .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff),
+                .bounds = Rectangle.{x + 4.0 * scale, y.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
+        TextLine(815, Label("entity.sync", "Sync"), x + 44.0 * scale, y.* + 16.0 * scale, width - 120.0 * scale, 16)
+        result := Toggle(session, ToggleProps.{.key = cast(u64)816, .id = 816,
+                .bounds = Rectangle.{x + width - 64.0 * scale, y.* + 10.0 * scale, 64.0 * scale, 40.0 * scale},
+                .label = Label("entity.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
+        if result.changed { Manage("set_sync", "", "", ifx result.value then 1 else 0) }
+        Box(session, BoxProps.{.key = cast(u64)36815,
+                .bounds = Rectangle.{x + 44.0 * scale, y.* + 60.0 * scale, width - 44.0 * scale, 1.0},
+                .fill = ThemeOr("border", 0x34514aff, 0xdde7e3ff)})
+        y.* += 68.0 * scale
+        if management.queued > 0 {
+            out: Vec(u8)
+            BuilderPrint(*out, "%: %", Label("entity.queued", "Waiting to sync"), management.queued)
+            Muted(817, BuilderFinish(out), x + 44.0 * scale, y.*, width - 44.0 * scale)
+            y.* += 32.0 * scale
         }
-        if CanManage(ACCOUNT_ALIAS) {
-            alias := TextUntilNul(management.alias[:])
-            if ListRow(819, Label("entity.alias", "Username"), ifx alias == "" then Label("entity.alias_unset", "Not set") else alias, x, y, width) {
-                OpenManagement(PAGE_ALIAS)
-            }
+        if ListRow(818, Label("entity.sync_now", "Sync now"), "", x, y, width) { Manage("sync") }
+    }
+    if CanManage(ACCOUNT_ALIAS) {
+        alias := TextUntilNul(management.alias[:])
+        if ListRow(819, Label("entity.alias", "Username"), ifx alias == "" then Label("entity.alias_unset", "Not set") else alias, x, y, width) {
+            OpenManagement(PAGE_ALIAS)
         }
-        if (CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
-        if (CanManage(ACCOUNT_PASSKEY) || CanManage(ACCOUNT_GOOGLE)) && ListRow(8810, Label("entity.sign_in_methods", "Sign-in options"), "", x, y, width) { OpenManagement(PAGE_SIGN_IN_METHODS) }
-        if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_DRIVE)) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
-        if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
+    }
+    if (CanManage(ACCOUNT_BACKUP) || CanManage(ACCOUNT_DRIVE)) && ListRow(823, Label("entity.back_up_account", "Back up account"), "", x, y, width) { OpenManagement(PAGE_BACKUP) }
+    if (CanManage(ACCOUNT_PASSKEY) || CanManage(ACCOUNT_GOOGLE)) && ListRow(8810, Label("entity.sign_in_methods", "Sign-in options"), "", x, y, width) { OpenManagement(PAGE_SIGN_IN_METHODS) }
+    if (CanManage(ACCOUNT_IMPORT) || CanManage(ACCOUNT_DRIVE)) && ListRow(832, Label("entity.sign_in_other", "Sign in to another account"), "", x, y, width) { OpenManagement(PAGE_IMPORT) }
+    if CanManage(ACCOUNT_LINK) && ListRow(824, Label("entity.link_another", "Link another device"), "", x, y, width) { OpenManagement(PAGE_LINK) }
     if management.account {
         y.* += 8.0 * scale
         if CanManage(ACCOUNT_LOGOUT) && ListRow(830, Label("entity.logout", "Sign out"), "", x, y, width, 0, "", "", true) { SignOutPressed() }
@@ -1216,7 +1221,7 @@ ExtensionRows :: (left: float32, top: *float32, width: float32) {
         if route == "dew" && AppSupports("entity.dew") { continue }
         if route == "leaderboard" { continue }
         if ListRow(500 + cast(s32)index, TextUntilNul(entry.label[:]), "", left, top, width,
-                0, ExtensionShape(route), TextUntilNul(entry.summary[:])) && Save() {
+            0, ExtensionShape(route), TextUntilNul(entry.summary[:])) && Save() {
             if route == "dew" && AppSupports("entity.dew") {
                 dew_page = true
                 dew_refresh = true
@@ -1246,6 +1251,8 @@ Draw :: () {
     if TelegramViewFrame(!state.host_navigation) { return }
     if ProfileLeaderboardFrame(!state.host_navigation) { return }
     if AchievementViewFrame(!state.host_navigation) { return }
+    if referrals_resume && management.account && management_page == 0 { referrals_open = true; referrals_resume = false }
+    if referrals_open && management_page == 0 { DrawReferrals(); return }
     if dew_page { DrawDew(); return }
     if management_page != 0 { DrawAccount(); return }
     session = AppSession()
@@ -1285,6 +1292,12 @@ Draw :: () {
         AccountSummary(x, *y, width)
         BackupOffer(x, *y, width)
     }
+    if AppSupports(REFERRAL_SERVICE) && ListRow(78030, Label("referral.title", "My referrals"), "", x, *y, width) {
+        dew_page = false
+        referrals_open = true
+        ReferralViewReset()
+        ManagementHome(0)
+    }
     // Dew needs an account; without one the card would only say so.
     if inline_dew && dew_profile_available { y += ProfileDewBalance(x, y, width, true).height }
     if inline_activity { y += ProfileActivity(x, y, width, true) }
@@ -1315,6 +1328,7 @@ CurrentPageTitle :: () -> string {
     if telegram_open { return "Telegram" }
     if profile_leaderboard_open { return Label("leaderboard_title", "Leaderboard") }
     if achievement_open { return Label("achievements_title", "Achievements") }
+    if referrals_open && management_page == 0 { return Label("referral.title", "My referrals") }
     if dew_page { return Label("profile_dew_title", "Dew balance") }
     if management_page != 0 { return PageTitle() }
     return Label("entity.title", "Your profile")
@@ -1323,6 +1337,31 @@ CurrentPageTitle :: () -> string {
 #program_export
 Main :: () -> s64 {
     mode := AppMode()
+    if mode == APP_COMMAND && (AppCommand() == "referrals" || (AppCommand().count >= 10 && AppCommand()[:10] == "referrals:")) {
+        ReferralViewReset()
+        referral_code = .{}
+        saved_code: [129]u8
+        unused ReadStore("referral-pending.txt", saved_code[:])
+        if TextUntilNul(saved_code[:]) != "-" && ReferralToken(TextUntilNul(saved_code[:])) { referral_code = saved_code }
+        if AppCommand().count > 10 && ReferralToken(AppCommand()[10:]) {
+            previous_suggestion: [129]u8
+            unused ReadStore("referral-suggestion.txt", previous_suggestion[:])
+            if AppCommand()[10:] != TextUntilNul(previous_suggestion[:]) {
+                unused CopyCString(AppCommand()[10:], referral_code[:])
+            }
+            unused WriteStore("referral-suggestion.txt", AppCommand()[10:])
+        }
+        if referral_code[0] != 0 { unused WriteStore("referral-pending.txt", TextUntilNul(referral_code[:])) }
+        referrals_open = true
+        dew_page = false
+        ManagementHome(0)
+        return 0
+    }
+    if mode == APP_COMMAND && AppCommand() == "back" && referrals_open && management_page == 0 {
+        referrals_open = false
+        AppReply("handled")
+        return 0
+    }
     if mode == APP_COMMAND && AppCommand() == "page-title" {
         AppReply(CurrentPageTitle())
         return 0
@@ -1342,6 +1381,8 @@ Main :: () -> s64 {
         // Each root page replaces the last one, so a Dew or leaderboard page
         // left open never covers the page asked for next.
         if command == "root:profile" || command == "root:leaderboard" || command == "root:dew" || command == "root:appearance" {
+            referrals_open = false
+            referrals_resume = false
             dew_page = false
             dew_confirmation = -1
             profile_leaderboard_open = false
@@ -1763,6 +1804,7 @@ DrawDew :: () {
         TextLine(45003, "Dew", x, y, width, 28)
         y += 48.0 * scale
     }
+    if AppSupports(REFERRAL_SERVICE) && WideButton(78030, Label("referral.title", "My referrals"), x, *y, width) { dew_page = false; referrals_open = true; ReferralViewReset(); ManagementHome(0) }
     if !available {
         Paragraph(45004, Label("entity.dew_connect", "Sign in to use Dew"), x, y, width, 70.0)
         dew_height = y - scroll.content.y + 100.0 * scale

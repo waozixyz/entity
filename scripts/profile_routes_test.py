@@ -32,6 +32,7 @@ telegram_open: bool;
 profile_leaderboard_open: bool;
 achievement_open: bool;
 dew_page: bool;
+referrals_open: bool;
 management_page: s32;
 Label :: (key: string, fallback: string) -> string { return key }
 PageTitle :: () -> string { return "friends-title" }
