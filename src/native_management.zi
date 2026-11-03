@@ -127,9 +127,8 @@ INCOMING_OLDER :: 2
 ProviderPasswordProblem :: (passphrase: string) -> string {
     missing := PassphraseMissing(passphrase)
     if missing == 0 && passphrase.count <= 511 { return "" }
-    if (missing & PASSPHRASE_SHORT) != 0 || passphrase.count > 511 { return "Use a password of at least 12 characters" }
+    if (missing & PASSPHRASE_SHORT) != 0 || passphrase.count > 511 { return "Use a password of at least 8 characters" }
     if (missing & PASSPHRASE_NO_NUMBER) != 0 { return "Add a number to the password" }
-    if (missing & PASSPHRASE_NO_UPPER) != 0 { return "Add an uppercase letter to the password" }
     return "Add a lowercase letter to the password"
 }
 

@@ -820,11 +820,11 @@ PasswordNeeds :: (password: string) -> string {
     if missing == 0 { return "" }
     out: Vec(u8)
     BuilderPrint(*out, "%", Label("entity.password_needs", "Still needed:"))
-    parts: [4]string = .[Label("entity.password_needs_length", "at least 12 characters"), Label("entity.password_needs_number", "a number"),
-    Label("entity.password_needs_upper", "an uppercase letter"), Label("entity.password_needs_lower", "a lowercase letter")]
-    flags: [4]s32 = .[PASSPHRASE_SHORT, PASSPHRASE_NO_NUMBER, PASSPHRASE_NO_UPPER, PASSPHRASE_NO_LOWER]
+    parts: [3]string = .[Label("entity.password_needs_length_8", "at least 8 characters"), Label("entity.password_needs_number", "a number"),
+    Label("entity.password_needs_lower", "a lowercase letter")]
+    flags: [3]s32 = .[PASSPHRASE_SHORT, PASSPHRASE_NO_NUMBER, PASSPHRASE_NO_LOWER]
     first := true
-    for index: 0..3 {
+    for index: 0..2 {
         if (missing & flags[index]) != 0 {
             BuilderPrint(*out, "% %", ifx first then "" else ",", parts[index])
             first = false
@@ -835,7 +835,7 @@ PasswordNeeds :: (password: string) -> string {
 
 // The notice for a password about to seal a backup, or "" when it may.
 PasswordProblem :: (password: string) -> string {
-    if !ManagementPasswordAccepted(password) { return Label("entity.password_rule_mixed", "Use at least 12 characters with a number, an uppercase and a lowercase letter") }
+    if !ManagementPasswordAccepted(password) { return Label("entity.password_rule_8", "Use at least 8 characters with a number and a lowercase letter") }
     if password != TextUntilNul(account_passphrase_repeat[:]) { return Label("entity.password_mismatch", "The passwords do not match") }
     return ""
 }
@@ -905,7 +905,6 @@ BackupPage :: (x: float32, y: *float32, width: float32) {
         for index: 0..password.count - 1 { password[index] = cast(u8)0 }
     }
     if CanManage(ACCOUNT_BACKUP) && WideButton(8804, Label("entity.remove_online", "Remove online backup"), x, y, width, false, true) { Manage("backup_online_remove") }
-    Note(842, Label("entity.security_note", "Your account signs with post-quantum ML-DSA-44 keys. A backup is encrypted with your password on this device; a node keeps only that sealed copy and never sees your password."), x, y, width)
 }
 
 // First the backup, then its password if it has one: a mistyped password never

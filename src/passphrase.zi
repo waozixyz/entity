@@ -3,10 +3,10 @@
 // older files and existing accounts keep opening. A node never sees the
 // password, so only the device can enforce this.
 //
-// At least 12 characters, a number, an uppercase and a lowercase letter.
+// At least 8 characters, a number and a lowercase letter.
 // Letters count by Unicode case for Latin, Greek, Cyrillic, Armenian and
 // full-width Latin; scripts without case need a letter from one of those.
-PASSPHRASE_MINIMUM :: 12
+PASSPHRASE_MINIMUM :: 8
 PASSPHRASE_SHORT :: 1
 PASSPHRASE_NO_NUMBER :: 2
 PASSPHRASE_NO_UPPER :: 4
@@ -77,7 +77,6 @@ PassphraseLower :: (value: u32) -> bool {
 PassphraseMissing :: (passphrase: string) -> s32 {
     characters: s64 = 0
     number := false
-    upper := false
     lower := false
     at: s64 = 0
     while at < passphrase.count {
@@ -85,13 +84,11 @@ PassphraseMissing :: (passphrase: string) -> s32 {
         at = scalar.after
         characters += 1
         if PassphraseNumber(scalar.value) { number = true }
-        if PassphraseUpper(scalar.value) { upper = true }
         if PassphraseLower(scalar.value) { lower = true }
     }
     missing: s32 = 0
     if characters < PASSPHRASE_MINIMUM { missing |= PASSPHRASE_SHORT }
     if !number { missing |= PASSPHRASE_NO_NUMBER }
-    if !upper { missing |= PASSPHRASE_NO_UPPER }
     if !lower { missing |= PASSPHRASE_NO_LOWER }
     return missing
 }

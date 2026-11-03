@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Exercise password keyboard input through the real hosted Profile bundle."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parents[1]
+output = root / 'build/password-test'
+output.mkdir(parents=True, exist_ok=True)
+shutil.rmtree(output / 'profile', ignore_errors=True)
+env = dict(os.environ)
+for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
+            'SESSION_MANAGER', 'GDK_DISPLAY'):
+    env.pop(key, None)
+env.update(YUE_DESKTOP_RECOVERY='0', ENTITY_LEADERBOARD_TEST_DATA=str(output / 'profile'))
+ziran = str(root / 'scripts/ziran.sh')
+subprocess.run(['make', 'build/liboqs/lib/liboqs.a'], cwd=root, env=env, check=True)
+
+
+def package(name):
+    return Path(subprocess.check_output([ziran, 'pkg', 'path', name], cwd=root, text=True).strip())
+
+
+toolchain, monocypher = package('ziran'), package('monocypher')
+
+
+def build(entry, directory, ui=False):
+    flags = ['--define', 'PLATFORM_DESKTOP'] if ui else []
+    subprocess.run([ziran, 'build', '--project', *flags, '--target=c', '--entry', entry + ':main',
+                    '-o', str(directory / 'c'), 'tests/' + entry + '.zi'], cwd=root, env=env, check=True)
+    command = ['cc', '-std=c11', '-O1', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+               '-I' + str(toolchain / 'include'), '-I' + str(monocypher / 'src'), '-iquote' + str(directory / 'c')]
+    command += ['-iquote' + str(path) for path in (directory / 'c').rglob('*') if path.is_dir()]
+    command += [str(path) for path in (directory / 'c').rglob('*.c')]
+    command += [str(monocypher / 'src/monocypher.c'), str(monocypher / 'src/optional/monocypher-ed25519.c'),
+                str(root / 'build/liboqs/lib/liboqs.a')]
+    if ui:
+        command += [str(root / 'build/ziran/libziran.a')]
+        command += subprocess.check_output(['pkg-config', '--libs', 'sdl2', 'cairo', 'freetype2', 'fontconfig',
+                                            'pangocairo', 'gtk+-3.0'], text=True).split()
+        command += ['-lX11', '-lz']
+    binary = directory / 'test'
+    command += ['-l:libcurl.so.4', '-lm', '-lpthread', '-o', str(binary)]
+    subprocess.run(command, cwd=root, env=env, check=True)
+    return binary
+
+
+binary = build('password_ui_fixture', output, ui=True)
+subprocess.run(['xvfb-run', '-a', str(binary)], cwd=root, env=env, check=True)
+subprocess.run(['xvfb-run', '-a', sys.executable, 'scripts/password-keys.py', str(binary)], cwd=root, env=env, check=True)

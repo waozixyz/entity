@@ -296,3 +296,7 @@ test: canvas-profile-host-test
 canvas-profile-lifecycle-test:
 	ZIRAN='$(ZIRAN)' python3 scripts/canvas-profile-lifecycle-test.py
 canvas-profile-host-test: canvas-profile-lifecycle-test
+
+.PHONY: password-test
+password-test: build/entity.zx build/ziran/libziran.a $(LIBOQS_LIBRARY)
+	python3 scripts/password-test.py

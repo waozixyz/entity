@@ -101,7 +101,8 @@ Signing out on one site signs that account out of all of them.
 
 Signing in takes the backup first and asks for its password only if it has one,
 keeping the still-sealed file so a mistyped password can be retried. New backups
-always have a password of at least 12 characters, and hosts offer them under
+always have a password of at least 8 characters with a number and a lowercase
+letter, and hosts offer them under
 `ProviderBackupFileName`: the username, or the public ID without one. Accounts
 sign with post-quantum ML-DSA-44; a new backup is sealed with ChaCha20-Poly1305
 under a key derived from the password with Argon2id (64 MiB, 3 passes), so its

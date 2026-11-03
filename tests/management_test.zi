@@ -83,8 +83,8 @@ CheckBackupAndSignIn :: () -> s32 {
     if RecoveryFileName("", "", name[:]) != "account.key" { return 107 }
     tiny: [6]u8
     if RecoveryFileName("username", id, tiny[:]) != "" { return 108 }
-    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("Abcdefghij1") || !ManagementPasswordAccepted("Abcdefghijk1") ||
-    ManagementPasswordAccepted("Éééééééééé1") || !ManagementPasswordAccepted("Ééééééééééé1") { return 109 }
+    if ManagementPasswordAccepted("") || ManagementPasswordAccepted("abcdef1") || !ManagementPasswordAccepted("abcdefg1") ||
+    ManagementPasswordAccepted("éééééé1") || !ManagementPasswordAccepted("ééééééé1") { return 109 }
 
     root: [4096]u8
     if !NativeDirectory(NativeRoot(root[:])) || NativeJoin(backup_path[:], TextUntilNul(root[:]), "fixture-backup.key") == "" { return 111 }
@@ -98,7 +98,7 @@ CheckBackupAndSignIn :: () -> s32 {
 
     // A backup never goes out without a password.
     unused RemoveFile(TextUntilNul(backup_path[:]))
-    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") || !Finished(provider, "backup", "Abcdefghij1", "error") ||
+    if !Finished(provider, "backup", "", "error") || !Finished(provider, "backup", "short", "error") || !Finished(provider, "backup", "abcdef1", "error") ||
     !Finished(provider, "backup", "fixture password", "error") || PathExists(TextUntilNul(backup_path[:])) { return 114 }
     if !Finished(provider, "backup", "Fixture password 1", "ok") { return 115 }
     file: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
@@ -339,21 +339,21 @@ SignOutCheck :: (fixture: *Recovery) -> s32 {
 // The rule for every new backup password, at each boundary. Characters count,
 // not bytes, and case is Unicode-aware.
 PassphraseRuleCheck :: () -> s32 {
-    all := PASSPHRASE_SHORT | PASSPHRASE_NO_NUMBER | PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER
+    all := PASSPHRASE_SHORT | PASSPHRASE_NO_NUMBER | PASSPHRASE_NO_LOWER
     if PassphraseMissing("") != all { return 1 }
-    if PassphraseMissing("Abcdefghij1") != PASSPHRASE_SHORT { return 2 }
+    if PassphraseMissing("abcdef1") != PASSPHRASE_SHORT { return 2 }
     if PassphraseMissing("Abcdefghijk1") != 0 || !PassphraseAccepted("Abcdefghijk1") { return 3 }
     if PassphraseMissing("Abcdefghijkl") != PASSPHRASE_NO_NUMBER { return 4 }
-    if PassphraseMissing("abcdefghijk1") != PASSPHRASE_NO_UPPER { return 5 }
+    if PassphraseMissing("abcdefg1") != 0 || !PassphraseAccepted("abcdefg1") { return 5 }
     if PassphraseMissing("ABCDEFGHIJK1") != PASSPHRASE_NO_LOWER { return 6 }
     if PassphraseMissing("Ééééééééééé1") != 0 { return 7 }
-    if PassphraseMissing("Éééééééééé1") != PASSPHRASE_SHORT { return 8 }
+    if PassphraseMissing("éééééé1") != PASSPHRASE_SHORT { return 8 }
     if PassphraseMissing("Жжжжжжжжжжж7") != 0 { return 9 }
     if PassphraseMissing("Ωωωωωωωωωωω٣") != 0 { return 10 }
     if PassphraseMissing("Ĺĺĺĺĺĺĺĺĺĺĺ1") != 0 { return 11 }
-    if PassphraseMissing("密码密码密码密码密码密码1") != (PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER) { return 12 }
-    if PassphraseMissing("×÷×÷×÷×÷×÷×÷1") != (PASSPHRASE_NO_UPPER | PASSPHRASE_NO_LOWER) { return 13 }
-    if PassphraseMissing("fixture password") != (PASSPHRASE_NO_NUMBER | PASSPHRASE_NO_UPPER) { return 14 }
+    if PassphraseMissing("密码密码密码密码密码密码1") != PASSPHRASE_NO_LOWER { return 12 }
+    if PassphraseMissing("×÷×÷×÷×÷×÷×÷1") != PASSPHRASE_NO_LOWER { return 13 }
+    if PassphraseMissing("fixture password") != PASSPHRASE_NO_NUMBER { return 14 }
     if !ManagementPasswordAccepted("Abcdefghijk1") || ManagementPasswordAccepted("abcdefghijkl") { return 15 }
     return 0
 }
@@ -378,12 +378,12 @@ BackupRoutesCheck :: (fixture: *Recovery) -> s32 {
     output: [ACCOUNT_EXPORT_ENCRYPTED_TEXT_SIZE]u8
     keys: RecoveryKeys
     defer { RecoveryKeysClear(*keys) }
-    weak: [5]string = .["", "Abc1", "Abcdefghij1", "abcdefghijk1", "fixture password"]
+    weak: [5]string = .["", "Abc1", "abcdef1", "ABCDEFG1", "fixture password"]
     for password: weak {
         if RecoveryEncode(fixture, password, output[:]) || RecoverySeal(fixture, password, output[:], *keys) { return 1 }
         if DriveBackupStart(fixture, password) { return 2 }
     }
-    if !RecoveryEncode(fixture, "Abcdefghijk1", output[:]) || !RecoveryIsSealed(TextUntilNul(output[:])) { return 3 }
+    if !RecoveryEncode(fixture, "abcdefg1", output[:]) || !RecoveryIsSealed(TextUntilNul(output[:])) { return 3 }
     if !RecoveryDeviceText(fixture, output[:]) || RecoveryIsSealed(TextUntilNul(output[:])) || RecoveryNeedsPassword(TextUntilNul(output[:])) { return 4 }
     // The file and online routes say what is missing and neither save nor send.
     actions := action_count
@@ -394,8 +394,8 @@ BackupRoutesCheck :: (fixture: *Recovery) -> s32 {
         if !Finished(*provider, "backup_online", password, "error") || TextUntilNul(provider.queue.message[:]) != ProviderPasswordProblem(password) ||
         provider.asynchronous || provider.network_operation != 0 { return 6 }
     }
-    if ProviderPasswordProblem("") != "Use a password of at least 12 characters" ||
-    ProviderPasswordProblem("abcdefghijk1") != "Add an uppercase letter to the password" ||
+    if ProviderPasswordProblem("") != "Use a password of at least 8 characters" ||
+    ProviderPasswordProblem("abcdefg1") != "" ||
     ProviderPasswordProblem("Abcdefghijkl") != "Add a number to the password" ||
     ProviderPasswordProblem("ABCDEFGHIJK1") != "Add a lowercase letter to the password" || ProviderPasswordProblem("Abcdefghijk1") != "" { return 7 }
     current_id = .{}
