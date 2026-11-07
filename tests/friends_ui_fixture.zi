@@ -69,8 +69,8 @@ Widgets :: (context: *void, module: *u8, function: *u8,
     if called != 0 && TextFromCString(function) == "ButtonHostedHost" && count == 2 {
         button := WidgetDecodeButtonProps(arguments[1], *widget_button_codec)
         if button.id == 10 || button.id == 704 || button.id == 551 || button.id == 550 ||
-            button.id == 819 || button.id == 823 || button.id == 832 || button.id == 824 ||
-            button.id == 830 || button.id == 831 {
+        button.id == 819 || button.id == 823 || button.id == 832 || button.id == 824 ||
+        button.id == 830 || button.id == 831 {
             profile_rows += 1
             profile_mixed = profile_mixed || !button.invisible
         }

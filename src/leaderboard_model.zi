@@ -56,8 +56,8 @@ ProfileLeaderboardSkinMaximum :: (game: string) -> s32 {
 ProfileLeaderboardShoveyAsset :: (game: string, icon: s32) -> string {
     if game != "arcade.shovey" && game != "arcade.shovey-island" { return "" }
     assets: [8]string = .["assets/entity/shovey-0.png", "assets/entity/shovey-1.png",
-        "assets/entity/shovey-2.png", "assets/entity/shovey-3.png", "assets/entity/shovey-4.png",
-        "assets/entity/shovey-5.png", "assets/entity/shovey-6.png", "assets/entity/shovey-7.png"]
+    "assets/entity/shovey-2.png", "assets/entity/shovey-3.png", "assets/entity/shovey-4.png",
+    "assets/entity/shovey-5.png", "assets/entity/shovey-6.png", "assets/entity/shovey-7.png"]
     return assets[ifx icon >= 1 && icon <= 8 then icon - 1 else 0]
 }
 

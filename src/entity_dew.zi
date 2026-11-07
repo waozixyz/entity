@@ -227,8 +227,8 @@ DewRewardMigrationAdvance :: () -> bool {
             defer { SecureWipe(*private_key[0], private_key.count) }
             prepared = HexToBytes(TextUntilNul(account_recovery.keys.private_key_hex[:]),
                 *private_key[0], private_key.count) == 1 &&
-                RewardMigrationProof(private_key[:], TextUntilNul(dew_reward_owner[:]), response,
-                    *dew_reward_migration_scratch, dew_reward_migration_body[:])
+            RewardMigrationProof(private_key[:], TextUntilNul(dew_reward_owner[:]), response,
+                *dew_reward_migration_scratch, dew_reward_migration_body[:])
         }
     }
     if prepared {

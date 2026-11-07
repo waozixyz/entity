@@ -119,7 +119,7 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
             Image(session, AbstractPicture(fallback, image_bounds))
         }
         if Action(60100 + index * 4, FriendName(document, item, "alias", "user_id_hash", name[:]),
-                Rectangle.{x + 52.0 * scale, y.*, width - 152.0 * scale, 44.0 * scale}) &&
+            Rectangle.{x + 52.0 * scale, y.*, width - 152.0 * scale, 44.0 * scale}) &&
         FriendPublicIdPresent(TextUntilNul(id[:])) {
             public_id_owner = management.public_id
             public_id_target = id
@@ -129,52 +129,52 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
         }
         confirming := TextUntilNul(friends_remove[:]) == TextUntilNul(id[:])
         if !busy && Action(60101 + index * 4, Label(ifx confirming then "entity.confirm" else "profile_remove_friend", ifx confirming then "Confirm" else "Remove"),
-                Rectangle.{x + width - 96.0 * scale, y.*, 96.0 * scale, 44.0 * scale}) {
+            Rectangle.{x + width - 96.0 * scale, y.*, 96.0 * scale, 44.0 * scale}) {
             if confirming { FriendAction("remove", TextUntilNul(id[:])) } else { friends_remove = id }
         }
         y.* += 56.0 * scale
     }
     request_root := FieldAt(document, 0, "requests")
     for direction: cast(s32)0..1 {
-    at = FieldAt(document, request_root, ifx direction == 0 then "incoming" else "outgoing")
-    count = ArrayCount(document, at)
-    for index: cast(s32)0..count - 1 {
-        if index >= 128 { break }
-        item := ElementAt(document, at, index)
-        if !MatchLiteral(document, FieldAt(document, item, "status"), "\"pending\"") { continue }
-        target: [65]u8
-        id: [129]u8
-        name: [80]u8
-        unused ReadStringText(document, FieldAt(document, item, "target_user_id_hash"), target[:])
-        unused ReadStringText(document, FieldAt(document, item, "id"), id[:])
-        incoming := direction == 0 && TextUntilNul(target[:]) == TextUntilNul(management.public_id[:])
-        row_key := 61000 + direction * 1000 + index * 4
-        name_text := FriendName(document, item,
-            ifx incoming then "requester_alias" else "target_alias", ifx incoming then "requester_user_id_hash" else "target_user_id_hash", name[:])
-        if incoming {
-            TextLine(cast(u64)row_key, name_text, x, y.*, width, 16)
-            y.* += 36.0 * scale
-            if !busy {
-                half := (width - 8.0 * scale) * 0.5
-                if Action(row_key + 1, Label("profile_accept_friend", "Accept"), Rectangle.{x, y.*, half, 44.0 * scale}) { FriendAction("accept", TextUntilNul(id[:])) }
-                if Action(row_key + 2, Label("profile_decline_friend", "Decline"), Rectangle.{x + half + 8.0 * scale, y.*, half, 44.0 * scale}) { FriendAction("decline", TextUntilNul(id[:])) }
+        at = FieldAt(document, request_root, ifx direction == 0 then "incoming" else "outgoing")
+        count = ArrayCount(document, at)
+        for index: cast(s32)0..count - 1 {
+            if index >= 128 { break }
+            item := ElementAt(document, at, index)
+            if !MatchLiteral(document, FieldAt(document, item, "status"), "\"pending\"") { continue }
+            target: [65]u8
+            id: [129]u8
+            name: [80]u8
+            unused ReadStringText(document, FieldAt(document, item, "target_user_id_hash"), target[:])
+            unused ReadStringText(document, FieldAt(document, item, "id"), id[:])
+            incoming := direction == 0 && TextUntilNul(target[:]) == TextUntilNul(management.public_id[:])
+            row_key := 61000 + direction * 1000 + index * 4
+            name_text := FriendName(document, item,
+                ifx incoming then "requester_alias" else "target_alias", ifx incoming then "requester_user_id_hash" else "target_user_id_hash", name[:])
+            if incoming {
+                TextLine(cast(u64)row_key, name_text, x, y.*, width, 16)
+                y.* += 36.0 * scale
+                if !busy {
+                    half := (width - 8.0 * scale) * 0.5
+                    if Action(row_key + 1, Label("profile_accept_friend", "Accept"), Rectangle.{x, y.*, half, 44.0 * scale}) { FriendAction("accept", TextUntilNul(id[:])) }
+                    if Action(row_key + 2, Label("profile_decline_friend", "Decline"), Rectangle.{x + half + 8.0 * scale, y.*, half, 44.0 * scale}) { FriendAction("decline", TextUntilNul(id[:])) }
+                    y.* += 56.0 * scale
+                }
+            } else {
+                // Keep the sent state beside the name and leave a separate touch target.
+                cancel_width := 72.0 * scale
+                content_width := width - cancel_width - 16.0 * scale
+                status_width := content_width * 0.5
+                TextLine(cast(u64)row_key, name_text, x, y.* + 8.0 * scale, content_width - status_width - 8.0 * scale, 16)
+                Muted(cast(u64)(row_key + 3), Label("profile_request_sent", "Request sent"),
+                    x + content_width - status_width, y.* + 8.0 * scale, status_width)
+                // Daochi lets the sender withdraw a pending request through decline.
+                if !busy && Action(row_key + 2, Label("entity.cancel", "Cancel"),
+                    Rectangle.{x + width - cancel_width, y.*, cancel_width, 44.0 * scale}) {
+                    FriendAction("decline", TextUntilNul(id[:]))
+                }
                 y.* += 56.0 * scale
             }
-        } else {
-            // Keep the sent state beside the name and leave a separate touch target.
-            cancel_width := 72.0 * scale
-            content_width := width - cancel_width - 16.0 * scale
-            status_width := content_width * 0.5
-            TextLine(cast(u64)row_key, name_text, x, y.* + 8.0 * scale, content_width - status_width - 8.0 * scale, 16)
-            Muted(cast(u64)(row_key + 3), Label("profile_request_sent", "Request sent"),
-                x + content_width - status_width, y.* + 8.0 * scale, status_width)
-            // Daochi lets the sender withdraw a pending request through decline.
-            if !busy && Action(row_key + 2, Label("entity.cancel", "Cancel"),
-                    Rectangle.{x + width - cancel_width, y.*, cancel_width, 44.0 * scale}) {
-                FriendAction("decline", TextUntilNul(id[:]))
-            }
-            y.* += 56.0 * scale
         }
-    }
     }
 }

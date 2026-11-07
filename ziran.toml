@@ -5,11 +5,11 @@ module_roots = ["src", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "e4e8efa4a92f36e2fb0cea1d56b11471afa68621"
+ref = "0e91eb43bd665f02db86eb9b9cdd875b5436a066"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "b5ac5d1a303326009012d68016c1d8859b6b3a13"
+ref = "b9aed7589e9af2935a9cd9cb260e72944c195762"
 module_aliases = { FileDialogLinux = "file_dialog_linux" }
 
 [exports]

@@ -440,7 +440,7 @@ SignInDeviceLabel :: (output: []u8) -> string {
         digits := "0123456789ABCDEF"
         for byte: value {
             plain := !encode || (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
-                (byte >= #char "0" && byte <= #char "9") || byte == #char "-" || byte == #char "." || byte == #char "_" || byte == #char "~"
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "-" || byte == #char "." || byte == #char "_" || byte == #char "~"
             if at.* + 4 >= cast(s64)bridge_google_url.count { return false }
             if plain {
                 bridge_google_url[at.*] = byte
@@ -467,14 +467,14 @@ SignInDeviceLabel :: (output: []u8) -> string {
         if length <= 0 || length >= cast(s32)origin.count { return false }
         at: s64 = 0
         return BridgeUrlAppend("https://accounts.google.com/o/oauth2/v2/auth?response_type=id_token&scope=openid&prompt=select_account&client_id=", *at, false) &&
-            BridgeUrlAppend(TextUntilNul(bridge_google_client[:]), *at, true) &&
-            BridgeUrlAppend("&redirect_uri=", *at, false) &&
-            BridgeUrlAppend(TextUntilNul(origin[:]), *at, true) &&
-            BridgeUrlAppend("/google-signin.html", *at, true) &&
-            BridgeUrlAppend("&state=", *at, false) &&
-            BridgeUrlAppend(TextUntilNul(bridge_google_state[:]), *at, true) &&
-            BridgeUrlAppend("&nonce=", *at, false) &&
-            BridgeUrlAppend(nonce, *at, true)
+        BridgeUrlAppend(TextUntilNul(bridge_google_client[:]), *at, true) &&
+        BridgeUrlAppend("&redirect_uri=", *at, false) &&
+        BridgeUrlAppend(TextUntilNul(origin[:]), *at, true) &&
+        BridgeUrlAppend("/google-signin.html", *at, true) &&
+        BridgeUrlAppend("&state=", *at, false) &&
+        BridgeUrlAppend(TextUntilNul(bridge_google_state[:]), *at, true) &&
+        BridgeUrlAppend("&nonce=", *at, false) &&
+        BridgeUrlAppend(nonce, *at, true)
     }
 
     BridgeGoogleMessage :: (context: s32, first: s32, second: s32, third: s32) {

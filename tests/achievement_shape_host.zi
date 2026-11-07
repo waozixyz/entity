@@ -1,0 +1,9 @@
+#import "drawing_props"
+#import "geometry"
+
+// The achievement view test paints without a device, so shapes fill nothing.
+#program_export
+RasterTriangles :: (points: []Vector2, color: Color) {
+    unused points
+    unused color
+}

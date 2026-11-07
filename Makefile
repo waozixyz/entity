@@ -26,7 +26,8 @@ ACHIEVEMENT_TEST_BINDS = --bind font_metrics:MeasureGlyphWidth=ziran_widget_noop
 	--bind raster_text:RasterText=ziran_widget_noop_host:RasterText \
 	--bind raster_text:RasterTextClipped=ziran_widget_noop_host:RasterTextClipped \
 	--bind paint_queue:RasterImage=ziran_widget_noop_host:RasterImage \
-	--bind paint_queue:RasterImageMesh=ziran_mesh_noop_host:RasterImageMesh
+	--bind paint_queue:RasterImageMesh=ziran_mesh_noop_host:RasterImageMesh \
+	--bind raster_triangles:RasterTriangles=achievement_shape_host:RasterTriangles
 SOURCES := $(wildcard src/*.zi)
 ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
@@ -90,7 +91,7 @@ dew-play-savings-test:
 .PHONY: achievement-view-test
 achievement-view-test:
 	mkdir -p build/achievement-view-test
-	$(ZIRAN) build --root . $(MODULE_PATHS) --module-path $(KRYON_DIR)/tests $(ACHIEVEMENT_TEST_BINDS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
+	$(ZIRAN) build --root . $(MODULE_PATHS) --module-path $(KRYON_DIR)/tests --module-path tests $(ACHIEVEMENT_TEST_BINDS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
 	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/achievement-view-test $$(rg --files build/achievement-view-test -g '*.c') -lm -o build/achievement-view-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/achievement-view-test/test
 build/liboqs/lib/liboqs.a: ziran.lock Makefile

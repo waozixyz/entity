@@ -47,8 +47,8 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
     abstract := EntityAbstractFromPublicIcon(icon)
     if picture < 0 && abstract < 0 {
         SvgIcon(session, SvgIconProps.{.bounds = bounds,
-            .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6C16 8.21 14.21 10 12 10C9.79 10 8 8.21 8 6C8 3.79 9.79 2 12 2C14.21 2 16 3.79 16 6",
-            .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)})
+                .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6C16 8.21 14.21 10 12 10C9.79 10 8 8.21 8 6C8 3.79 9.79 2 12 2C14.21 2 16 3.79 16 6",
+                .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)})
         return
     }
     root := AppService("entity.assets", "")
@@ -86,14 +86,14 @@ ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectan
         } else if skin >= 7 {
             column := (ifx skin == 7 then 0 else 2) + (ifx head then 0 else 1)
             crops: [4]Rectangle = .[Rectangle.{79.0,87.0,464.0,491.0}, Rectangle.{543.0,155.0,497.0,429.0},
-                Rectangle.{1086.0,105.0,520.0,534.0}, Rectangle.{1696.0,182.0,410.0,405.0}]
+            Rectangle.{1086.0,105.0,520.0,534.0}, Rectangle.{1696.0,182.0,410.0,405.0}]
             source = crops[column]
         }
         unused Image(session, ImageProps.{.key = key + cast(u64)segment, .asset_path = path,
-            .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.18,
-                bounds.y + (ifx head then bounds.height * 0.08 else bounds.height * 0.45), size, size},
-            .source = source, .fit = ImageFit.ImageFitContain, .smooth = true,
-            .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+                .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.18,
+                    bounds.y + (ifx head then bounds.height * 0.08 else bounds.height * 0.45), size, size},
+                .source = source, .fit = ImageFit.ImageFitContain, .smooth = true,
+                .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     }
     AchievementRelease(path)
     return true
@@ -109,8 +109,8 @@ ProfileLeaderboardShovey :: (session: Session, key: u64, game: string, icon: s32
     Append(*out, asset)
     path := BuilderFinish(out)
     unused Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
-        .fit = ImageFit.ImageFitContain, .smooth = false,
-        .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
+            .fit = ImageFit.ImageFitContain, .smooth = false,
+            .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     AchievementRelease(path)
     return true
 }
@@ -275,9 +275,9 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     name_width := width * (ifx average then 0.5 else 0.666667)
     value_width := (width - name_width) / (ifx average then 2.0 else 1.0)
     Text(session, TextProps.{.key = cast(u64)55200,
-        .text = LeaderboardLabel("profile_friends_title", "Friends"),
-        .bounds = Rectangle.{x + 84.0 * scale, y, name_width - 92.0 * scale, 44.0 * scale},
-        .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+            .text = LeaderboardLabel("profile_friends_title", "Friends"),
+            .bounds = Rectangle.{x + 84.0 * scale, y, name_width - 92.0 * scale, 44.0 * scale},
+            .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
     for metric: cast(s32)0..(ifx average then 1 else 0) {
         left := x + name_width + cast(float32)metric * value_width
         label := TextUntilNul(ifx metric == 0 then current.primary[:] else current.average[:])
@@ -287,13 +287,13 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
             ProfileLeaderboardSelect(page.selected, metric)
         }
         Text(session, TextProps.{.key = cast(u64)(55210 + metric), .text = label,
-            .bounds = Rectangle.{left + 8.0 * scale, y, value_width - 16.0 * scale, 44.0 * scale},
-            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-            .wrap = TextWrap.TextWrapEllipsis})
+                .bounds = Rectangle.{left + 8.0 * scale, y, value_width - 16.0 * scale, 44.0 * scale},
+                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = TextWrap.TextWrapEllipsis})
         if metric == page.metric {
             Box(session, BoxProps.{.key = cast(u64)(55220 + metric),
-                .bounds = Rectangle.{left + 8.0 * scale, y + 42.0 * scale, value_width - 16.0 * scale, 2.0 * scale},
-                .fill = Color.{73, 166, 142, 255}})
+                    .bounds = Rectangle.{left + 8.0 * scale, y + 42.0 * scale, value_width - 16.0 * scale, 2.0 * scale},
+                    .fill = Color.{73, 166, 142, 255}})
         }
     }
     y += 44.0 * scale
@@ -312,27 +312,27 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         rank: [16]u8
         rank_text := FormatInteger(index + 1, rank[:])
         Text(session, TextProps.{.key = key + 1, .text = rank_text,
-            .bounds = Rectangle.{x + 8.0 * scale, row_y, 24.0 * scale, cast(float32)row_height},
-            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-            .wrap = TextWrap.TextWrapEllipsis})
+                .bounds = Rectangle.{x + 8.0 * scale, row_y, 24.0 * scale, cast(float32)row_height},
+                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = TextWrap.TextWrapEllipsis})
         Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(row.name[:]),
-            .bounds = Rectangle.{x + 84.0 * scale, row_y, name_width - 92.0 * scale, cast(float32)row_height},
-            .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+                .bounds = Rectangle.{x + 84.0 * scale, row_y, name_width - 92.0 * scale, cast(float32)row_height},
+                .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
         Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(row.value[:]),
-            .bounds = Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
-            .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-            .wrap = TextWrap.TextWrapEllipsis})
+                .bounds = Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
+                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = TextWrap.TextWrapEllipsis})
         picture_bounds := Rectangle.{x + 40.0 * scale, row_y + 6.0 * scale, 32.0 * scale, 32.0 * scale}
         game := TextUntilNul(current.id[:])
         worm := (game == "xyz.waozi.wurm" || game == "wurm") &&
-            ProfileLeaderboardWurm(session, key + 5, row.game_icon, picture_bounds)
+        ProfileLeaderboardWurm(session, key + 5, row.game_icon, picture_bounds)
         shovey := ProfileLeaderboardShovey(session, key + 5, game, row.game_icon, picture_bounds)
         if !worm && !shovey { ProfileLeaderboardPicture(session, key + 5, row.icon, picture_bounds) }
         if average {
             Text(session, TextProps.{.key = key + 4, .text = TextUntilNul(row.average[:]),
-                .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
-                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-                .wrap = TextWrap.TextWrapEllipsis})
+                    .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
+                    .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                    .wrap = TextWrap.TextWrapEllipsis})
         }
     }
     unused End(session)
