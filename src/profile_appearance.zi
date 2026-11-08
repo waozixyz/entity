@@ -16,14 +16,23 @@ ProfileAppearanceRead :: (document: string, state: *EntityState) -> bool {
     picture := EntityNumber(document, FieldAt(document, 0, "picture"), 0, 27)
     abstract := EntityNumber(document, FieldAt(document, 0, "abstract_picture"), 0, 2)
     if version != 1 || kind < 0 || picture < 0 || abstract < 0 { return false }
+    changed_at := FieldAt(document, 0, "appearance_changed")
+    changed: s64
+    if changed_at >= 0 {
+        number := ReadNumber(document, changed_at)
+        if !number.valid || number.value < 0.0 || number.value > 9007199254740991.0 { return false }
+        changed = cast(s64)number.value
+        if cast(float64)changed != number.value { return false }
+    }
     state.picture_kind = ifx kind == 2 then 0 else kind
     state.abstract_picture = abstract
+    state.appearance_changed = changed
     if (state.pictures & (1 << picture)) != 0 { state.picture = picture }
     return true
 }
 ProfileAppearanceWrite :: (state: EntityState) -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "{\"version\":1,\"picture_kind\":%,\"picture\":%,\"abstract_picture\":%}", state.picture_kind, state.picture, state.abstract_picture)
+    BuilderPrint(*out, "{\"version\":1,\"picture_kind\":%,\"picture\":%,\"abstract_picture\":%,\"appearance_changed\":%}", state.picture_kind, state.picture, state.abstract_picture, state.appearance_changed)
     return BuilderFinish(out)
 }
 ProfileAppearancePut :: (state: EntityState) -> string {
@@ -39,4 +48,13 @@ ProfileAppearanceApplyReply :: (reply: string, state: *EntityState) -> bool {
     at := FieldAt(reply, 0, "document")
     end := ValueEnd(reply, at, 0)
     return at >= 0 && end > at && ProfileAppearanceRead(reply[at:end], state)
+}
+
+// Keep a local/shared selection on ties, including legacy records without a clock.
+ProfileAppearanceMergeReply :: (reply: string, state: *EntityState, shared: bool) -> bool {
+    incoming := state.*
+    if !ProfileAppearanceApplyReply(reply, *incoming) { return false }
+    if (shared || state.appearance_changed > 0) && incoming.appearance_changed <= state.appearance_changed { return false }
+    state.* = incoming
+    return true
 }

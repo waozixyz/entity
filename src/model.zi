@@ -58,6 +58,8 @@ EntityState :: struct {
     // Classic icon or abstract artwork.
     picture_kind: s32
     abstract_picture: s32
+    // Millisecond time of the last explicit appearance choice.
+    appearance_changed: s64
     pictures: s32
     theme: s32
     accent: s32
@@ -118,6 +120,7 @@ EntityEncode :: (state: EntityState) -> string {
     BuilderPrint(*out, ",\"intention\":")
     EntityQuote(*out, TextUntilNul(state.intention[:]))
     BuilderPrint(*out, ",\"picture_kind\":%,\"abstract_picture\":%", state.picture_kind, state.abstract_picture)
+    BuilderPrint(*out, ",\"appearance_changed\":%", state.appearance_changed)
     BuilderPrint(*out, ",\"host_navigation\":%", ifx state.host_navigation then 1 else 0)
     BuilderPrint(*out, ",\"profile_sections\":%", state.profile_sections)
     BuilderPrint(*out, ",\"show_storage\":%", ifx state.show_storage then 1 else 0)
@@ -193,6 +196,13 @@ EntityDecode :: (text: string, output: *EntityState) -> bool {
     abstract_at := Json.FieldAt(text, 0, "abstract_picture")
     state.picture_kind = ifx kind_at < 0 then 0 else EntityNumber(text, kind_at, 0, 2)
     state.abstract_picture = ifx abstract_at < 0 then 0 else EntityNumber(text, abstract_at, 0, 2)
+    changed_at := Json.FieldAt(text, 0, "appearance_changed")
+    if changed_at >= 0 {
+        changed := Json.ReadNumber(text, changed_at)
+        if !changed.valid || changed.value < 0.0 || changed.value > 9007199254740991.0 { return false }
+        state.appearance_changed = cast(s64)changed.value
+        if cast(float64)state.appearance_changed != changed.value { return false }
+    }
     if state.picture_kind < 0 || state.abstract_picture < 0 { return false }
     // Kind 2 was the removed Avatar; those profiles show their Classic icon.
     if state.picture_kind == 2 { state.picture_kind = 0 }

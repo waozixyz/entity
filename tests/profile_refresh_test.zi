@@ -3,6 +3,9 @@
 #import "picture_publish"
 #import "model"
 #import "native_files"
+#import "native_host"
+#import "profile_appearance"
+#import "entity_records"
 #import "recovery"
 #import "std/c_string"
 #import "std/text_buffer"
@@ -36,7 +39,16 @@ main :: () -> s32 {
     AccountStoreAliasReadStarted()
     selected := account_profile
     selected.picture = 7
+    selected.appearance_changed = 200
     if !AccountStoreSaveProfile(selected) { return 2 }
+    // A second host with this identity reads the first host's choice and clock.
+    second := EntityDefault()
+    if !SharedProfileLoad(identity, *second) || second.picture != 7 || second.appearance_changed != 200 { return 8 }
+    second.picture = 9
+    second.appearance_changed = 300
+    if !SharedProfileSave(identity, second) { return 9 }
+    reopened := EntityDefault()
+    if !SharedProfileLoad(identity, *reopened) || reopened.picture != 9 || reopened.appearance_changed != 300 { return 10 }
     // Its authenticated upload finished before the older read arrived.
     picture_dirty = false
     picture_publisher.active = false
@@ -54,7 +66,8 @@ main :: () -> s32 {
     CompletedRead(old_icon)
     AccountStoreAliasPump()
     if account_profile.picture != 8 { return 5 }
-    // A genuinely fresh remote read can still restore this account's choice.
+    // Legacy profiles still restore from the unversioned public icon.
+    account_profile.appearance_changed = 0
     AccountStoreAliasReadStarted()
     CompletedRead(old_icon)
     AccountStoreAliasPump()
@@ -66,6 +79,52 @@ main :: () -> s32 {
     CompletedRead(old_icon)
     AccountStoreAliasPump()
     if account_profile.picture != 7 || alias_active { return 7 }
+    // Two independent host stores share the same account profile. The second
+    // host starts with an older cached record and then receives a newer one.
+    unused CopyCString(identity, account_recovery.keys.public_id[:])
+    account_profile = EntityDefault()
+    unused CopyCString(identity, account_profile.owner_id[:])
+    account_standalone_ready = true
+    chosen := account_profile
+    chosen.picture = 12
+    if !EntityHostSaveProfile(chosen) { return 12 }
+    second_root: [4096]u8
+    if !CopyCString(NativeJoin(second_root[:], directory, "second-host"), account_root[:]) || !NativeDirectory(TextUntilNul(account_root[:])) { return 13 }
+    records_owner = .{}
+    stale := EntityDefault()
+    stale.picture = 1
+    stale.appearance_changed = 1
+    put := ProfileAppearancePut(stale)
+    unused EntityRecordsAnswer(put)
+    EntityFree(put)
+    account_profile = EntityDefault()
+    unused CopyCString(identity, account_profile.owner_id[:])
+    loaded := EntityHostReadProfile()
+    if loaded.picture != 12 || loaded.appearance_changed <= 1 { return 14 }
+    alias_owner = account_recovery.keys.public_id
+    unused CopyCString(TextUntilNul(account_profile.nodes[account_profile.preferred][:]), alias_node[:])
+    picture_dirty = false
+    picture_publisher.active = false
+    AccountStoreAliasReadStarted()
+    CompletedRead(old_icon)
+    AccountStoreAliasPump()
+    if account_profile.picture != 12 { return 18 }
+    // Reopening this host must keep the shared selection despite its older record.
+    records_owner = .{}
+    account_profile = EntityDefault()
+    unused CopyCString(identity, account_profile.owner_id[:])
+    loaded = EntityHostReadProfile()
+    if loaded.picture != 12 { return 15 }
+    remote := loaded
+    remote.picture = 15
+    remote.appearance_changed = loaded.appearance_changed + 1
+    put = ProfileAppearancePut(remote)
+    unused EntityRecordsAnswer(put)
+    EntityFree(put)
+    loaded = EntityHostReadProfile()
+    if loaded.picture != 15 || loaded.appearance_changed != remote.appearance_changed { return 16 }
+    reopened_remote := EntityDefault()
+    if !SharedProfileLoad(identity, *reopened_remote) || reopened_remote.picture != 15 { return 17 }
     print("Profile picture local tests: stale reads, pending uploads, fresh restore and owner change passed.\n")
     return 0
 }

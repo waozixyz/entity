@@ -12,6 +12,37 @@
 #import "std/text_buffer"
 #import "std/byte_text_linux"
 #import "daochi_client/keys"
+#import "daochi_client/async_client"
+#import "native_management"
+#import "shared_account"
+Auth :: #import "daochi_client/auth";
+
+backup_observer: ManagementProvider;
+
+BackupSettle :: (provider: *ManagementProvider) -> bool {
+    for round: 0..1200 {
+        ProviderBackupStatusPump(provider)
+        if !provider.backup_status_pending && provider.backup_status_next > 0 { return true }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
+
+BackupOperation :: (remove: bool) -> bool {
+    if remove { ProviderBackupOnlineRemove(*account_provider) }
+    else { ProviderBackupOnline(*account_provider, "Fixture password 1") }
+    if !account_provider.asynchronous { return false }
+    for round: 0..1200 {
+        if PollRequest(*account_provider.pending_request) {
+            success := account_provider.pending_request.status == 200
+            ProviderBackupOnlineFinished(*account_provider)
+            account_provider.asynchronous = false
+            return success
+        }
+        unused SleepMilliseconds(25)
+    }
+    return false
+}
 
 SyncField :: (reply: string, name: string, expected: string) -> bool {
     value: [128]u8
@@ -79,6 +110,42 @@ Check :: () -> s32 {
         return ifx SyncField(EntityRecordsAnswer("{\"operation\":\"status\"}"), "sync", "local") then 0 else 7
     }
     if !account_standalone_ready { return 8 }
+    if step == "backup" {
+        backup_observer = ManagementProvider.{.snapshot = AccountStoreSnapshot, .action = AccountStoreAction, .client = AccountStoreClient}
+        ProviderBackedUpPump(*backup_observer)
+        if !BackupSettle(*backup_observer) || backup_observer.backup_status_request.status != 200 || ProviderState(*backup_observer).backed_up { return 30 }
+        if !BackupOperation(false) { return 31 }
+        backup_observer.backup_status_next = 0
+        if !BackupSettle(*backup_observer) || backup_observer.backup_status_request.status != 200 ||
+        backup_observer.backup_status_session.token[0] == cast(u8)0 || !ProviderState(*backup_observer).backed_up { return 32 }
+        if ProviderBackupStatusApply(*backup_observer, "{\"stored\":false} trailing") || !ProviderState(*backup_observer).backed_up { return 35 }
+        // A cached result for a different node or identity is never evidence.
+        old_node := account_profile.nodes[0]
+        backup_observer.backup_status_pending = true
+        backup_observer.backup_status_request = PendingRequest.{.done = true, .result = Auth.AuthResult.AUTH_OK, .status = 200}
+        unused CopyCString("{\"stored\":true}", backup_observer.backup_status_reply[:])
+        unused CopyCString("http://127.0.0.1:1", account_profile.nodes[0][:])
+        if ProviderState(*backup_observer).backed_up { return 36 }
+        ProviderBackupStatusPump(*backup_observer)
+        if backup_observer.backup_status_stored { return 40 }
+        account_profile.nodes[0] = old_node
+        ProviderBackupStatusPump(*backup_observer)
+        if !BackupSettle(*backup_observer) || !ProviderState(*backup_observer).backed_up { return 41 }
+        old_owner := account_recovery.keys.public_id
+        account_recovery.keys.public_id[0] = ifx old_owner[0] == #char "b" then #char "c" else #char "b"
+        if ProviderState(*backup_observer).backed_up { return 37 }
+        account_recovery.keys.public_id = old_owner
+        if !BackupOperation(true) { return 33 }
+        backup_observer.backup_status_next = 0
+        if !BackupSettle(*backup_observer) || ProviderState(*backup_observer).backed_up { return 34 }
+        // A file backup remains valid when the node says it has none.
+        if !AccountBackedUpWrite(root, TextUntilNul(account_recovery.keys.public_id[:]), true) { return 38 }
+        backup_observer.backup_local_next = 0
+        ProviderBackedUpPump(*backup_observer)
+        if !ProviderState(*backup_observer).backed_up { return 39 }
+        ProviderClose(*backup_observer)
+        return 0
+    }
     if step == "first" {
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"110\",\"state\":\"advanced\"}}"), "status", "done") { return 22 }
         if !SyncField(EntityRecordsAnswer("{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"edition\":\"classic\",\"title\":\"Garden\",\"levels\":[]}}"), "status", "done") ||

@@ -482,6 +482,28 @@ BackupOfferCheck :: (fixture: *Recovery) -> s32 {
     known := OfferProvider()
     if OfferShown(*known) != BACKUP_OFFER_NONE { return 13 }
     if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) { return 14 }
+    // A different app can update the receipt without changing this session's owner.
+    known.backup_local_next = 0
+    ProviderPump(*known)
+    if ProviderState(*known).backed_up { return 36 }
+    if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), true) { return 37 }
+    known.backup_local_next = 0
+    ProviderPump(*known)
+    if !ProviderState(*known).backed_up || OfferShown(*known) != BACKUP_OFFER_NONE { return 38 }
+    if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) { return 39 }
+    // A failed online save or delete cannot manufacture or erase evidence.
+    known.backup_status_stored = false
+    known.network_operation = 5
+    known.pending_request.result = Auth.AuthResult.AUTH_REQUEST_FAILED
+    known.pending_request.status = 500
+    ProviderBackupOnlineFinished(*known)
+    if known.backup_status_stored { return 40 }
+    known.backup_status_stored = true
+    known.network_operation = 6
+    known.pending_request.result = Auth.AuthResult.AUTH_REQUEST_FAILED
+    known.pending_request.status = 500
+    ProviderBackupOnlineFinished(*known)
+    if !known.backup_status_stored { return 41 }
 
     // A plain file from before passwords opens, and is offered a sealed copy
     // even after an earlier "Not now".

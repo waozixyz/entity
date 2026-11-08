@@ -77,6 +77,38 @@ EntityHostText :: (text: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
         .data = HostTextData(text), .length = cast(usize)text.count}
 }
+// Resolve the shared profile and the app's local record before exposing it.
+EntityHostReadProfile :: () -> EntityState {
+    owner: [65]u8
+    for index: 0..64 { owner[index] = account_profile.owner_id[index] }
+    shared := SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
+    state := account_profile
+    reply := EntityRecordsAnswer(PROFILE_APPEARANCE_GET)
+    applied := ProfileAppearanceMergeReply(reply, *state, shared)
+    if applied && shared {
+        unused SharedProfileSave(TextUntilNul(owner[:]), state)
+    }
+    account_profile.picture_kind = state.picture_kind
+    account_profile.picture = state.picture
+    account_profile.abstract_picture = state.abstract_picture
+    account_profile.appearance_changed = state.appearance_changed
+    return state
+}
+
+EntityHostSaveProfile :: (state: EntityState) -> bool {
+    changed := state.picture_kind != account_profile.picture_kind || state.picture != account_profile.picture || state.abstract_picture != account_profile.abstract_picture
+    if changed {
+        state.appearance_changed = RecordsNow()
+        if state.appearance_changed <= account_profile.appearance_changed { state.appearance_changed = account_profile.appearance_changed + 1 }
+    }
+    if !AccountStoreSaveProfile(state) { return false }
+    if changed {
+        appearance := ProfileAppearancePut(state)
+        unused EntityRecordsAnswer(appearance)
+        EntityFree(appearance)
+    }
+    return true
+}
 EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost" ||
     name == REFERRAL_SERVICE || name == "AppLocaleHost" || name == "entity.management" || name == "entity.assets" || name == "entity.asset" || name == "entity.dew" || name == "entity.friends" || name == LEADERBOARD_SERVICE ||
@@ -161,15 +193,8 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
         return 1
     }
     if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
-        owner: [65]u8
-        for index: 0..64 { owner[index] = account_profile.owner_id[index] }
-        unused SharedProfileLoad(TextUntilNul(owner[:]), *account_profile)
         EntityFree(profile_document)
-        state := account_profile
-        unused ProfileAppearanceApplyReply(EntityRecordsAnswer(PROFILE_APPEARANCE_GET), *state)
-        account_profile.picture_kind = state.picture_kind
-        account_profile.picture = state.picture
-        account_profile.abstract_picture = state.abstract_picture
+        state := EntityHostReadProfile()
         state.host_navigation = entity_host_navigation
         state.profile_sections = entity_profile_sections
         state.show_storage = !entity_host_game
@@ -190,13 +215,7 @@ EntityHostServices :: (context: *void, module: *u8, function: *u8, arguments: *H
     if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
         state: EntityState
         decoded := EntityDecode(AppArgumentText(arguments[1]), *state)
-        changed := decoded && (state.picture_kind != account_profile.picture_kind || state.picture != account_profile.picture || state.abstract_picture != account_profile.abstract_picture)
-        saved := decoded && AccountStoreSaveProfile(state)
-        if saved && changed {
-            appearance := ProfileAppearancePut(state)
-            unused EntityRecordsAnswer(appearance)
-            EntityFree(appearance)
-        }
+        saved := decoded && EntityHostSaveProfile(state)
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
     }

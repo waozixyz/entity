@@ -70,13 +70,14 @@ main :: () -> s32 {
     if CoinPackReceipt(Receipt(1, owner, -GameShopPrice(1)), owner) != 0 || GameShopReceipt(Receipt(1, owner, -CoinPackPrice(1), "wurm.coins:coins-wurm-1-1-v1"), owner) != 0 { return 15 }
     // Shovey's packs are a separate receipt namespace from Wurm's.
     shovey_key: [64]u8
-    if ShoveyCoinPackPrice(1) != 2000000 || ShoveyCoinPackPrice(2) != 5000000 || ShoveyCoinPackPrice(3) != 10000000 ||
+    if ShoveyCoinPackPrice(1) != 10000000 || ShoveyCoinPackPrice(2) != 25000000 || ShoveyCoinPackPrice(3) != 50000000 ||
     ShoveyCoinPackCoins(1) != 150 || ShoveyCoinPackCoins(2) != 400 || ShoveyCoinPackCoins(3) != 900 { return 30 }
     if ShoveyCoinPackKey(3, 4, shovey_key[:]) != "coins-shovey-3-4-v1" { return 24 }
     for pack: cast(s32)1..SHOVEY_COIN_PACKS {
         ref: Vec(u8)
         BuilderPrint(*ref, "%:%", SHOVEY_COIN_PACK_ACTION, ShoveyCoinPackKey(pack, 3, shovey_key[:]))
         reference := BuilderFinish(ref)
+        if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPreviousPrice(pack), reference), owner) != ShoveyCoinPackCoins(pack) { return 60 }
         if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference), owner) != ShoveyCoinPackCoins(pack) { return 25 }
         if ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference, "shovey"), owner) != ShoveyCoinPackCoins(pack) ||
         ShoveyCoinPackReceipt(Receipt(14, owner, -ShoveyCoinPackPrice(pack), reference, "wurm"), owner) != 0 { return 59 }

@@ -92,6 +92,16 @@ ManagementProvider :: struct {
     shared_next: s64
     backed_up: bool
     backed_up_owner: [65]u8
+    backup_local_next: s64
+    backup_status_transfer: HttpTransfer
+    backup_status_request: PendingRequest
+    backup_status_session: Auth.Session
+    backup_status_reply: [512]u8
+    backup_status_owner: [65]u8
+    backup_status_node: [512]u8
+    backup_status_next: s64
+    backup_status_pending: bool
+    backup_status_stored: bool
     // The answer to the backup offer for backed_up_owner: "Not now" or done.
     offer_answered: bool
     // INCOMING_* for the account waiting in incoming.
@@ -151,7 +161,12 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
     state.busy = state.busy || provider.asynchronous || provider.drive_pending || provider.handoff_pending || provider.bridge_operation != 0
     if provider.has_incoming { state.candidate_id = provider.incoming.keys.public_id }
     state.password_needed = provider.held_backup[0] != cast(u8)0
-    state.backed_up = state.account && provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
+    client: Client
+    status_current := provider.client != null && provider.client(provider.context, *client) &&
+    TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backup_status_owner[:]) &&
+    client.server_url == TextUntilNul(provider.backup_status_node[:])
+    state.backed_up = state.account && ((provider.backed_up && TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])) ||
+        (status_current && provider.backup_status_stored))
     known := TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
     state.backup_offer = ManagementBackupOffer(state.account && known, (state.capabilities & (ACCOUNT_BACKUP | ACCOUNT_DRIVE)) != 0,
         state.backed_up, provider.offer_answered, TextUntilNul(state.public_id[:]) == TextUntilNul(provider.older_owner[:]))
@@ -159,7 +174,6 @@ ProviderState :: (provider: *ManagementProvider) -> Management {
         state.shared_name = provider.shared_name
         state.capabilities |= ACCOUNT_CONTINUE
     }
-    client: Client
     if provider.client != null && provider.client(provider.context, *client) &&
     TextUntilNul(state.public_id[:]) == TextUntilNul(provider.alias_owner[:]) &&
     client.server_url == TextUntilNul(provider.alias_node[:]) {
@@ -563,7 +577,11 @@ ProviderBackedUpAction :: (provider: *ManagementProvider, owner: string, operati
 
 ProviderBackedUpPump :: (provider: *ManagementProvider) {
     state := ProviderState(provider)
-    if TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:]) { return }
+    // Another app can save or remove a backup while this account stays open.
+    // Re-read the account-scoped receipt rather than caching it for the session.
+    same_owner := TextUntilNul(state.public_id[:]) == TextUntilNul(provider.backed_up_owner[:])
+    if same_owner && (provider.action == null || UnixNow() < provider.backup_local_next) { return }
+    provider.backup_local_next = UnixNow() + 1
     provider.backed_up_owner = state.public_id
     owner := TextUntilNul(state.public_id[:])
     provider.backed_up = state.account && ProviderBackedUpAction(provider, owner, "backup_marked")
@@ -625,6 +643,13 @@ ProviderSignOutFirst :: (provider: *ManagementProvider) {
 
 // Nothing of the account stays in memory once it is signed out here.
 ProviderSignOutClear :: (provider: *ManagementProvider, owner: string, share: bool = true) {
+    CancelRequest(*provider.backup_status_request)
+    HttpTransferCancel(*provider.backup_status_transfer)
+    provider.backup_status_pending = false
+    provider.backup_status_stored = false
+    provider.backup_status_owner = .{}
+    provider.backup_status_node = .{}
+    provider.backup_status_session = .{}
     root_buffer: [4096]u8
     if share && !provider.shared_web_files { SharedWebShare("", owner, false) }
     provider.shared_web_tried = .{}
@@ -805,7 +830,13 @@ ProviderBackupOnlineRemove :: (provider: *ManagementProvider) {
 ProviderBackupOnlineFinished :: (provider: *ManagementProvider) {
     status := provider.pending_request.status
     if provider.pending_request.result == Auth.AuthResult.AUTH_OK {
-        ProviderBackedUpSet(provider, provider.network_operation == 5)
+        if provider.backup_status_pending { CancelRequest(*provider.backup_status_request) }
+        provider.backup_status_pending = false
+        state := ProviderState(provider)
+        provider.backup_status_owner = state.public_id
+        unused CopyCString(TextUntilNul(provider.request_node[:]), provider.backup_status_node[:])
+        provider.backup_status_stored = provider.network_operation == 5
+        provider.backup_status_next = UnixNow() + 60
         message := ifx provider.network_operation == 5 then "Backup saved online. Sign in with your username or public ID and this password." else "Online backup removed"
         ProviderOnlineFinish(provider, "ok", message)
         return
@@ -1131,6 +1162,8 @@ ProviderClose :: (provider: *ManagementProvider) {
     CancelRequest(*provider.pending_request)
     HttpTransferCancel(*provider.transfer)
     HttpTransferCancel(*provider.methods_transfer)
+    CancelRequest(*provider.backup_status_request)
+    HttpTransferCancel(*provider.backup_status_transfer)
     ProviderOnlineForget(provider)
     ProviderPasskeyForget(provider)
     RecoveryClear(*provider.incoming)
@@ -1141,6 +1174,69 @@ ProviderClose :: (provider: *ManagementProvider) {
 ProviderTransport :: (provider: *ManagementProvider) -> AsyncTransport {
     return AsyncTransport.{.context = cast(*void)provider, .start = ProviderStartTransfer,
         .poll = ProviderPollTransfer, .cancel = ProviderCancelTransfer}
+}
+
+ProviderBackupStatusStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
+    provider := cast(*ManagementProvider)context
+    return HttpTransferStart(*provider.backup_status_transfer, request, output, 15000)
+}
+ProviderBackupStatusPoll :: (context: *void, status: *s32) -> s32 {
+    provider := cast(*ManagementProvider)context
+    return HttpTransferPoll(*provider.backup_status_transfer, status)
+}
+ProviderBackupStatusCancel :: (context: *void) {
+    provider := cast(*ManagementProvider)context
+    HttpTransferCancel(*provider.backup_status_transfer)
+}
+
+ProviderBackupStatusApply :: (provider: *ManagementProvider, reply: string) -> bool {
+    if reply.count < 2 { return false }
+    end := Json.ValueEnd(reply, 0, 0)
+    if end < 0 || Json.Space(reply, end) != reply.count { return false }
+    field := Json.FieldAt(reply, 0, "stored")
+    if Json.MatchLiteral(reply, field, "true") { provider.backup_status_stored = true; return true }
+    if Json.MatchLiteral(reply, field, "false") { provider.backup_status_stored = false; return true }
+    return false
+}
+
+// A node's authenticated answer is separate from evidence of a local file.
+// Network failures never create or remove either kind of evidence.
+ProviderBackupStatusPump :: (provider: *ManagementProvider) {
+    state := ProviderState(provider)
+    client: Client
+    available := state.account && provider.client != null && provider.client(provider.context, *client) &&
+    client.identity.account_id == TextUntilNul(state.public_id[:])
+    if !available || TextUntilNul(state.public_id[:]) != TextUntilNul(provider.backup_status_owner[:]) ||
+    client.server_url != TextUntilNul(provider.backup_status_node[:]) {
+        if provider.backup_status_pending { CancelRequest(*provider.backup_status_request) }
+        provider.backup_status_pending = false
+        provider.backup_status_stored = false
+        provider.backup_status_session = .{}
+        provider.backup_status_next = 0
+        provider.backup_status_owner = .{}
+        provider.backup_status_node = .{}
+        if !available { return }
+        provider.backup_status_owner = state.public_id
+        if !CopyCString(client.server_url, provider.backup_status_node[:]) { return }
+    }
+    if provider.backup_status_pending {
+        if !PollRequest(*provider.backup_status_request) { return }
+        provider.backup_status_pending = false
+        provider.backup_status_next = UnixNow() + 60
+        if provider.backup_status_request.result == Auth.AuthResult.AUTH_OK && provider.backup_status_request.status == 200 {
+            unused ProviderBackupStatusApply(provider, TextUntilNul(provider.backup_status_reply[:]))
+        }
+        return
+    }
+    if provider.asynchronous && (provider.network_operation == 5 || provider.network_operation == 6) { return }
+    if UnixNow() < provider.backup_status_next { return }
+    provider.backup_status_next = UnixNow() + 60
+    client.server_url = TextUntilNul(provider.backup_status_node[:])
+    transport := AsyncTransport.{.context = cast(*void)provider, .start = ProviderBackupStatusStart,
+        .poll = ProviderBackupStatusPoll, .cancel = ProviderBackupStatusCancel}
+    headers: [0]HttpHeader
+    provider.backup_status_pending = BeginRequest(*provider.backup_status_request, client, *provider.backup_status_session,
+        UnixNow(), transport, "GET", ACCOUNT_BACKUP_PATH, "", provider.backup_status_reply[:], headers[:])
 }
 
 // The alias as the node stores it: as on the node, the spaces around it, a
@@ -1436,6 +1532,7 @@ ProviderStartNetwork :: (provider: *ManagementProvider, deleting: bool) {
 
 ProviderPump :: (provider: *ManagementProvider) {
     ProviderBackedUpPump(provider)
+    ProviderBackupStatusPump(provider)
     ProviderSharedPump(provider)
     ProviderMethodsPump(provider)
     if !provider.queue.pending { return }

@@ -33,6 +33,8 @@ liboqs = Path(os.environ['LIBOQS_LIBRARY'])
 output = ROOT / 'build/records-test'
 shutil.rmtree(output, ignore_errors=True)
 output.mkdir(parents=True)
+ENV['XDG_DATA_HOME'] = str(output / 'shared')
+ENV['YUE_DESKTOP_RECOVERY'] = '0'
 paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(std_root / 'std'),
          '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/backend'),
          '--module-path', str(kryon / 'src/ui'), '--module-path', f'daochi_client={daochi}', '--module-path', str(daochi),
@@ -106,6 +108,7 @@ with (node_folder / 'node.log').open('w') as log:
             assert result.returncode == 0, f'{device} {name}: {result.stderr}{result.stdout}'
 
         step('first', 'create')
+        step('first', 'backup')
         for name in ('account.key', 'entity.json'):
             shutil.copy2(devices['first'] / name, devices['second'] / name)
         step('third', 'local')

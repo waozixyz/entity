@@ -175,9 +175,16 @@ ShoveyCoinPackCoins :: (pack: s32) -> s32 {
     return 0
 }
 ShoveyCoinPackPrice :: (pack: s32) -> s64 {
-    if pack == 1 { return 2000000 }
-    if pack == 2 { return 5000000 }
-    if pack == 3 { return 10000000 }
+    if pack == 1 { return 10 * DewUnits }
+    if pack == 2 { return 25 * DewUnits }
+    if pack == 3 { return 50 * DewUnits }
+    return 0
+}
+// Historical verified ledger debits keep their purchased coins after repricing.
+ShoveyCoinPackPreviousPrice :: (pack: s32) -> s64 {
+    if pack == 1 { return 2 * DewUnits }
+    if pack == 2 { return 5 * DewUnits }
+    if pack == 3 { return 10 * DewUnits }
     return 0
 }
 ShoveyCoinPackKey :: (pack: s32, number: s32, output: []u8) -> string {
@@ -200,7 +207,8 @@ ShoveyCoinPackReceipt :: (text: string, owner: string) -> s32 {
         BuilderPrint(*prefix, "%:coins-shovey-%-", SHOVEY_COIN_PACK_ACTION, pack)
         start := BuilderFinish(prefix)
         matched := GameShopPackSuffix(ref, start)
-        if matched && amount.valid && amount.value == -cast(float64)ShoveyCoinPackPrice(pack) { return ShoveyCoinPackCoins(pack) }
+        if matched && amount.valid && (amount.value == -cast(float64)ShoveyCoinPackPrice(pack) ||
+            amount.value == -cast(float64)ShoveyCoinPackPreviousPrice(pack)) { return ShoveyCoinPackCoins(pack) }
     }
     return 0
 }

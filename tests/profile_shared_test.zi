@@ -34,6 +34,18 @@ main :: () -> s32 {
     if !ProfileAppearanceRead("{\"version\":1,\"picture_kind\":2,\"picture\":0,\"abstract_picture\":0}", *next) || next.picture_kind != 0 { return 20 }
     if ProfileAppearanceRead("{\"version\":1,\"picture_kind\":3,\"picture\":0,\"abstract_picture\":0}", *next) { return 2 }
     if ProfileAppearanceRead("{}", *next) { return 3 }
+    // An older app-local record must not replace a newer shared selection.
+    next.picture = 7
+    next.appearance_changed = 200
+    stale := "{\"status\":\"done\",\"document\":{\"version\":1,\"picture_kind\":0,\"picture\":1,\"abstract_picture\":0,\"appearance_changed\":100}}"
+    if ProfileAppearanceMergeReply(stale, *next, true) || next.picture != 7 { return 21 }
+    // A newer remote record is still eligible, and survives encode/reload.
+    fresh := "{\"status\":\"done\",\"document\":{\"version\":1,\"picture_kind\":0,\"picture\":8,\"abstract_picture\":0,\"appearance_changed\":300}}"
+    if !ProfileAppearanceMergeReply(fresh, *next, true) || next.picture != 8 || next.appearance_changed != 300 { return 22 }
+    saved := EntityEncode(next)
+    restored: EntityState
+    if !EntityDecode(saved, *restored) || restored.picture != 8 || restored.appearance_changed != 300 { return 23 }
+    EntityFree(saved)
     token: [65]u8
     if !TelegramLinkStart("inlumi_bot", "{\"url\":\"https://t.me/inlumi_bot?start=0123456789abcdef0123456789abcdef\"}", token[:]) { return 4 }
     if TelegramLinkStart("other_bot", "{\"url\":\"https://t.me/inlumi_bot?start=0123456789abcdef0123456789abcdef\"}", token[:]) { return 5 }

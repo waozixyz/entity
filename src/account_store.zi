@@ -278,8 +278,10 @@ AccountStoreAliasPump :: () {
             }
         }
         if alias_pending.result == cast(Auth.AuthResult)Auth.AuthResult.AUTH_OK && alias_session.profile_icon_known {
+            // Public icons carry no revision. Once an ordered appearance is
+            // known, only the account's ordered profile record can replace it.
             pending := !alias_picture_restore || alias_picture_sequence != picture_sequence ||
-            picture_dirty || picture_publisher.active
+            picture_dirty || picture_publisher.active || account_profile.appearance_changed > 0
             icon := EntityPictureAdopt(EntityPictureFromNode(alias_session.profile_icon), EntityPublicIcon(account_profile), pending)
             if icon != 0 {
                 picture_remote = true
