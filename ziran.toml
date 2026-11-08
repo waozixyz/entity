@@ -9,7 +9,7 @@ ref = "0e91eb43bd665f02db86eb9b9cdd875b5436a066"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "99c934a0fffc865c44d2bdc54104ea7aebb86405"
+ref = "a139f22c5eb3c5b97994a727cfca94ab63104d79"
 module_aliases = { FileDialogLinux = "file_dialog_linux" }
 
 [exports]
