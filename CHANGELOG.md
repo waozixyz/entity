@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Remember completed password backups for the same shared desktop account across apps; dismissed reminders remain separate from recovery evidence.
+
 - Every backup, including the .key file, is now protected by a password. A new password needs at least 8 characters, a number and a lowercase letter, and the field says what is still missing.
 - If you're signed in without a password-protected backup, the account screen offers to save one, with Not now. Older backup files still open and offer to save a protected copy.
 - Choosing your .key file comes first on the sign-in screen: it's your identity, and it signs you in without any server.

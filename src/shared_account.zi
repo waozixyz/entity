@@ -197,3 +197,30 @@ AccountBackedUpWrite :: (root: string, owner: string, value: bool) -> bool {
     if value { return NativeWrite(address, "1") }
     return !PathExists(address) || RemoveFile(address)
 }
+
+// Shared sign-in must carry completed-backup evidence for that same public
+// identity. An offer dismissal stays local and never becomes this receipt.
+AccountCompletedBackupRead :: (root: string, shared: string, owner: string) -> bool {
+    if shared != "" {
+        path: [4096]u8
+        receipt: [8]u8
+        address := AccountBackedUpPath(shared, owner, path[:])
+        // An explicit removal wins over an older app's local receipt.
+        if address != "" && NativeRead(address, receipt[:]) >= 0 { return TextUntilNul(receipt[:]) == "1" }
+    }
+    if AccountBackedUpRead(root, owner) {
+        if shared != "" && NativeDirectory(shared) { unused AccountBackedUpWrite(shared, owner, true) }
+        return true
+    }
+    return false
+}
+
+AccountCompletedBackupWrite :: (root: string, shared: string, owner: string, value: bool) -> bool {
+    if !AccountBackedUpWrite(root, owner, value) { return false }
+    // A sandbox or unavailable shared directory must not undo a local backup.
+    if shared != "" && NativeDirectory(shared) {
+        path: [4096]u8
+        unused NativeWrite(AccountBackedUpPath(shared, owner, path[:]), ifx value then "1" else "0")
+    }
+    return true
+}

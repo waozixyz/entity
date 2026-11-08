@@ -499,6 +499,27 @@ BackupOfferCheck :: (fixture: *Recovery) -> s32 {
     // Saving the sealed backup ends the offer.
     if !Finished(*older, "backup", "Fixture password 1", "ok") || OfferShown(*older) != BACKUP_OFFER_NONE ||
     !AccountBackedUpRead(folder, TextUntilNul(owner[:])) { return 20 }
+    restarted_after_save := OfferProvider()
+    if OfferShown(*restarted_after_save) != BACKUP_OFFER_NONE || !ProviderState(*restarted_after_save).backed_up { return 33 }
+    // A second native app shares completion for this identity, after restart.
+    second_path: [4096]u8
+    shared_path: [4096]u8
+    second := NativeJoin(second_path[:], folder, "second-app")
+    shared := NativeJoin(shared_path[:], folder, "shared-completion")
+    if !NativeDirectory(second) || !NativeDirectory(shared) { return 27 }
+    if AccountCompletedBackupRead(second, shared, TextUntilNul(owner[:])) { return 28 }
+    // A dismissed offer is not completion evidence.
+    if AccountCompletedBackupRead(second, shared, later_owner) { return 29 }
+    if !AccountCompletedBackupRead(folder, shared, TextUntilNul(owner[:])) ||
+    !AccountCompletedBackupRead(second, shared, TextUntilNul(owner[:])) { return 30 }
+    if AccountCompletedBackupRead(second, shared, TextUntilNul(other.keys.public_id[:])) { return 31 }
+    // Local persistence still works with no shared store (mobile/sandbox).
+    if !AccountCompletedBackupWrite(second, "", TextUntilNul(owner[:]), true) ||
+    !AccountCompletedBackupRead(second, "", TextUntilNul(owner[:])) { return 32 }
+    if !AccountCompletedBackupWrite(folder, shared, TextUntilNul(owner[:]), false) ||
+    AccountCompletedBackupRead(second, shared, TextUntilNul(owner[:])) { return 34 }
+    if !AccountCompletedBackupWrite(folder, shared, TextUntilNul(owner[:]), true) ||
+    !AccountCompletedBackupRead(second, shared, TextUntilNul(owner[:])) { return 35 }
     // Opening a sealed file means the device knows one exists.
     if !AccountBackedUpWrite(folder, TextUntilNul(owner[:]), false) || !AccountBackedUpWrite(folder, later_owner, false) { return 21 }
     sealed_import := OfferProvider()

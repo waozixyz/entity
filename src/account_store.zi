@@ -443,8 +443,16 @@ AccountStoreAction :: (context: *void, request: *ManagementRequest) -> s32 {
         unused AccountStoreSaveProfile(account_profile)
         return 1
     }
-    if operation == "backup_marked" { return ifx AccountBackedUpRead(TextUntilNul(account_root[:]), TextUntilNul(request.owner_id[:])) then 1 else 0 }
-    if operation == "backup_mark" || operation == "backup_unmark" {
+    if operation == "backup_marked" || operation == "backup_mark" || operation == "backup_unmark" {
+        owner := TextUntilNul(request.owner_id[:])
+        if account_standalone_ready && owner == TextUntilNul(account_recovery.keys.public_id[:]) {
+            shared: [4096]u8
+            folder := SharedAccountRoot(shared[:])
+            if operation == "backup_marked" { return ifx AccountCompletedBackupRead(TextUntilNul(account_root[:]), folder, owner) then 1 else 0 }
+            return ifx AccountCompletedBackupWrite(TextUntilNul(account_root[:]), folder, owner, operation == "backup_mark") then 1 else 0
+        }
+        // The hashed offer-dismissal identity is not a completed backup.
+        if operation == "backup_marked" { return ifx AccountBackedUpRead(TextUntilNul(account_root[:]), owner) then 1 else 0 }
         return ifx AccountBackedUpWrite(TextUntilNul(account_root[:]), TextUntilNul(request.owner_id[:]), operation == "backup_mark") then 1 else 0
     }
     if operation == "alias_saved" {
