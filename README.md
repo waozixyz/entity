@@ -584,6 +584,12 @@ links an ordinary Ziran import graph against descriptor-only support metadata,
 retaining curl and checking platform archive member uniqueness. Cross binaries
 are never executed; compile/link success does not establish runtime behavior.
 
+The Profile producer resolves imports through the consumer's package exports,
+using Entity as the root for stable native header and symbol names. It uses
+that same resolved dependency graph for native code and the portable bundle.
+Dirty fixture runs inherit this checkout's ignored local overrides; they do
+not validate the published dependency pins.
+
 ## Referrals
 
 The shared profile supplies My referrals (invite code/link, explicit permanent

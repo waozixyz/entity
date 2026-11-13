@@ -19,13 +19,10 @@ using Canvas :: #import "kryon/Canvas";
 #import "kryon/tree_input"
 #import "kryon/ScrollDevice"
 #import "kryon/key_input"
-#import "kryon/text_input_props"
-#import "kryon/text_props"
-#import "kryon/text_widget"
-#import "kryon/button_props"
-#import "kryon/button_widget"
-#import "kryon/box_props"
-#import "kryon/box_widget"
+TextField :: #import "kryon/text_field";
+Text :: #import "kryon/text";
+Button :: #import "kryon/button";
+Box :: #import "kryon/box";
 #import "kryon/drawing_props"
 #import "kryon/widget_palette"
 #import "std/bundle_host"
@@ -138,13 +135,13 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
             // the Profile takes the app's palette again each frame, and its
             // title bar sits on the app's background rather than the page's.
             unused WidgetPaletteUse(session, palette)
-            Box(session, BoxProps.{.key = cast(u64)49003, .bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 56.0},
+            Box.Draw(session, Box.Props.{.key = cast(u64)49003, .bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 56.0},
                     .fill = ColorFromPacked(palette.background)})
             bounds := Rectangle.{viewport.x, viewport.y + 56.0, viewport.width, viewport.height - 56.0}
             if !EntityHostFrame(session, bounds, key, modifiers, TextFieldInputFor(key, modifiers, text), true) { return 1 }
-            Text(session, TextProps.{.key = cast(u64)49002, .text = "Profile", .font = 20,
+            Text.Draw(session, Text.Props.{.key = cast(u64)49002, .text = "Profile", .size = 20,
                     .bounds = Rectangle.{100.0, 12.0, viewport.width - 200.0, 36.0}})
-            if Button(session, ButtonProps.{.key = cast(u64)49001, .id = 49001, .label = "Back",
+            if Button.Draw(session, Button.Props.{.key = cast(u64)49001, .id = 49001, .label = "Back",
                     .bounds = Rectangle.{8.0, 6.0, 76.0, 44.0}}) != 0 || key == 256 {
                 if !EntityHostBack() && EntityHostSave() { browser_profile = false }
             }

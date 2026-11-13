@@ -3,8 +3,7 @@
 #import "leaderboard_model"
 #import "achievement_view"
 #import "kryon/app_context"
-#import "kryon/dropdown_props"
-#import "kryon/dropdown_widget"
+Dropdown :: #import "kryon/dropdown";
 #import "std/number_text"
 #import "std/c_string"
 #import "std/text_buffer"
@@ -14,20 +13,14 @@
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/drawing_props"
-#import "kryon/button_props"
-#import "kryon/button_widget"
-#import "kryon/scroll_props"
-#import "kryon/scroll_widget"
-#import "kryon/box_props"
-#import "kryon/box_widget"
+Button :: #import "kryon/button";
+Scroll :: #import "kryon/scroll";
+Box :: #import "kryon/box";
 #import "kryon/tree"
-#import "kryon/text_widget"
-#import "kryon/text_props"
+Text :: #import "kryon/text";
 #import "kryon/text_align"
-#import "kryon/image_props"
-#import "kryon/image_widget"
-#import "kryon/svg_icon_props"
-#import "kryon/svg_icon_widget"
+Image :: #import "kryon/image";
+SvgIcon :: #import "kryon/svg_icon";
 #import "profile_theme"
 
 profile_leaderboard_open: bool;
@@ -46,7 +39,7 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
     picture := EntityPictureFromPublicIcon(icon)
     abstract := EntityAbstractFromPublicIcon(icon)
     if picture < 0 && abstract < 0 {
-        SvgIcon(session, SvgIconProps.{.bounds = bounds,
+        SvgIcon.Draw(session, SvgIcon.Props.{.bounds = bounds,
                 .shape = "S1.7rr:M12 12C16 12 18 16 18 20H6C6 16 8 12 12 12ZM16 6C16 8.21 14.21 10 12 10C9.79 10 8 8.21 8 6C8 3.79 9.79 2 12 2C14.21 2 16 3.79 16 6",
                 .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff)})
         return
@@ -59,7 +52,7 @@ ProfileLeaderboardPicture :: (session: Session, key: u64, icon: s32, bounds: Rec
     else { BuilderPrint(*out, "%/%", root, image.asset_path) }
     path := BuilderFinish(out)
     image.asset_path = path
-    Image(session, image)
+    Image.Draw(session, image)
     AchievementRelease(path)
 }
 
@@ -89,10 +82,10 @@ ProfileLeaderboardWurm :: (session: Session, key: u64, icon: s32, bounds: Rectan
             Rectangle.{1086.0,105.0,520.0,534.0}, Rectangle.{1696.0,182.0,410.0,405.0}]
             source = crops[column]
         }
-        unused Image(session, ImageProps.{.key = key + cast(u64)segment, .asset_path = path,
+        unused Image.Draw(session, Image.Props.{.key = key + cast(u64)segment, .asset_path = path,
                 .bounds = Rectangle.{bounds.x + cast(float32)segment * bounds.width * 0.18,
                     bounds.y + (ifx head then bounds.height * 0.08 else bounds.height * 0.45), size, size},
-                .source = source, .fit = ImageFit.ImageFitContain, .smooth = true,
+                .source = source, .fit = Image.ImageFit.ImageFitContain, .smooth = true,
                 .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     }
     AchievementRelease(path)
@@ -108,8 +101,8 @@ ProfileLeaderboardShovey :: (session: Session, key: u64, game: string, icon: s32
     if root != "" { BuilderPrint(*out, "%/", root) }
     Append(*out, asset)
     path := BuilderFinish(out)
-    unused Image(session, ImageProps.{.key = key, .asset_path = path, .bounds = bounds,
-            .fit = ImageFit.ImageFitContain, .smooth = false,
+    unused Image.Draw(session, Image.Props.{.key = key, .asset_path = path, .bounds = bounds,
+            .fit = Image.ImageFit.ImageFitContain, .smooth = false,
             .alt_text = LeaderboardLabel("entity.picture", "Profile picture")})
     AchievementRelease(path)
     return true
@@ -185,7 +178,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     y := area.y + 12.0 * scale
     font := cast(s32)(14.0 * scale)
     if navigation {
-        if Button(session, ButtonProps.{.id = 55000, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+        if Button.Draw(session, Button.Props.{.id = 55000, .bounds = Rectangle.{x, y, width, 44.0 * scale},
                 .label = LeaderboardLabel("entity.back", "Back")}) != 0 {
             profile_leaderboard_open = false
         }
@@ -200,7 +193,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         AchievementText(session, 55004, LeaderboardLabel("leaderboard_refresh_failed", "Could not refresh the leaderboard."),
             Rectangle.{x, y, width, 64.0 * scale}, font)
         y += 48.0 * scale
-        if Button(session, ButtonProps.{.id = 55005, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+        if Button.Draw(session, Button.Props.{.id = 55005, .bounds = Rectangle.{x, y, width, 44.0 * scale},
                 .label = LeaderboardLabel("profile_dew_retry", "Try again")}) != 0 {
             unused CopyCString("refresh", profile_leaderboard_request[:])
         }
@@ -209,7 +202,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     // A refresh stays silent: the last boards remain until new ones arrive.
     if !profile_leaderboard_ready || page.board_count == 0 { return true }
     current := *page.boards[page.selected]
-    apps: [LEADERBOARD_BOARDS]DropdownOption
+    apps: [LEADERBOARD_BOARDS]Dropdown.Option
     first: [LEADERBOARD_BOARDS]s32
     app_count: s32 = 0
     selected_app: s32 = 0
@@ -226,7 +219,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         app_count += 1
     }
     if app_count > 1 {
-        menu := Dropdown(session, DropdownProps.{.id = 55003, .bounds = Rectangle.{x, y, width, 44.0 * scale},
+        menu := Dropdown.Draw(session, Dropdown.Props.{.id = 55003, .bounds = Rectangle.{x, y, width, 44.0 * scale},
                 .selected_index = selected_app, .scale = scale}, apps[:app_count])
         if menu.changed && menu.selected_index >= 0 && menu.selected_index < app_count {
             ProfileLeaderboardSelect(first[menu.selected_index], 0)
@@ -251,7 +244,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     choice_width := (width - cast(float32)(columns - 1) * 8.0 * scale) / cast(float32)columns
     row_height := cast(s32)(44.0 * scale)
     content_height := cast(s32)(cast(float32)rows * 48.0 * scale + 116.0 * scale) + page.row_count * row_height
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)55300,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)55300,
             .bounds = Rectangle.{x, y, width, area.y + area.height - y - 8.0 * scale},
             .content_height = content_height, .scroll_offset = profile_leaderboard_scroll})
     profile_leaderboard_scroll = scroll.scroll_offset
@@ -262,7 +255,7 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     y = scroll.content.y
     for index: cast(s32)0..(ifx count > 1 then count else 0) - 1 {
         chosen := choices[index]
-        if Button(session, ButtonProps.{.id = 55100 + index,
+        if Button.Draw(session, Button.Props.{.id = 55100 + index,
                 .bounds = Rectangle.{x + cast(float32)(index % columns) * (choice_width + 8.0 * scale),
                     y + cast(float32)(index / columns) * 48.0 * scale, choice_width, 40.0 * scale},
                 .label = TextUntilNul(page.boards[chosen].title[:]), .selected = chosen == page.selected,
@@ -274,24 +267,24 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
     average := current.average[0] != cast(u8)0
     name_width := width * (ifx average then 0.5 else 0.666667)
     value_width := (width - name_width) / (ifx average then 2.0 else 1.0)
-    Text(session, TextProps.{.key = cast(u64)55200,
+    Text.Draw(session, Text.Props.{.key = cast(u64)55200,
             .text = LeaderboardLabel("profile_friends_title", "Friends"),
             .bounds = Rectangle.{x + 84.0 * scale, y, name_width - 92.0 * scale, 44.0 * scale},
-            .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+            .size = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
     for metric: cast(s32)0..(ifx average then 1 else 0) {
         left := x + name_width + cast(float32)metric * value_width
         label := TextUntilNul(ifx metric == 0 then current.primary[:] else current.average[:])
-        if Button(session, ButtonProps.{.id = 55201 + metric,
+        if Button.Draw(session, Button.Props.{.id = 55201 + metric,
                 .bounds = Rectangle.{left, y, value_width, 44.0 * scale},
                 .label = label, .invisible = true}) != 0 && metric != page.metric {
             ProfileLeaderboardSelect(page.selected, metric)
         }
-        Text(session, TextProps.{.key = cast(u64)(55210 + metric), .text = label,
+        Text.Draw(session, Text.Props.{.key = cast(u64)(55210 + metric), .text = label,
                 .bounds = Rectangle.{left + 8.0 * scale, y, value_width - 16.0 * scale, 44.0 * scale},
-                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-                .wrap = TextWrap.TextWrapEllipsis})
+                .size = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = Text.Wrap.TextWrapEllipsis})
         if metric == page.metric {
-            Box(session, BoxProps.{.key = cast(u64)(55220 + metric),
+            Box.Draw(session, Box.Props.{.key = cast(u64)(55220 + metric),
                     .bounds = Rectangle.{left + 8.0 * scale, y + 42.0 * scale, value_width - 16.0 * scale, 2.0 * scale},
                     .fill = Color.{73, 166, 142, 255}})
         }
@@ -306,22 +299,22 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         row_y := y + cast(float32)(index * row_height)
         key := cast(u64)(55400 + index * 16)
         if row.own || index % 2 == 1 {
-            Box(session, BoxProps.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},
+            Box.Draw(session, Box.Props.{.key = key, .bounds = Rectangle.{x, row_y, width, cast(float32)row_height},
                     .fill = ifx row.own then Color.{156, 188, 143, 64} else Color.{156, 156, 156, 24}, .radius = 8.0 * scale})
         }
         rank: [16]u8
         rank_text := FormatInteger(index + 1, rank[:])
-        Text(session, TextProps.{.key = key + 1, .text = rank_text,
+        Text.Draw(session, Text.Props.{.key = key + 1, .text = rank_text,
                 .bounds = Rectangle.{x + 8.0 * scale, row_y, 24.0 * scale, cast(float32)row_height},
-                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-                .wrap = TextWrap.TextWrapEllipsis})
-        Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(row.name[:]),
+                .size = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = Text.Wrap.TextWrapEllipsis})
+        Text.Draw(session, Text.Props.{.key = key + 2, .text = TextUntilNul(row.name[:]),
                 .bounds = Rectangle.{x + 84.0 * scale, row_y, name_width - 92.0 * scale, cast(float32)row_height},
-                .font = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
-        Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(row.value[:]),
+                .size = font, .vertical_align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
+        Text.Draw(session, Text.Props.{.key = key + 3, .text = TextUntilNul(row.value[:]),
                 .bounds = Rectangle.{x + name_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
-                .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-                .wrap = TextWrap.TextWrapEllipsis})
+                .size = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                .wrap = Text.Wrap.TextWrapEllipsis})
         picture_bounds := Rectangle.{x + 40.0 * scale, row_y + 6.0 * scale, 32.0 * scale, 32.0 * scale}
         game := TextUntilNul(current.id[:])
         worm := (game == "xyz.waozi.wurm" || game == "wurm") &&
@@ -329,10 +322,10 @@ ProfileLeaderboardFrame :: (navigation: bool) -> bool {
         shovey := ProfileLeaderboardShovey(session, key + 5, game, row.game_icon, picture_bounds)
         if !worm && !shovey { ProfileLeaderboardPicture(session, key + 5, row.icon, picture_bounds) }
         if average {
-            Text(session, TextProps.{.key = key + 4, .text = TextUntilNul(row.average[:]),
+            Text.Draw(session, Text.Props.{.key = key + 4, .text = TextUntilNul(row.average[:]),
                     .bounds = Rectangle.{x + name_width + value_width + 8.0 * scale, row_y, value_width - 16.0 * scale, cast(float32)row_height},
-                    .font = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
-                    .wrap = TextWrap.TextWrapEllipsis})
+                    .size = font, .align = TextAlign.TextAlignEnd, .vertical_align = TextAlign.TextAlignCenter,
+                    .wrap = Text.Wrap.TextWrapEllipsis})
         }
     }
     unused End(session)

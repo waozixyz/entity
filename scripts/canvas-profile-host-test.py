@@ -20,10 +20,13 @@ env = dict(os.environ)
 for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'SESSION_MANAGER',
             'GDK_DISPLAY', 'DESKTOP_SESSION', 'XDG_SESSION_ID', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP'):
     env.pop(key, None)
-bun = env.get('BUN', str(Path.home() / '.bun/bin/bun'))
+bun = env.get('BUN') or shutil.which('bun') or str(Path.home() / '.bun/bin/bun')
 env.update(EM_NODE_JS=bun, JS_RUNTIME=bun, YUE_DESKTOP_RECOVERY='0',
            ZIRAN_JOBS='1', EMCC_CORES='1', CMAKE_BUILD_PARALLEL_LEVEL='1')
-ziran = env.get('ZIRAN', str(root / 'scripts/ziran.sh'))
+# Consumer commands resolve the consumer manifest; scripts/ziran.sh always
+# enters Entity's root, so the cwd-aware front end runs them, including build-web.
+ziran = 'ziran'
+env['ZIRAN'] = ziran
 consumer = work / 'consumer'
 consumer.mkdir(exist_ok=True)
 (consumer / 'src').mkdir(exist_ok=True)

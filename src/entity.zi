@@ -27,29 +27,20 @@
 #import "kryon/app_protocol"
 #import "session"
 #import "geometry"
-#import "text_props"
+Text :: #import "kryon/text";
 #import "text_align"
-#import "text_widget"
-#import "kryon/text_measure"
-#import "text_input_props"
-#import "text_field_widget"
-#import "button_props"
-#import "button_widget"
+TextMeasure :: #import "kryon/text_measure";
+TextField :: #import "kryon/text_field";
+Button :: #import "kryon/button";
 #import "control_props"
-#import "scroll_props"
-#import "scroll_widget"
+Scroll :: #import "kryon/scroll";
 #import "tree"
-#import "image_props"
-#import "image_widget"
+Image :: #import "kryon/image";
 #import "drawing_props"
-#import "box_props"
-#import "box_widget"
-#import "toggle_widget"
-#import "toggle_props"
-#import "kryon/svg_icon_props"
-#import "kryon/svg_icon_widget"
-#import "kryon/modal_props"
-#import "kryon/modal_frame_widget"
+Box :: #import "kryon/box";
+Toggle :: #import "kryon/toggle";
+SvgIcon :: #import "kryon/svg_icon";
+Modal :: #import "kryon/modal";
 
 Field :: struct { cursor: s32; anchor: s32; scroll_x: s32; focused: bool }
 state: EntityState;
@@ -101,13 +92,13 @@ Label :: (key: string, fallback: string) -> string {
 }
 
 TextLine :: (key: u64, text: string, x: float32, y: float32, width: float32, font: s32 = 16) {
-    Text(session, TextProps.{.key = key, .text = text,
-            .bounds = Rectangle.{x, y, width, (ifx font > 20 then cast(float32)font * 1.4 else 28.0) * scale}, .font = cast(s32)(cast(float32)font * scale),
-            .wrap = TextWrap.TextWrapEllipsis})
+    Text.Draw(session, Text.Props.{.key = key, .text = text,
+            .bounds = Rectangle.{x, y, width, (ifx font > 20 then cast(float32)font * 1.4 else 28.0) * scale}, .size = cast(s32)(cast(float32)font * scale),
+            .wrap = Text.Wrap.TextWrapEllipsis})
 }
 
 Action :: (id: s32, label: string, bounds: Rectangle, selected: bool = false, danger: bool = false) -> bool {
-    return Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+    return Button.Draw(session, Button.Props.{.key = cast(u64)id, .id = id,
             .bounds = bounds, .label = label, .selected = selected,
             .tone = ifx danger then ButtonTone.ButtonToneDanger else ifx selected then ButtonTone.ButtonToneAccent else ButtonTone.ButtonToneNeutral,
             .emphasis = ifx selected then ButtonEmphasis.ButtonEmphasisFilled else ButtonEmphasis.ButtonEmphasisSoft,
@@ -138,7 +129,7 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
     field := *fields[index]
     snapshot: [1024]u8
     for byte: 0..buffer.count - 1 { snapshot[byte] = buffer[byte] }
-    props := TextFieldProps.{.key = cast(u64)(100 + index), .focus_id = 100 + index,
+    props := TextField.Props.{.key = cast(u64)(100 + index), .focus_id = 100 + index,
         .bounds = bounds, .label = label, .scale = scale,
         .placeholder = ifx index == 0 then Label("entity.name_placeholder", "Your name") else label,
         .value = TextUntilNul(snapshot[:]), .cursor = field.cursor,
@@ -146,7 +137,7 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
         .max_bytes = cast(s32)buffer.count - 1, .max_codepoints = maximum, .secure = secure}
     if secure { props.display_value = PasswordMask(TextUntilNul(snapshot[:]), password_mask[:]) }
     if field.focused { props.input = AppFieldInput() }
-    result := TextField(session, props)
+    result := TextField.Draw(session, props)
     if result.edit.changed {
         edit := result.edit
         length: s64 = 0
@@ -171,9 +162,9 @@ EditField :: (index: s32, buffer: []u8, label: string, bounds: Rectangle, maximu
 }
 
 Paragraph :: (key: u64, text: string, x: float32, y: float32, width: float32, height: float32, font: s32 = 14) {
-    Text(session, TextProps.{.key = key, .text = text,
+    Text.Draw(session, Text.Props.{.key = key, .text = text,
             .bounds = Rectangle.{x, y, width, height * scale},
-            .font = cast(s32)(cast(float32)font * scale), .wrap = TextWrap.TextWrapAuto})
+            .size = cast(s32)(cast(float32)font * scale), .wrap = Text.Wrap.TextWrapAuto})
 }
 
 PollManagement :: () {
@@ -359,8 +350,8 @@ ManagementBack :: () -> bool {
 }
 
 Muted :: (key: u64, text: string, x: float32, y: float32, width: float32, font: s32 = 14, align: TextAlign = TextAlign.TextAlignStart) {
-    Text(session, TextProps.{.key = key, .text = text, .bounds = Rectangle.{x, y, width, 24.0 * scale},
-            .font = cast(s32)(cast(float32)font * scale), .wrap = TextWrap.TextWrapEllipsis,
+    Text.Draw(session, Text.Props.{.key = key, .text = text, .bounds = Rectangle.{x, y, width, 24.0 * scale},
+            .size = cast(s32)(cast(float32)font * scale), .wrap = Text.Wrap.TextWrapEllipsis,
             .align = align, .disabled = true})
 }
 
@@ -368,7 +359,7 @@ Muted :: (key: u64, text: string, x: float32, y: float32, width: float32, font: 
 // plain text for quiet and dangerous actions.
 WideButton :: (id: s32, label: string, x: float32, y: *float32, width: float32, filled: bool = false,
     quiet: bool = false, danger: bool = false) -> bool {
-    pressed := Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+    pressed := Button.Draw(session, Button.Props.{.key = cast(u64)id, .id = id,
             .bounds = Rectangle.{x, y.*, width, 48.0 * scale}, .label = label, .selected = filled,
             .tone = ifx danger then ButtonTone.ButtonToneDanger else ifx filled then ButtonTone.ButtonToneAccent else ButtonTone.ButtonToneNeutral,
             .emphasis = ifx filled then ButtonEmphasis.ButtonEmphasisFilled else ifx quiet || danger then ButtonEmphasis.ButtonEmphasisGhost else ButtonEmphasis.ButtonEmphasisSoft}) != 0
@@ -394,15 +385,15 @@ ListRow :: (id: s32, label: string, value: string, x: float32, y: *float32, widt
     dot: s32 = 0, icon: string = "", subtitle: string = "", danger: bool = false) -> bool {
     height := (ifx subtitle == "" then 60.0 else 76.0) * scale
     row := Rectangle.{x, y.*, width, height}
-    pressed := Button(session, ButtonProps.{.key = cast(u64)id, .id = id, .bounds = row,
+    pressed := Button.Draw(session, Button.Props.{.key = cast(u64)id, .id = id, .bounds = row,
             .label = label, .invisible = true,
             .tone = ifx danger then ButtonTone.ButtonToneDanger else ButtonTone.ButtonToneNeutral}) != 0
     color := ifx danger then ThemeOr("danger", 0xe78a86ff, 0xb53e38ff) else ThemeOr("text", 0xe5eef3ff, 0x203b4bff)
-    SvgIcon(session, SvgIconProps.{.shape = ifx icon == "" then ProfileRowShape(id) else icon, .color = color,
+    SvgIcon.Draw(session, SvgIcon.Props.{.shape = ifx icon == "" then ProfileRowShape(id) else icon, .color = color,
             .bounds = Rectangle.{x + 4.0 * scale, y.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
     left := x + 44.0 * scale
     if dot != 0 {
-        Box(session, BoxProps.{.key = cast(u64)(id + 31000),
+        Box.Draw(session, Box.Props.{.key = cast(u64)(id + 31000),
                 .bounds = Rectangle.{left, y.* + 23.0 * scale, 10.0 * scale, 10.0 * scale}, .radius = 5.0 * scale,
                 .fill = ifx dot == 1 then ThemeOr("accent", 0x49a68eff, 0x298a71ff) else ThemeOr("border", 0x34514aff, 0xc9d6d1ff)})
         left += 22.0 * scale
@@ -415,9 +406,9 @@ ListRow :: (id: s32, label: string, value: string, x: float32, y: *float32, widt
         Muted(cast(u64)(id + 33000), value, left + label_width, y.* + 16.0 * scale,
             x + width - 32.0 * scale - (left + label_width), 14, TextAlign.TextAlignEnd)
     }
-    SvgIcon(session, SvgIconProps.{.shape = "S1.7rr:M9 5L16 12L9 19", .color = color,
+    SvgIcon.Draw(session, SvgIcon.Props.{.shape = "S1.7rr:M9 5L16 12L9 19", .color = color,
             .bounds = Rectangle.{x + width - 24.0 * scale, y.* + 18.0 * scale, 20.0 * scale, 20.0 * scale}})
-    Box(session, BoxProps.{.key = cast(u64)(id + 36000),
+    Box.Draw(session, Box.Props.{.key = cast(u64)(id + 36000),
             .bounds = Rectangle.{x + 44.0 * scale, y.* + height, width - 44.0 * scale, 1.0},
             .fill = ThemeOr("border", 0x34514aff, 0xdde7e3ff)})
     y.* += height + 8.0 * scale
@@ -559,7 +550,7 @@ AccountSummary :: (x: float32, y: *float32, width: float32) {
     }
     padding := 16.0 * scale
     height := padding * 2.0 + 56.0 * scale + SignInChoicesHeight() - 12.0 * scale
-    Box(session, BoxProps.{.key = cast(u64)703, .bounds = Rectangle.{x, y.*, width, height},
+    Box.Draw(session, Box.Props.{.key = cast(u64)703, .bounds = Rectangle.{x, y.*, width, height},
             .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff),
             .border = ThemeOr("border", 0x34514aff, 0xdde7e3ff), .radius = 16.0 * scale})
     inner := x + padding
@@ -576,18 +567,18 @@ PublicIdLine :: (id: s32, bounds: Rectangle) {
     identity := TextUntilNul(management.public_id[:])
     text_bounds := bounds
     text_bounds.width -= 48.0 * scale
-    props := TextProps.{.key = cast(u64)(id + 1000), .text = AccountName(),
-        .bounds = text_bounds, .font = cast(s32)(14.0 * scale),
+    props := Text.Props.{.key = cast(u64)(id + 1000), .text = AccountName(),
+        .bounds = text_bounds, .size = cast(s32)(14.0 * scale),
         .align = TextAlign.TextAlignCenter, .vertical_align = TextAlign.TextAlignCenter,
-        .wrap = TextWrap.TextWrapEllipsis}
-    if TextWidth(session, props) > cast(s32)text_bounds.width { props.text = ShortId(identity) }
-    group_width := cast(float32)TextWidth(session, props) + 52.0 * scale
+        .wrap = Text.Wrap.TextWrapEllipsis}
+    if TextMeasure.TextWidth(session, props) > cast(s32)text_bounds.width { props.text = ShortId(identity) }
+    group_width := cast(float32)TextMeasure.TextWidth(session, props) + 52.0 * scale
     if group_width > bounds.width { group_width = bounds.width }
     text_bounds.x = bounds.x + (bounds.width - group_width) * 0.5
     text_bounds.width = group_width - 52.0 * scale
     props.bounds = text_bounds
-    Text(session, props)
-    if Button(session, ButtonProps.{.key = cast(u64)id, .id = id,
+    Text.Draw(session, props)
+    if Button.Draw(session, Button.Props.{.key = cast(u64)id, .id = id,
             .bounds = text_bounds, .label = Label("entity.public_id", "Public ID"), .invisible = true}) != 0 {
         public_id_owner = management.public_id
         public_id_target = management.public_id
@@ -596,7 +587,7 @@ PublicIdLine :: (id: s32, bounds: Rectangle) {
         public_id_open = true
         fields = .{}
     }
-    if Button(session, ButtonProps.{.key = cast(u64)(id + 1), .id = id + 1,
+    if Button.Draw(session, Button.Props.{.key = cast(u64)(id + 1), .id = id + 1,
             .bounds = Rectangle.{text_bounds.x + text_bounds.width + 8.0 * scale, bounds.y, 44.0 * scale, 44.0 * scale},
             .label = Label(ifx public_id_copied then "entity.copied" else "entity.copy_id", ifx public_id_copied then "Copied" else "Copy public ID"), .icon_only = true,
             .icon_shape = ifx public_id_copied then "S1.8rr:M5 12L10 17L20 7" else "S1.6rr:M8 8H20V20H8ZM16 8V4H4V16H8",
@@ -619,7 +610,7 @@ PublicIdModal :: () {
     if width > 680.0 * scale { width = 680.0 * scale }
     height := area.height - 24.0 * scale
     if height > 520.0 * scale { height = 520.0 * scale }
-    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)19500, .id = 19500,
+    modal := Modal.Draw(session, Modal.Props.{.key = cast(u64)19500, .id = 19500,
             .title = Label("entity.public_id", "Public ID"),
             .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
             .scale = scale, .has_right_action = true, .right_label = Label("entity.done", "Done")})
@@ -631,20 +622,20 @@ PublicIdModal :: () {
     start: s64 = 0
     length: s64 = 0
     for byte, index: identity {
-        probe := TextProps.{.text = identity[start:index + 1], .font = cast(s32)(15.0 * scale)}
-        if index > start && TextWidth(session, probe) > cast(s32)(content.width - 16.0 * scale) {
+        probe := Text.Props.{.text = identity[start:index + 1], .size = cast(s32)(15.0 * scale)}
+        if index > start && TextMeasure.TextWidth(session, probe) > cast(s32)(content.width - 16.0 * scale) {
             public_id_display[length] = #char "\n"; length += 1; start = index
         }
         public_id_display[length] = byte; length += 1
     }
     public_id_display[length] = 0
-    props := TextProps.{.key = cast(u64)19502, .text = TextUntilNul(public_id_display[:]),
+    props := Text.Props.{.key = cast(u64)19502, .text = TextUntilNul(public_id_display[:]),
         .bounds = Rectangle.{0.0, 0.0, content.width - 16.0 * scale, 0.0},
-        .font = cast(s32)(15.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapAuto}
-    id_height := cast(float32)TextHeight(session, props) + 16.0 * scale
+        .size = cast(s32)(15.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapAuto}
+    id_height := cast(float32)TextMeasure.TextHeight(session, props) + 16.0 * scale
     if id_height < 44.0 * scale { id_height = 44.0 * scale }
     // Short landscape screens scroll; the complete ID never truncates.
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)19501, .bounds = content,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)19501, .bounds = content,
             .content_height = cast(s32)(336.0 * scale + id_height), .scroll_offset = public_id_scroll, .scale = scale})
     public_id_scroll = scroll.scroll_offset
     if scroll.opened {
@@ -652,8 +643,8 @@ PublicIdModal :: () {
         side := DrawConnectionCode(identity, scroll.content.x, y, scroll.content.width)
         y += side + 16.0 * scale
         props.bounds = Rectangle.{scroll.content.x + 8.0 * scale, y, scroll.content.width - 16.0 * scale, id_height}
-        Text(session, props)
-        if Button(session, ButtonProps.{.key = cast(u64)19503, .id = 19503,
+        Text.Draw(session, props)
+        if Button.Draw(session, Button.Props.{.key = cast(u64)19503, .id = 19503,
                 .bounds = props.bounds, .label = identity, .invisible = true}) != 0 {
             public_id_copied = ClipboardCopy(identity, 0)
         }
@@ -721,11 +712,11 @@ DrawConnectionCode :: (text: string, x: float32, y: float32, width: float32) -> 
     side := cell * modules
     left := cast(s32)(x + (width - cast(float32)side) * 0.5)
     top := cast(s32)y
-    Box(session, BoxProps.{.key = cast(u64)19000, .radius = 8.0 * scale,
+    Box.Draw(session, Box.Props.{.key = cast(u64)19000, .radius = 8.0 * scale,
             .bounds = Rectangle.{cast(float32)left, y, cast(float32)side, cast(float32)side}, .fill = Color.{255, 255, 255, 255}})
     for index: 0..qr_rect_count - 1 {
         rect := qr_rects[index]
-        Box(session, BoxProps.{.key = cast(u64)(20000 + index),
+        Box.Draw(session, Box.Props.{.key = cast(u64)(20000 + index),
                 .bounds = Rectangle.{cast(float32)(left + (rect.column + 4) * cell), cast(float32)(top + (rect.row + 4) * cell),
                     cast(float32)(rect.width * cell), cast(float32)(rect.height * cell)}, .fill = Color.{0, 0, 0, 255}})
     }
@@ -756,14 +747,14 @@ AccountActions :: (x: float32, y: *float32, width: float32) {
     if !management.account { return }
     if CanManage(ACCOUNT_SYNC) {
         // Laid out like ListRow: icon, label and divider, with the toggle for its arrow.
-        SvgIcon(session, SvgIconProps.{.shape = SYNC_SHAPE, .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff),
+        SvgIcon.Draw(session, SvgIcon.Props.{.shape = SYNC_SHAPE, .color = ThemeOr("text", 0xe5eef3ff, 0x203b4bff),
                 .bounds = Rectangle.{x + 4.0 * scale, y.* + 16.0 * scale, 24.0 * scale, 24.0 * scale}})
         TextLine(815, Label("entity.sync", "Sync"), x + 44.0 * scale, y.* + 16.0 * scale, width - 120.0 * scale, 16)
-        result := Toggle(session, ToggleProps.{.key = cast(u64)816, .id = 816,
+        result := Toggle.Draw(session, Toggle.Props.{.key = cast(u64)816, .id = 816,
                 .bounds = Rectangle.{x + width - 64.0 * scale, y.* + 10.0 * scale, 64.0 * scale, 40.0 * scale},
                 .label = Label("entity.sync", "Sync"), .value = management.enabled, .disabled = management_waiting > management.completed})
         if result.changed { Manage("set_sync", "", "", ifx result.value then 1 else 0) }
-        Box(session, BoxProps.{.key = cast(u64)36815,
+        Box.Draw(session, Box.Props.{.key = cast(u64)36815,
                 .bounds = Rectangle.{x + 44.0 * scale, y.* + 60.0 * scale, width - 44.0 * scale, 1.0},
                 .fill = ThemeOr("border", 0x34514aff, 0xdde7e3ff)})
         y.* += 68.0 * scale
@@ -842,11 +833,11 @@ PasswordProblem :: (password: string) -> string {
 
 // Text of any length: it takes the lines it needs and moves the page down.
 Note :: (key: u64, text: string, x: float32, y: *float32, width: float32) {
-    props := TextProps.{.key = key, .text = text, .bounds = Rectangle.{x, y.*, width, 0.0},
-        .font = cast(s32)(14.0 * scale), .wrap = TextWrap.TextWrapAuto}
-    height := cast(float32)TextHeight(session, props)
+    props := Text.Props.{.key = key, .text = text, .bounds = Rectangle.{x, y.*, width, 0.0},
+        .size = cast(s32)(14.0 * scale), .wrap = Text.Wrap.TextWrapAuto}
+    height := cast(float32)TextMeasure.TextHeight(session, props)
     props.bounds.height = height
-    Text(session, props)
+    Text.Draw(session, props)
     y.* += height + 12.0 * scale
 }
 
@@ -1017,7 +1008,7 @@ LinkPage :: (x: float32, y: *float32, width: float32) {
         if CanManage(ACCOUNT_PASTE) && WideButton(835, Label("entity.paste_code", "Paste a code"), x, y, width) { Manage("link_paste") }
         y.* += 8.0 * scale
         unused EditField(5, account_code[:], Label("entity.enter_code", "Or type a code"), Rectangle.{x, y.*, width - 112.0 * scale, 48.0 * scale}, 1023)
-        if Button(session, ButtonProps.{.key = cast(u64)836, .id = 836, .label = Label("entity.connect", "Connect"),
+        if Button.Draw(session, Button.Props.{.key = cast(u64)836, .id = 836, .label = Label("entity.connect", "Connect"),
                 .bounds = Rectangle.{x + width - 104.0 * scale, y.*, 104.0 * scale, 48.0 * scale},
                 .disabled = account_code[0] == cast(u8)0,
                 .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
@@ -1084,7 +1075,7 @@ NodePage :: (x: float32, y: *float32, width: float32) {
     }
     if state.show_storage && at >= 0 && management.nodes[at].media_supported {
         TextLine(864, Label("entity.node_media", "Upload photos and videos"), x, y.* + 10.0 * scale, width - 80.0 * scale, 15)
-        result := Toggle(session, ToggleProps.{.key = cast(u64)865, .id = 865,
+        result := Toggle.Draw(session, Toggle.Props.{.key = cast(u64)865, .id = 865,
                 .bounds = Rectangle.{x + width - 64.0 * scale, y.*, 64.0 * scale, 40.0 * scale},
                 .label = Label("entity.node_media", "Upload photos and videos"), .value = management.nodes[at].media,
                 .disabled = management.busy || management_waiting > management.completed})
@@ -1148,9 +1139,9 @@ DrawAccount :: () {
     width := area.width - 40.0 * scale
     if width > 680.0 * scale { width = 680.0 * scale }
     if width < 160.0 * scale { return }
-    Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
+    Box.Draw(session, Box.Props.{.key = cast(u64)2, .bounds = area,
             .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)1, .bounds = area,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)1, .bounds = area,
             .content_height = cast(s32)account_height, .scroll_offset = management_scroll, .scale = scale})
     management_scroll = scroll.scroll_offset
     if !scroll.opened { return }
@@ -1191,7 +1182,7 @@ DrawAccount :: () {
     AliasPurchaseModal()
 }
 
-Picture :: (index: s32, bounds: Rectangle) -> ImageProps {
+Picture :: (index: s32, bounds: Rectangle) -> Image.Props {
     image := EntityIconImage(EntityPictureIcon(0, index, 0), bounds, Label("entity.picture", "Profile picture"))
     if asset_root[0] != cast(u8)0 {
         path: Vec(u8)
@@ -1265,10 +1256,10 @@ Draw :: () {
     if inline_dew { ProfileDewRead() }
     inline_activity := AppSupports("entity.activity")
     if inline_activity { ProfileActivityRead() }
-    Box(session, BoxProps.{.key = cast(u64)2, .bounds = area,
+    Box.Draw(session, Box.Props.{.key = cast(u64)2, .bounds = area,
             .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
     // The column scrolls over the height the previous frame drew.
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)1,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)1,
             .bounds = area, .content_height = cast(s32)profile_height,
             .scroll_offset = scroll_offset, .scale = scale})
     scroll_offset = scroll.scroll_offset
@@ -1281,7 +1272,7 @@ Draw :: () {
         y += 44.0 * scale
     }
     center_x := x + width * 0.5
-    Box(session, BoxProps.{.key = cast(u64)6,
+    Box.Draw(session, Box.Props.{.key = cast(u64)6,
             .bounds = Rectangle.{center_x - 44.0 * scale, y, 88.0 * scale, 88.0 * scale},
             .radius = 44.0 * scale, .fill = ThemeOr("surface", 0x2a4540ff, 0xeaf1eaff)})
     ProfilePicture(9, Rectangle.{center_x - 40.0 * scale, y + 4.0 * scale, 80.0 * scale, 80.0 * scale})
@@ -1310,8 +1301,8 @@ Draw :: () {
     ExtensionRows(x, *y, width)
     if management.available { AccountActions(x, *y, width) }
     if notice != "" {
-        Text(session, TextProps.{.key = cast(u64)22, .text = notice,
-                .bounds = Rectangle.{x, y, width, 40.0 * scale}, .font = cast(s32)(13.0 * scale), .wrap = TextWrap.TextWrapAuto})
+        Text.Draw(session, Text.Props.{.key = cast(u64)22, .text = notice,
+                .bounds = Rectangle.{x, y, width, 40.0 * scale}, .size = cast(s32)(13.0 * scale), .wrap = Text.Wrap.TextWrapAuto})
         y += 48.0 * scale
     }
     AppearanceControls(x, *y, width, state.controls)
@@ -1588,22 +1579,22 @@ ProfileActivity :: (x: float32, y: float32, width: float32, draw: bool) -> float
             stat := activity_stats[index]
             left := x + cast(float32)index * (tile + gap)
             center := left + tile * 0.5
-            Box(session, BoxProps.{.key = cast(u64)(1200 + index), .bounds = Rectangle.{left, y, tile, height},
+            Box.Draw(session, Box.Props.{.key = cast(u64)(1200 + index), .bounds = Rectangle.{left, y, tile, height},
                     .fill = Darken(ThemeOr("canvas", 0x142724ff, 0xeef4f2ff), 7), .radius = 12.0 * scale})
             shape := ActivityShape(TextUntilNul(stat.icon[:]))
             if shape != "" {
-                Box(session, BoxProps.{.key = cast(u64)(1210 + index),
+                Box.Draw(session, Box.Props.{.key = cast(u64)(1210 + index),
                         .bounds = Rectangle.{center - 17.0 * scale, y + 9.0 * scale, 34.0 * scale, 34.0 * scale},
                         .fill = ThemeOr("accent", 0x49a68eff, 0x298a71ff), .radius = 17.0 * scale})
-                SvgIcon(session, SvgIconProps.{.shape = shape, .color = Color.{255, 255, 255, 255},
+                SvgIcon.Draw(session, SvgIcon.Props.{.shape = shape, .color = Color.{255, 255, 255, 255},
                         .bounds = Rectangle.{center - 9.0 * scale, y + 17.0 * scale, 18.0 * scale, 18.0 * scale}})
             }
-            Text(session, TextProps.{.key = cast(u64)(1220 + index), .text = TextUntilNul(stat.label[:]),
+            Text.Draw(session, Text.Props.{.key = cast(u64)(1220 + index), .text = TextUntilNul(stat.label[:]),
                     .bounds = Rectangle.{left + 4.0 * scale, y + 50.0 * scale, tile - 8.0 * scale, 22.0 * scale},
-                    .font = cast(s32)(13.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
-            Text(session, TextProps.{.key = cast(u64)(1230 + index), .text = TextUntilNul(stat.value[:]),
+                    .size = cast(s32)(13.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
+            Text.Draw(session, Text.Props.{.key = cast(u64)(1230 + index), .text = TextUntilNul(stat.value[:]),
                     .bounds = Rectangle.{left + 4.0 * scale, y + 74.0 * scale, tile - 8.0 * scale, 30.0 * scale},
-                    .font = cast(s32)(22.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+                    .size = cast(s32)(22.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
         }
     }
     return height + 16.0 * scale
@@ -1651,8 +1642,8 @@ DewFundingCode :: (address: string, uri: string, x: float32, y: *float32, width:
     length: s64 = 0
     font := cast(s32)(14.0 * scale)
     for byte, index: address {
-        probe := TextProps.{.text = address[start:index + 1], .font = font}
-        if index > start && TextWidth(session, probe) > cast(s32)(width - 16.0 * scale) {
+        probe := Text.Props.{.text = address[start:index + 1], .size = font}
+        if index > start && TextMeasure.TextWidth(session, probe) > cast(s32)(width - 16.0 * scale) {
             display[length] = #char "\n"
             length += 1
             start = index
@@ -1660,11 +1651,11 @@ DewFundingCode :: (address: string, uri: string, x: float32, y: *float32, width:
         display[length] = byte
         length += 1
     }
-    props := TextProps.{.key = cast(u64)45009, .text = TextUntilNul(display[:]),
+    props := Text.Props.{.key = cast(u64)45009, .text = TextUntilNul(display[:]),
         .bounds = Rectangle.{x + 8.0 * scale, y.*, width - 16.0 * scale, 0.0},
-        .font = font, .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapAuto}
-    props.bounds.height = cast(float32)TextHeight(session, props) + 8.0 * scale
-    Text(session, props)
+        .size = font, .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapAuto}
+    props.bounds.height = cast(float32)TextMeasure.TextHeight(session, props) + 8.0 * scale
+    Text.Draw(session, props)
     y.* += props.bounds.height + 12.0 * scale
     if Action(45010, Label("entity.copy_address", "Copy address"), Rectangle.{x, y.*, width, 44.0 * scale}) {
         unused ClipboardCopy(address, 0)
@@ -1712,9 +1703,9 @@ DewDrops :: (key: s32, count: s32, x: float32, y: float32, width: float32) {
         top := y
         if count == 1 { top = y + 3.0 * scale } else if index % 2 == 0 { top = y + 6.0 * scale }
         cx := left + cast(float32)index * step
-        Box(session, BoxProps.{.key = cast(u64)(key + index * 2), .bounds = Rectangle.{cx, top, drop, drop},
+        Box.Draw(session, Box.Props.{.key = cast(u64)(key + index * 2), .bounds = Rectangle.{cx, top, drop, drop},
                 .fill = accent, .border = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .radius = drop * 0.5})
-        SvgIcon(session, SvgIconProps.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
+        SvgIcon.Draw(session, SvgIcon.Props.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
                 .bounds = Rectangle.{cx + drop * 0.22, top + drop * 0.2, drop * 0.56, drop * 0.6}})
     }
 }
@@ -1724,32 +1715,32 @@ DewPackCard :: (key: s32, title: string, subtitle: string, drops: s32, price: st
     bounds: Rectangle, chosen: bool, enabled: bool) -> bool {
     accent := ThemeOr("accent", 0x49a68eff, 0x298a71ff)
     if chosen {
-        Box(session, BoxProps.{.key = cast(u64)key, .bounds = Rectangle.{bounds.x - 2.0 * scale, bounds.y - 2.0 * scale,
+        Box.Draw(session, Box.Props.{.key = cast(u64)key, .bounds = Rectangle.{bounds.x - 2.0 * scale, bounds.y - 2.0 * scale,
                     bounds.width + 4.0 * scale, bounds.height + 4.0 * scale}, .fill = accent, .radius = 16.0 * scale})
     }
-    Box(session, BoxProps.{.key = cast(u64)(key + 1), .bounds = bounds,
+    Box.Draw(session, Box.Props.{.key = cast(u64)(key + 1), .bounds = bounds,
             .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff),
             .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 14.0 * scale})
     // A card without drops, the custom amount, keeps its middle for the field.
     title_y := ifx drops > 0 then 58.0 * scale else 18.0 * scale
     if drops > 0 { DewDrops(key + 10, drops, bounds.x, bounds.y + 16.0 * scale, bounds.width) }
-    Text(session, TextProps.{.key = cast(u64)(key + 2), .text = title,
+    Text.Draw(session, Text.Props.{.key = cast(u64)(key + 2), .text = title,
             .bounds = Rectangle.{bounds.x + 6.0 * scale, bounds.y + title_y, bounds.width - 12.0 * scale, 36.0 * scale},
-            .font = cast(s32)(26.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
-    Text(session, TextProps.{.key = cast(u64)(key + 3), .text = subtitle,
+            .size = cast(s32)(26.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
+    Text.Draw(session, Text.Props.{.key = cast(u64)(key + 3), .text = subtitle,
             .bounds = Rectangle.{bounds.x + 6.0 * scale, bounds.y + 94.0 * scale, bounds.width - 12.0 * scale, 22.0 * scale},
-            .font = cast(s32)(13.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+            .size = cast(s32)(13.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
     if badge != "" {
-        badge_width := cast(float32)TextWidth(session, TextProps.{.text = badge, .font = cast(s32)(12.0 * scale)}) + 16.0 * scale
+        badge_width := cast(float32)TextMeasure.TextWidth(session, Text.Props.{.text = badge, .size = cast(s32)(12.0 * scale)}) + 16.0 * scale
         if badge_width > bounds.width - 12.0 * scale { badge_width = bounds.width - 12.0 * scale }
         badge_x := bounds.x + bounds.width - badge_width - 6.0 * scale
-        Box(session, BoxProps.{.key = cast(u64)(key + 4), .bounds = Rectangle.{badge_x, bounds.y - 9.0 * scale, badge_width, 22.0 * scale},
+        Box.Draw(session, Box.Props.{.key = cast(u64)(key + 4), .bounds = Rectangle.{badge_x, bounds.y - 9.0 * scale, badge_width, 22.0 * scale},
                 .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff), .border = accent, .radius = 11.0 * scale})
-        Text(session, TextProps.{.key = cast(u64)(key + 5), .text = badge,
+        Text.Draw(session, Text.Props.{.key = cast(u64)(key + 5), .text = badge,
                 .bounds = Rectangle.{badge_x, bounds.y - 7.0 * scale, badge_width, 18.0 * scale},
-                .font = cast(s32)(12.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = TextWrap.TextWrapEllipsis})
+                .size = cast(s32)(12.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
     }
-    return Button(session, ButtonProps.{.key = cast(u64)(key + 6), .id = key + 6, .label = price,
+    return Button.Draw(session, Button.Props.{.key = cast(u64)(key + 6), .id = key + 6, .label = price,
             .bounds = Rectangle.{bounds.x + 10.0 * scale, bounds.y + bounds.height - 56.0 * scale, bounds.width - 20.0 * scale, 44.0 * scale},
             .disabled = !enabled, .selected = chosen, .tone = ButtonTone.ButtonToneAccent,
             .emphasis = ifx chosen then ButtonEmphasis.ButtonEmphasisFilled else ButtonEmphasis.ButtonEmphasisSoft}) != 0
@@ -1787,9 +1778,9 @@ DrawDew :: () {
     busy := MatchLiteral(json, FieldAt(json, 0, "busy"), "true")
     if dew_refresh && available && !busy { DewCommand("refresh", sequence); dew_refresh = false }
     area := AppBounds()
-    Box(session, BoxProps.{.key = cast(u64)45000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
+    Box.Draw(session, Box.Props.{.key = cast(u64)45000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
     content := ifx dew_height > 0.0 then dew_height else 1180.0 * scale
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)45001, .bounds = area, .content_height = cast(s32)content, .scroll_offset = management_scroll})
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)45001, .bounds = area, .content_height = cast(s32)content, .scroll_offset = management_scroll})
     management_scroll = scroll.scroll_offset
     if !scroll.opened { return }
     defer { End(session) }
@@ -1817,15 +1808,15 @@ DrawDew :: () {
     // The wallet: the balance in a pill, like a game's coin counter.
     refresh_width := 112.0 * scale
     pill_width := width - refresh_width - 12.0 * scale
-    Box(session, BoxProps.{.key = cast(u64)45060, .bounds = Rectangle.{x, y, pill_width, 52.0 * scale},
+    Box.Draw(session, Box.Props.{.key = cast(u64)45060, .bounds = Rectangle.{x, y, pill_width, 52.0 * scale},
             .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 26.0 * scale})
-    Box(session, BoxProps.{.key = cast(u64)45061, .bounds = Rectangle.{x + 8.0 * scale, y + 8.0 * scale, 36.0 * scale, 36.0 * scale},
+    Box.Draw(session, Box.Props.{.key = cast(u64)45061, .bounds = Rectangle.{x + 8.0 * scale, y + 8.0 * scale, 36.0 * scale, 36.0 * scale},
             .fill = ThemeOr("accent", 0x49a68eff, 0x298a71ff), .radius = 18.0 * scale})
-    SvgIcon(session, SvgIconProps.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
+    SvgIcon.Draw(session, SvgIcon.Props.{.shape = DEW_DROP, .color = Color.{255, 255, 255, 255},
             .bounds = Rectangle.{x + 16.0 * scale, y + 15.0 * scale, 20.0 * scale, 22.0 * scale}})
     balance := ifx known then DewDecimal(account.balance, DewUnits, "Dew") else ifx busy then Label("entity.working", "Working…") else "… Dew"
     TextLine(45006, balance, x + 54.0 * scale, y + 8.0 * scale, pill_width - 62.0 * scale, 22)
-    if !busy && Button(session, ButtonProps.{.key = cast(u64)45007, .id = 45007, .label = Label("entity.refresh", "Refresh"),
+    if !busy && Button.Draw(session, Button.Props.{.key = cast(u64)45007, .id = 45007, .label = Label("entity.refresh", "Refresh"),
             .bounds = Rectangle.{x + width - refresh_width, y + 4.0 * scale, refresh_width, 44.0 * scale},
             .tone = ButtonTone.ButtonToneNeutral, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
         DewCommand("refresh", sequence)
@@ -1951,7 +1942,7 @@ DrawDew :: () {
             y += 56.0 * scale
         } else {
             panel_y := y
-            Box(session, BoxProps.{.key = cast(u64)45072, .bounds = Rectangle.{x, y, width, dew_panel_height},
+            Box.Draw(session, Box.Props.{.key = cast(u64)45072, .bounds = Rectangle.{x, y, width, dew_panel_height},
                     .fill = ThemeOr("surface", 0x1c3330ff, 0xffffffff), .border = ThemeOr("border", 0x34514aff, 0xc9d6d1ff), .radius = 14.0 * scale})
             inner_x := x + 16.0 * scale
             inner := width - 32.0 * scale
@@ -1977,7 +1968,7 @@ DrawDew :: () {
                 count: Vec(u8)
                 BuilderPrint(*count, "%", chosen)
                 label := DewFill(Label("entity.dew_other_coin", "Buy %1 Dew with another coin"), BuilderFinish(count))
-                if Button(session, ButtonProps.{.key = cast(u64)45075, .id = 45075, .label = label,
+                if Button.Draw(session, Button.Props.{.key = cast(u64)45075, .id = 45075, .label = label,
                         .bounds = Rectangle.{inner_x, y, inner, 44.0 * scale}, .tone = ButtonTone.ButtonToneAccent,
                         .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0 {
                     request: Vec(u8)
@@ -2040,7 +2031,7 @@ OpenPicturePicker :: () {
     fields = .{}
 }
 
-AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
+AbstractPicture :: (index: s32, bounds: Rectangle) -> Image.Props {
     image := EntityIconImage(EntityPictureIcon(1, 0, index), bounds, Label("entity.abstract", "Abstract"))
     if asset_root[0] != 0 {
         out: Vec(u8)
@@ -2051,9 +2042,9 @@ AbstractPicture :: (index: s32, bounds: Rectangle) -> ImageProps {
 }
 
 ProfilePicture :: (id: s32, bounds: Rectangle) {
-    if state.picture_kind == 1 { Image(session, AbstractPicture(state.abstract_picture, bounds)) }
-    else { Image(session, Picture(state.picture, bounds)) }
-    if Button(session, ButtonProps.{.key = cast(u64)id, .id = id, .bounds = bounds,
+    if state.picture_kind == 1 { Image.Draw(session, AbstractPicture(state.abstract_picture, bounds)) }
+    else { Image.Draw(session, Picture(state.picture, bounds)) }
+    if Button.Draw(session, Button.Props.{.key = cast(u64)id, .id = id, .bounds = bounds,
             .label = Label("entity.change_picture", "Change picture"), .invisible = true}) != 0 {
         OpenPicturePicker()
     }
@@ -2075,7 +2066,7 @@ PictureModal :: () {
     if width > 620.0 * scale { width = 620.0 * scale }
     height := area.height - 24.0 * scale
     if height > 650.0 * scale { height = 650.0 * scale }
-    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)76000, .id = 76000,
+    modal := Modal.Draw(session, Modal.Props.{.key = cast(u64)76000, .id = 76000,
             .title = Label("entity.picture", "Profile picture"),
             .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
             .scale = scale, .has_right_action = true, .right_label = Label("entity.done", "Done")})
@@ -2095,7 +2086,7 @@ PictureModal :: () {
         if columns < 3 { columns = 3 }
         if columns > 7 { columns = 7 }
         count: s32 = ifx picture_tab == 0 then 3 else 28
-        scroll := Scroll(session, ScrollProps.{.key = cast(u64)76300, .bounds = content,
+        scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)76300, .bounds = content,
                 .content_height = ((count + columns - 1) / columns) * cast(s32)(84.0 * scale), .scroll_offset = picture_scroll, .scale = scale})
         picture_scroll = scroll.scroll_offset
         if scroll.opened {
@@ -2105,7 +2096,7 @@ PictureModal :: () {
             for index: cast(s32)0..count - 1 {
                 if picture_tab == 1 && (state.pictures & (1 << index)) == 0 { continue }
                 image := ifx picture_tab == 0 then AbstractPicture(index, Rectangle.{}) else Picture(index, Rectangle.{})
-                if Button(session, ButtonProps.{.key = cast(u64)(76400 + index), .id = 76400 + index,
+                if Button.Draw(session, Button.Props.{.key = cast(u64)(76400 + index), .id = 76400 + index,
                         .label = labels[picture_tab], .icon_only = true, .image = image,
                         .selected = ifx picture_tab == 0 then state.picture_kind == 1 && state.abstract_picture == index else state.picture_kind == 0 && state.picture == index,
                         .bounds = Rectangle.{content.x + cast(float32)(position % columns) * (size + gap),
@@ -2150,7 +2141,7 @@ AppearanceControls :: (x: float32, top: *float32, width: float32, controls: s32)
         0x4f46e5ff, 0x0d9488ff, 0x65a30dff, 0xc026d3ff, 0xea580cff, 0x0284c7ff, 0x9333eaff, 0x475569ff]
         size := (width - 7.0 * 8.0 * scale) / 8.0
         for index: 0..15 {
-            if Button(session, ButtonProps.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
+            if Button.Draw(session, Button.Props.{.key = cast(u64)(300 + index), .id = 300 + cast(s32)index,
                     .bounds = Rectangle.{x + cast(float32)(index % 8) * (size + 8.0 * scale), y + cast(float32)(index / 8) * (size + 8.0 * scale), size, size},
                     .label = Label("entity.accent", "Accent"), .icon_only = true, .swatch = true, .swatch_color = ColorFromPacked(colors[index]), .selected = state.accent == index}) != 0 {
                 state.accent = cast(s32)index

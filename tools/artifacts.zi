@@ -4,6 +4,7 @@
 #import "package_common"
 #import "package_lock"
 #import "package_manifest"
+#import "package_map"
 #import "std/file"
 #import "std/file_tree_linux"
 #import "std/text_tools"
@@ -163,6 +164,30 @@ Crypto :: () -> bool {
     if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "BOOTSTRAP=1", Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
     return CopyFile(JoinPath(runtime, "libziran.a"), Out("libziran.a")) && PkgWrite(Out("link.txt"), LinkText(false))
 }
+// Re-root the provider's resolved dependencies without resolving a second lock.
+// Entity remains the root so its C ABI is independent of the consumer alias.
+ProfileDependency :: (output: *PkgLock, id: string) -> bool {
+    if PkgFindById(output, id) >= 0 { return true }
+    index := PkgFindById(graph, id)
+    if index < 0 || output.count >= 64 { return false }
+    output.packages[output.count] = graph.packages[index]
+    output.count += 1
+    for edge: graph.packages[index].edges[0:graph.packages[index].edge_count] {
+        if !ProfileDependency(output, edge.value) { return false }
+    }
+    return true
+}
+ProfileMap :: () -> string {
+    dependencies := PkgNewLock()
+    if dependencies == null { return "" }
+    dependencies.tool_path = graph.tool_path
+    dependencies.root_edges = graph.packages[provider].edges
+    dependencies.root_edge_count = graph.packages[provider].edge_count
+    for edge: dependencies.root_edges[0:dependencies.root_edge_count] {
+        if !ProfileDependency(dependencies, edge.value) { return "" }
+    }
+    return PkgWriteMap(root, dependencies, *graph.packages[provider].manifest)
+}
 Profile :: () -> bool {
     // The generic driver has already built and verified this requirement.
     deps := PkgRead(PkgGetenv("ZIRAN_ARTIFACT_DEPENDENCIES"))
@@ -172,13 +197,12 @@ Profile :: () -> bool {
     // Generate Entity as the root module so the public native header/symbol names
     // do not depend on a consumer's package alias or lock ID. All dependency
     // roots still come from that consumer's resolved, keyed package graph.
+    module_map := ProfileMap()
+    if module_map.count == 0 { return false }
     native: Vec(string)
-    start: [10]string = .["env", "-u", "ZIRAN_PACKAGE_MAP", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2c"), "--root", root, "--define", ifx web then "PLATFORM_WEB" else ifx android then "PLATFORM_ANDROID" else "PLATFORM_DESKTOP", "--define", define]
+    start: [9]string = .["env", Flag("ZIRAN_PACKAGE_MAP=", module_map), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2c"), "--root", root, "--define", ifx web then "PLATFORM_WEB" else ifx android then "PLATFORM_ANDROID" else "PLATFORM_DESKTOP", "--define", define]
     for start { VecPush(native, it) }
     if windows { VecPush(native, "--define"); VecPush(native, "_WIN32"); VecPush(native, "--define"); VecPush(native, "__x86_64__") }
-    kryon_root := Package("kryon"); daochi := Package("daochi_client")
-    modules: [11]string = .[JoinPath(root, "src"), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "std"), Flag("kryon=", JoinPath(kryon_root, "src/backend")), JoinPath(kryon_root, "src/backend"), Flag("kryon=", JoinPath(kryon_root, "src/ui")), JoinPath(kryon_root, "src/ui"), Flag("daochi_client=", daochi), daochi, Flag("crypto=", JoinPath(Package("crypto"), "src")), Flag("oqs=", JoinPath(Package("oqs"), "src")), Flag("qrcode=", JoinPath(Package("qrcode"), "src"))]
-    for modules { VecPush(native, "--module-path"); VecPush(native, it) }
     VecPush(native, "-o"); VecPush(native, generated); VecPush(native, JoinPath(root, "src/native_host.zi"))
     if PkgRunToStderr(VecSlice(native, 0, native.count), project) != 0 { return false }
     if !Archive(generated, Out("libentity.a")) { return false }
@@ -186,17 +210,15 @@ Profile :: () -> bool {
     Walk(generated, ".c", *headers)
     for headers { if !RemoveFile(it) { return false } }
     if !Step("cp", "-r", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "include"), JoinPath(generated, "ziran")) { return false }
+    // Preserve the public C include path across project-aware generation.
+    if !PkgMkdirs(JoinPath(generated, "src")) || !CopyFile(JoinPath(generated, "native_host.h"), JoinPath(generated, "src/native_host.h")) { return false }
     if !Step("tar", "-cf", Out("headers.tar"), "-C", generated, ".") { return false }
     if !CopyFile(JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "web/ziran_web.js"), Out("ziran_web.js")) { return false }
     if !CopyFile(JoinPath(Package("kryon"), "assets/fonts/LiberationSans-Regular.ttf"), Out("font.ttf")) { return false }
     // Use the existing Profile recipe and asset embedding, with private output.
-    kryon := Package("kryon"); qr := Package("qrcode")
     args: Vec(string)
-    initial: [8]string = .["env", "-u", "ZIRAN_PACKAGE_MAP", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2zx"), "bundle", "--root", root, "--module-path"]
+    initial: [6]string = .["env", Flag("ZIRAN_PACKAGE_MAP=", module_map), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2zx"), "bundle", "--root", root]
     for initial { VecPush(args, it) }
-    VecPush(args, JoinPath(root, "src"))
-    paths: [5]string = .[Flag("kryon=", JoinPath(kryon, "src/backend")), Flag("kryon=", JoinPath(kryon, "src/ui")), JoinPath(kryon, "src/ui"), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "std"), Flag("qrcode=", JoinPath(qr, "src"))]
-    for paths { VecPush(args, "--module-path"); VecPush(args, it) }
     rest: [11]string = .["--define", "KRYON_HOSTED_UI", "--asset-dir", Flag("assets=", JoinPath(root, "assets")), "--entry", "entity:Main", "-o", Out("entity.zx"), JoinPath(root, "src/entity.zi"), "", ""]
     for rest { if it.count > 0 { VecPush(args, it) } }
     return PkgRunToStderr(VecSlice(args, 0, args.count), project) == 0 && PkgWrite(Out("link.txt"), LinkText(true))

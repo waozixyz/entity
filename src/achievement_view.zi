@@ -10,22 +10,15 @@
 #import "session"
 #import "geometry"
 #import "drawing_props"
-#import "text_props"
-#import "text_widget"
+Text :: #import "kryon/text";
 #import "model"
-#import "button_props"
-#import "button_widget"
+Button :: #import "kryon/button";
 #import "control_props"
-#import "toggle_props"
-#import "toggle_widget"
-#import "scroll_props"
-#import "scroll_widget"
-#import "box_props"
-#import "box_widget"
-#import "kryon/svg_icon_props"
-#import "kryon/svg_icon_widget"
-#import "kryon/tab_bar_props"
-#import "kryon/tab_bar_widget"
+Toggle :: #import "kryon/toggle";
+TabBar :: #import "kryon/tab_bar";
+Scroll :: #import "kryon/scroll";
+Box :: #import "kryon/box";
+SvgIcon :: #import "kryon/svg_icon";
 #import "kryon/text_align"
 #import "tree"
 
@@ -182,8 +175,8 @@ AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: fl
 }
 
 AchievementText :: (session: Session, key: u64, value: string, bounds: Rectangle, font: s32) {
-    Text(session, TextProps.{.key = key, .text = value, .bounds = bounds,
-            .font = font, .wrap = TextWrap.TextWrapAuto})
+    Text.Draw(session, Text.Props.{.key = key, .text = value, .bounds = bounds,
+            .size = font, .wrap = Text.Wrap.TextWrapAuto})
 }
 
 AchievementViewFrame :: (show_navigation: bool = true) -> bool {
@@ -250,14 +243,14 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
         heights[index] = title_heights[index] + description_heights[index] + 92.0 * scale
         height += heights[index]
     }
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)50000, .bounds = area,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)50000, .bounds = area,
             .content_height = cast(s32)height, .scroll_offset = achievement_scroll, .scale = scale})
     achievement_scroll = scroll.scroll_offset
     if !scroll.opened { return true }
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     y := scroll.content.y + 16.0 * scale
     if show_navigation {
-        if Button(session, ButtonProps.{.key = cast(u64)50001, .id = 50001,
+        if Button.Draw(session, Button.Props.{.key = cast(u64)50001, .id = 50001,
                 .label = AppLocale("achievement_back"), .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 {
             achievement_open = false
         }
@@ -274,15 +267,15 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
     }
     y += 36.0 * scale
     if achievement_page.app_count > 0 {
-        tabs: [33]Tab
-        tabs[0] = Tab.{.key = cast(u64)53000, .label = AppLocale("achievement_all_apps")}
+        tabs: [33]TabBar.Tab
+        tabs[0] = TabBar.Tab.{.key = cast(u64)53000, .label = AppLocale("achievement_all_apps")}
         selected: s32 = 0
         for index: cast(s32)0..achievement_page.app_count - 1 {
             choice := *achievement_page.apps[index]
-            tabs[index + 1] = Tab.{.key = cast(u64)(53001 + index), .label = TextUntilNul(choice.title[:])}
+            tabs[index + 1] = TabBar.Tab.{.key = cast(u64)(53001 + index), .label = TextUntilNul(choice.title[:])}
             if TextUntilNul(choice.id[:]) == TextUntilNul(achievement_filter[:]) { selected = index + 1 }
         }
-        result := TabBar(session, TabBarProps.{.key = cast(u64)53040,
+        result := TabBar.Draw(session, TabBar.Props.{.key = cast(u64)53040,
                 .bounds = Rectangle.{x, y, width, 44.0 * scale}, .selected_index = selected,
                 .min_tab_width = cast(s32)(88.0 * scale), .max_tab_width = cast(s32)(200.0 * scale),
                 .content_sized = true, .focus_selected = true, .scroll_offset = achievement_tab_scroll,
@@ -299,7 +292,7 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
     }
     toggle_label := AppLocale("achievement_alerts_label")
     AchievementText(session, 50004, toggle_label, Rectangle.{x, y + 8.0 * scale, label_width, 36.0 * scale}, font)
-    toggle := Toggle(session, ToggleProps.{.key = cast(u64)50005, .id = 50005,
+    toggle := Toggle.Draw(session, Toggle.Props.{.key = cast(u64)50005, .id = 50005,
             .bounds = Rectangle.{x + width - 56.0 * scale, y, 56.0 * scale, 44.0 * scale},
             .label = toggle_label, .value = achievement_page.alerts, .disabled = !achievement_ready})
     if toggle.changed {
@@ -338,7 +331,7 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
             color := ifx row.earned then ThemeOr("accent", 0x7ab5a5ff, 0x347c6cff) else Color.{135, 143, 147, 255}
             shape := TextUntilNul(row.icon[:])
             if shape == "" { shape = "S2rr:M6 12L10 16L18 7" }
-            SvgIcon(session, SvgIconProps.{.bounds = Rectangle.{x + 4.0 * scale, y + 8.0 * scale, 52.0 * scale, 52.0 * scale},
+            SvgIcon.Draw(session, SvgIcon.Props.{.bounds = Rectangle.{x + 4.0 * scale, y + 8.0 * scale, 52.0 * scale, 52.0 * scale},
                     .shape = shape, .color = color})
             label_x := x + 80.0 * scale
             AchievementText(session, key + 4, TextUntilNul(row.title[:]), Rectangle.{label_x, y, label_width, title_heights[index]}, title_font)
@@ -357,7 +350,7 @@ AchievementViewFrame :: (show_navigation: bool = true) -> bool {
     if achievement_page.pages > 1 {
         for direction: cast(s32)0..1 {
             disabled := ifx direction == 0 then achievement_page.page == 0 else achievement_page.page + 1 >= achievement_page.pages
-            if Button(session, ButtonProps.{.key = cast(u64)(52000 + direction), .id = 52000 + direction,
+            if Button.Draw(session, Button.Props.{.key = cast(u64)(52000 + direction), .id = 52000 + direction,
                     .bounds = Rectangle.{x + cast(float32)direction * (half + 12.0 * scale), y, half, 44.0 * scale},
                     .label = AppLocale(ifx direction == 0 then "achievement_previous" else "achievement_next"), .disabled = disabled}) != 0 {
                 achievement_requested = achievement_page.page + (ifx direction == 0 then -1 else 1)

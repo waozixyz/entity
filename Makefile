@@ -16,29 +16,28 @@ MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
 	--module-path qrcode=$(QRCODE_DIR)/src --module-path daochi_client=$(DAOCHI_CLIENT_DIR) \
 	--module-path $(DAOCHI_CLIENT_DIR) --module-path crypto=$(CRYPTO_DIR)/src --module-path oqs=$(OQS_DIR)/src
-ACHIEVEMENT_TEST_BINDS = --bind font_metrics:MeasureGlyphWidth=ziran_widget_noop_host:MeasureGlyphWidth \
-	--bind font_metrics:MeasureGlyphLineHeight=ziran_widget_noop_host:MeasureGlyphLineHeight \
-	--bind image_raster:ImageWidth=ziran_widget_noop_host:ImageWidth \
-	--bind image_raster:ImageHeight=ziran_widget_noop_host:ImageHeight \
-	--bind raster_shape:RasterRoundedRectangle=ziran_widget_noop_host:RasterRoundedRectangle \
-	--bind raster_shape:RasterRoundedRectangleOutline=ziran_widget_noop_host:RasterRoundedRectangleOutline \
-	--bind raster:RasterLine=ziran_widget_noop_host:RasterLine \
-	--bind raster_text:RasterText=ziran_widget_noop_host:RasterText \
-	--bind raster_text:RasterTextClipped=ziran_widget_noop_host:RasterTextClipped \
-	--bind paint_queue:RasterImage=ziran_widget_noop_host:RasterImage \
-	--bind paint_queue:RasterImageMesh=ziran_mesh_noop_host:RasterImageMesh \
-	--bind raster_triangles:RasterTriangles=achievement_shape_host:RasterTriangles
+ACHIEVEMENT_TEST_BINDS = --bind kryon/font_metrics:MeasureGlyphWidth=achievement_shape_host:MeasureGlyphWidth \
+	--bind kryon/font_metrics:MeasureGlyphLineHeight=achievement_shape_host:MeasureGlyphLineHeight \
+	--bind kryon/image_raster:ImageWidth=achievement_shape_host:ImageWidth \
+	--bind kryon/image_raster:ImageHeight=achievement_shape_host:ImageHeight \
+	--bind kryon/raster_shape:RasterRoundedRectangle=achievement_shape_host:RasterRoundedRectangle \
+	--bind kryon/raster_shape:RasterRoundedRectangleOutline=achievement_shape_host:RasterRoundedRectangleOutline \
+	--bind kryon/raster:RasterLine=achievement_shape_host:RasterLine \
+	--bind kryon/raster_text:RasterText=achievement_shape_host:RasterText \
+	--bind kryon/raster_text:RasterTextClipped=achievement_shape_host:RasterTextClipped \
+	--bind kryon/raster_text:RasterTextRotated=achievement_shape_host:RasterTextRotated \
+	--bind kryon/paint_queue:RasterImage=achievement_shape_host:RasterImage \
+	--bind kryon/paint_queue:RasterImageMesh=achievement_shape_host:RasterImageMesh \
+	--bind kryon/raster_triangles:RasterTriangles=achievement_shape_host:RasterTriangles
 SOURCES := $(wildcard src/*.zi)
 ASSETS := $(shell rg --files assets)
 RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/*.h $(ZIRAN_ROOT)/build/bin/ziran)
-UI_SOURCES = $(wildcard $(KRYON_DIR)/src/ui/*.zi $(KRYON_DIR)/src/backend/*.zi $(ZIRAN_ROOT)/std/*.zi)
+UI_SOURCES = $(shell rg --files $(KRYON_DIR)/src/ui $(KRYON_DIR)/src/backend -g '*.zi') $(wildcard $(ZIRAN_ROOT)/std/*.zi)
 .PHONY: all test run native native-test model-test publication
 all: build/entity.zx native
 build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
 	mkdir -p build
-	$(ZIRAN) bundle --root . --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
-		--module-path kryon=$(KRYON_DIR)/src/ui --module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
-		--module-path qrcode=$(QRCODE_DIR)/src \
+	$(ZIRAN) bundle --project $(LOCK_FLAGS) \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi
 test: build/entity.zx native-test records-test alias-test model-test picture-publish-test dew-play-test dew-packs-test achievement-view-test
 	$(ZIRAN) fmt --check src/*.zi tests/*.zi
@@ -91,7 +90,7 @@ dew-play-savings-test:
 .PHONY: achievement-view-test
 achievement-view-test:
 	mkdir -p build/achievement-view-test
-	$(ZIRAN) build --root . $(MODULE_PATHS) --module-path $(KRYON_DIR)/tests --module-path tests $(ACHIEVEMENT_TEST_BINDS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
+	$(ZIRAN) build --project $(LOCK_FLAGS) $(ACHIEVEMENT_TEST_BINDS) --target=c --entry achievement_view_test:main -o build/achievement-view-test tests/achievement_view_test.zi
 	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/achievement-view-test $$(rg --files build/achievement-view-test -g '*.c') -lm -o build/achievement-view-test/test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/achievement-view-test/test
 build/liboqs/lib/liboqs.a: ziran.lock Makefile
@@ -267,8 +266,10 @@ referral-ui-test: build/entity.zx build/ziran/libziran.a $(LIBOQS_LIBRARY)
 	LDLIBS='$(abspath build/ziran/libziran.a) $(abspath $(LIBOQS_LIBRARY)) $(MONOCYPHER_SOURCES) -I$(MONOCYPHER_DIR)/src $(shell pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -lz' $(ZIRAN) build --project $(LOCK_FLAGS) --define PLATFORM_DESKTOP --target=c --entry referral_ui_test:main --exe -o build/referral-ui-test tests/referral_ui_test.zi
 	git check-ignore -q work/referral-ui
 	mkdir -p work/referral-ui/tmp
-	rm -f work/referral-ui/referral-pending.txt work/referral-ui/referral-suggestion.txt
-	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 TMPDIR=$(abspath work/referral-ui/tmp) ENTITY_DATA=$(abspath work/referral-ui) XDG_DATA_HOME=$(abspath work/referral-ui/xdg) xvfb-run -a -s '-screen 0 800x2800x24' build/referral-ui-test/referral_ui_test
+	rm -f work/referral-ui/referral-pending.txt work/referral-ui/referral-suggestion.txt work/referral-ui/test.exit
+	if env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 TMPDIR=$(abspath work/referral-ui/tmp) ENTITY_DATA=$(abspath work/referral-ui) XDG_DATA_HOME=$(abspath work/referral-ui/xdg) \
+		xvfb-run -a -s '-screen 0 800x2800x24' sh -c '"$$1"; status=$$?; printf "%s\n" "$$status" > "$$2"; exit "$$status"' sh build/referral-ui-test/referral_ui_test $(abspath work/referral-ui/test.exit); then :; else :; fi; \
+	read status < work/referral-ui/test.exit; test "$$status" -eq 0
 
 test: referral-ui-test
 

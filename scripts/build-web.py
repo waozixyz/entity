@@ -74,7 +74,10 @@ def main():
     # Keep every module's package identity, including explicit dependency entry
     # files. Flattening private dependency roots here collides with app modules
     # such as rewards and bypasses the lock's transitive namespace resolution.
-    subprocess.run([ziran, 'build', *imports, '--target=c', '--define', 'PLATFORM_WEB',
+    # Kryon selects browser code by the target OS; PLATFORM_WEB remains for
+    # Entity's own web selectors.
+    subprocess.run([ziran, 'build', *imports, '--target=c', '--target-os', 'web', '--target-cpu', 'wasm32',
+                    '--define', 'PLATFORM_WEB',
                     '--define', 'BUNDLE_NATIVE_RENDERER', '--entry', entry, *bindings,
                     '-o', str(generated), args.source, *canvas], check=True, env=env)
     if args.canvas_app:

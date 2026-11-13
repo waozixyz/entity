@@ -20,8 +20,8 @@
 #import "kryon/key_input"
 #import "kryon/Frame"
 #import "std/timer_linux"
-using UI :: #import "kryon/Widgets";
-Desktop :: #import "kryon/Desktop";
+using UI :: #import "kryon/session";
+Desktop :: #import "kryon/desktop_runtime";
 
 sdl :: #system_library "SDL2";
 SetTitle :: (window: *void, title: *u8) #foreign sdl "SDL_SetWindowTitle";

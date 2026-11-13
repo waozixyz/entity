@@ -3,15 +3,11 @@
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/drawing_props"
-#import "kryon/box_props"
-#import "kryon/box_widget"
-#import "kryon/text_props"
-#import "kryon/text_widget"
-#import "kryon/button_props"
-#import "kryon/button_widget"
+Box :: #import "kryon/box";
+Text :: #import "kryon/text";
+Button :: #import "kryon/button";
 #import "kryon/control_props"
-#import "kryon/svg_icon_props"
-#import "kryon/svg_icon_widget"
+SvgIcon :: #import "kryon/svg_icon";
 #import "std/c_string"
 #import "std/text_buffer"
 
@@ -69,30 +65,30 @@ AchievementToastDraw :: (session: Session, toast: *AchievementToast, props: Achi
     height := 64.0 * scale
     bounds := Rectangle.{props.viewport.x + props.viewport.width - width - margin,
         props.viewport.y + props.top + margin, width, height}
-    Box(session, BoxProps.{.key = key, .bounds = bounds, .fill = props.fill, .border = props.border, .radius = 14.0 * scale})
+    Box.Draw(session, Box.Props.{.key = key, .bounds = bounds, .fill = props.fill, .border = props.border, .radius = 14.0 * scale})
     text_x := bounds.x + 12.0 * scale
     if !props.plain {
         badge := 40.0 * scale
         badge_x := bounds.x + 12.0 * scale
         badge_y := bounds.y + (height - badge) * 0.5
-        Box(session, BoxProps.{.key = key + 1, .bounds = Rectangle.{badge_x, badge_y, badge, badge},
+        Box.Draw(session, Box.Props.{.key = key + 1, .bounds = Rectangle.{badge_x, badge_y, badge, badge},
                 .fill = props.accent, .radius = badge * 0.5})
         shape := TextUntilNul(toast.icon[:])
         if shape != "" {
             icon := 24.0 * scale
-            SvgIcon(session, SvgIconProps.{.shape = shape, .color = Color.{255, 255, 255, 255},
+            SvgIcon.Draw(session, SvgIcon.Props.{.shape = shape, .color = Color.{255, 255, 255, 255},
                     .bounds = Rectangle.{badge_x + (badge - icon) * 0.5, badge_y + (badge - icon) * 0.5, icon, icon}})
         }
         text_x = badge_x + badge + 12.0 * scale
     }
     text_width := bounds.x + width - 12.0 * scale - text_x
-    Text(session, TextProps.{.key = key + 2, .text = TextUntilNul(toast.label[:]), .disabled = true,
+    Text.Draw(session, Text.Props.{.key = key + 2, .text = TextUntilNul(toast.label[:]), .disabled = true,
             .bounds = Rectangle.{text_x, bounds.y + 10.0 * scale, text_width, 18.0 * scale},
-            .font = cast(s32)(12.0 * scale), .wrap = TextWrap.TextWrapEllipsis})
-    Text(session, TextProps.{.key = key + 3, .text = TextUntilNul(toast.title[:]),
+            .size = cast(s32)(12.0 * scale), .wrap = Text.Wrap.TextWrapEllipsis})
+    Text.Draw(session, Text.Props.{.key = key + 3, .text = TextUntilNul(toast.title[:]),
             .bounds = Rectangle.{text_x, bounds.y + 30.0 * scale, text_width, 24.0 * scale},
-            .font = cast(s32)(16.0 * scale), .wrap = TextWrap.TextWrapEllipsis})
-    if Button(session, ButtonProps.{.key = key + 4, .id = cast(s32)(key + 4), .bounds = bounds,
+            .size = cast(s32)(16.0 * scale), .wrap = Text.Wrap.TextWrapEllipsis})
+    if Button.Draw(session, Button.Props.{.key = key + 4, .id = cast(s32)(key + 4), .bounds = bounds,
             .label = TextUntilNul(toast.title[:]), .invisible = true}) != 0 {
         toast.active = false
     }

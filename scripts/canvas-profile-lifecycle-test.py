@@ -20,11 +20,20 @@ def function(path, name):
         if source[end] == '}': depth -= 1
         end += 1
     return source[start:end] + '\n'
-source = '''
+# Stand-ins for the namespaced Kryon widget modules the adapter imports.
+(work / 'fixture_types.zi').write_text('''
 Session :: struct { id: s32 }
 Rectangle :: struct { x: float32; y: float32; width: float32; height: float32 }
-TextFieldInput :: struct { text: string }
-ButtonProps :: struct { key: u64; id: s32; label: string; bounds: Rectangle }
+''')
+(work / 'text_field.zi').write_text('Input :: struct { text: string }\n')
+(work / 'button.zi').write_text('''#import "fixture_types"
+Props :: struct { key: u64; id: s32; label: string; bounds: Rectangle }
+Draw :: (session: Session, props: Props) -> s32 { return 1 }
+''')
+source = '''
+#import "fixture_types"
+TextField :: #import "text_field";
+Button :: #import "button";
 Hosted :: struct { alive: bool }
 Portable :: struct { app: Hosted }
 portable: Portable;
@@ -61,8 +70,7 @@ EntityFriendsStop :: () { cancelled |= 128 }
 PublicationsReadStop :: () {}
 AccountStoreStop :: () { allocated = false; cancelled |= 256 }
 HostedAppClose :: (app: *Hosted) { app.alive = false; closed += 1 }
-Button :: (session: Session, props: ButtonProps) -> s32 { return 1 }
-EntityHostFrame :: (session: Session, area: Rectangle, key: s32, modifiers: s32, input: TextFieldInput) -> bool { return true }
+EntityHostFrame :: (session: Session, area: Rectangle, key: s32, modifiers: s32, input: TextField.Input) -> bool { return true }
 EntityHostBack :: () -> bool { return false }
 '''
 for name in ('EntityHostClose', 'EntityHostDispose'):
@@ -115,6 +123,7 @@ Recovery :: struct { present: bool }
 ManagementProvider :: struct {
     drive_pending: bool; handoff_pending: bool; bridge_operation: s32;
     pending_request: Request; transfer: Transfer; methods_transfer: Transfer;
+    backup_status_request: Request; backup_status_transfer: Transfer;
     incoming: Recovery; document: string;
 }
 busy: [8]bool;
@@ -139,23 +148,26 @@ provider_source += function(root / 'src/native_management.zi', 'ProviderClose')
 provider_source += '''
 main :: () -> s32 {
     provider: ManagementProvider
-    // Repeated reopen/dispose must release both jobs before losing their handles.
+    // Repeated reopen/dispose must release every job before losing its handle.
     // More than eight cycles catches the simulated browser slot exhaustion.
     for iteration: 0..11 {
-        if busy[0] || busy[1] { return 1 }
+        if busy[0] || busy[1] || busy[2] { return 1 }
         busy[0] = true
         busy[1] = true
+        busy[2] = true
         provider = ManagementProvider.{.drive_pending = true, .handoff_pending = true,
             .bridge_operation = 1, .pending_request = Request.{true},
             .transfer = Transfer.{1}, .methods_transfer = Transfer.{2},
+            .backup_status_request = Request.{true}, .backup_status_transfer = Transfer.{3},
             .incoming = Recovery.{true}, .document = "allocated"}
         cancelled = 0
         ProviderClose(*provider)
-        if cancelled != 1023 || busy[0] || busy[1] { return 2 }
+        if cancelled != 1023 || busy[0] || busy[1] || busy[2] { return 2 }
         if provider.transfer.slot != 0 || provider.methods_transfer.slot != 0 ||
+            provider.backup_status_transfer.slot != 0 || provider.backup_status_request.active ||
             provider.pending_request.active || provider.incoming.present || provider.document != "" { return 3 }
         ProviderClose(*provider)
-        if busy[0] || busy[1] { return 4 }
+        if busy[0] || busy[1] || busy[2] { return 4 }
     }
     return 0
 }
@@ -165,4 +177,4 @@ provider_fixture.write_text(provider_source)
 subprocess.run([ziran, 'build', '--target=c', '--exe', '--root', str(work), '--entry', 'provider_close:main',
                 '-o', str(work / 'provider-native'), str(provider_fixture)], cwd=root, check=True)
 subprocess.run([str(work / 'provider-native/provider_close')], cwd=root, check=True)
-print('ProviderClose local tests passed: independent request/methods transfers, repeated close/reopen, no retained jobs')
+print('ProviderClose local tests passed: independent request/methods/backup-status transfers, repeated close/reopen, no retained jobs')

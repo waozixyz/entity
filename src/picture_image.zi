@@ -3,10 +3,10 @@
 // show people's pictures the same way, abstract pictures included.
 #import "model"
 #import "kryon/geometry"
-#import "kryon/image_props"
+Image :: #import "kryon/image";
 
-EntityIconImage :: (icon: s32, bounds: Rectangle, alt: string) -> ImageProps {
-    image := ImageProps.{.bounds = bounds, .alt_text = alt, .fit = ImageFit.ImageFitContain}
+EntityIconImage :: (icon: s32, bounds: Rectangle, alt: string) -> Image.Props {
+    image := Image.Props.{.bounds = bounds, .alt_text = alt, .fit = Image.ImageFit.ImageFitContain}
     abstract := EntityAbstractFromPublicIcon(icon)
     if abstract >= 0 {
         image.asset_path = EntityAbstractPictureAsset(abstract)

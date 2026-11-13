@@ -156,13 +156,13 @@ AliasPurchaseModal :: () {
     if width > 520.0 * scale { width = 520.0 * scale }
     height := area.height - 24.0 * scale
     if height > 420.0 * scale { height = 420.0 * scale }
-    modal := ModalFrame(session, ModalFrameProps.{.key = cast(u64)19600, .id = 19600,
+    modal := Modal.Draw(session, Modal.Props.{.key = cast(u64)19600, .id = 19600,
             .title = Label("entity.alias_premium", "Premium username"),
             .bounds = Rectangle.{area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height},
             .scale = scale, .has_right_action = true, .right_label = Label("entity.cancel", "Cancel")})
     if modal.dismissed || modal.right_clicked { alias_modal_open = false }
     if !modal.opened { return }
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)19601, .bounds = modal.layout.content,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)19601, .bounds = modal.layout.content,
             .content_height = cast(s32)(320.0 * scale), .scroll_offset = alias_modal_scroll, .scale = scale})
     alias_modal_scroll = scroll.scroll_offset
     if scroll.opened {

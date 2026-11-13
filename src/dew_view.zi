@@ -4,13 +4,10 @@
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/drawing_props"
-#import "kryon/text_props"
-#import "kryon/text_widget"
-#import "kryon/text_measure"
-#import "kryon/box_props"
-#import "kryon/box_widget"
-#import "kryon/button_props"
-#import "kryon/button_widget"
+Text :: #import "kryon/text";
+TextMeasure :: #import "kryon/text_measure";
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
 #import "kryon/control_props"
 
 DewBalanceTopUp :: 1
@@ -51,8 +48,8 @@ DewBalanceResult :: struct { height: float32; action: s32 }
 
 DewLineHeight :: (session: Session, text: string, width: float32, font: s32) -> float32 {
     if text == "" { return 0.0 }
-    return cast(float32)TextHeight(session, TextProps.{.text = text, .font = font,
-            .bounds = Rectangle.{0.0, 0.0, width, 0.0}, .wrap = TextWrap.TextWrapAuto})
+    return cast(float32)TextMeasure.TextHeight(session, Text.Props.{.text = text, .size = font,
+            .bounds = Rectangle.{0.0, 0.0, width, 0.0}, .wrap = Text.Wrap.TextWrapAuto})
 }
 
 DewBalanceLine :: (session: Session, key: u64, text: string, x: float32,
@@ -60,15 +57,15 @@ DewBalanceLine :: (session: Session, key: u64, text: string, x: float32,
     if text == "" { return }
     height := DewLineHeight(session, text, width, font)
     if draw {
-        Text(session, TextProps.{.key = key, .text = text, .font = font,
+        Text.Draw(session, Text.Props.{.key = key, .text = text, .size = font,
                 .bounds = Rectangle.{x, y.*, width, height},
-                .wrap = TextWrap.TextWrapAuto})
+                .wrap = Text.Wrap.TextWrapAuto})
     }
     y.* += height + 8.0 * scale
 }
 
 DewBalanceAction :: (session: Session, key: u64, label: string, bounds: Rectangle, draw: bool) -> bool {
-    return draw && Button(session, ButtonProps.{.key = key, .id = cast(s32)key, .label = label, .bounds = bounds,
+    return draw && Button.Draw(session, Button.Props.{.key = key, .id = cast(s32)key, .label = label, .bounds = bounds,
             .tone = ButtonTone.ButtonToneAccent, .emphasis = ButtonEmphasis.ButtonEmphasisSoft}) != 0
 }
 
@@ -84,7 +81,7 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
     if width <= 0.0 { return result }
     if draw {
         measured := DewBalance(session, props, false)
-        Box(session, BoxProps.{.key = key, .bounds = Rectangle.{props.bounds.x, props.bounds.y,
+        Box.Draw(session, Box.Props.{.key = key, .bounds = Rectangle.{props.bounds.x, props.bounds.y,
                     props.bounds.width, measured.height - 8.0 * scale}, .fill = props.fill, .radius = 12.0 * scale})
     }
     DewBalanceLine(session, key + 1, props.title, x, *y, width, font, scale, draw)
@@ -92,7 +89,7 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
     if props.ready && props.known {
         button_width: float32 = 0.0
         if props.top_up != "" {
-            button_width = cast(float32)TextWidth(session, TextProps.{.text = props.top_up, .font = font}) + 32.0 * scale
+            button_width = cast(float32)TextMeasure.TextWidth(session, Text.Props.{.text = props.top_up, .size = font}) + 32.0 * scale
             if button_width > width * 0.5 { button_width = width * 0.5 }
         }
         text_width := ifx button_width > 0.0 then width - button_width - 12.0 * scale else width
@@ -107,7 +104,7 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
             worth_y := y + (row_height - value_height - worth_height) * 0.5 + value_height + 2.0 * scale
             DewBalanceLine(session, key + 3, props.worth, x, *worth_y, text_width, small, scale, draw)
         }
-        if draw && props.top_up != "" && Button(session, ButtonProps.{.key = key + 4, .id = cast(s32)(key + 4),
+        if draw && props.top_up != "" && Button.Draw(session, Button.Props.{.key = key + 4, .id = cast(s32)(key + 4),
                 .label = props.top_up, .bounds = Rectangle.{x + width - button_width,
                     y + (row_height - 44.0 * scale) * 0.5, button_width, 44.0 * scale},
                 .disabled = props.busy, .tone = ButtonTone.ButtonToneAccent,
@@ -122,13 +119,13 @@ DewBalance :: (session: Session, props: DewBalanceProps, draw: bool = true) -> D
             if percent > 100 { percent = 100 }
             if draw {
                 bar_height := 8.0 * scale
-                Box(session, BoxProps.{.key = key + 6,
+                Box.Draw(session, Box.Props.{.key = key + 6,
                         .bounds = Rectangle.{x, y, width, bar_height}, .fill = props.track, .radius = bar_height * 0.5})
                 if percent > 0 {
                     fill := width * cast(float32)percent / 100.0
                     if fill < bar_height { fill = bar_height }
                     color := ifx percent >= 100 then props.danger else ifx percent >= 90 then props.warning else props.accent
-                    Box(session, BoxProps.{.key = key + 7,
+                    Box.Draw(session, Box.Props.{.key = key + 7,
                             .bounds = Rectangle.{x, y, fill, bar_height}, .fill = color, .radius = bar_height * 0.5})
                 }
             }

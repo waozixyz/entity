@@ -6,9 +6,8 @@
 #import "kryon/app_files"
 #import "kryon/session"
 #import "kryon/geometry"
-#import "kryon/text_input_props"
-#import "kryon/button_widget"
-#import "kryon/button_props"
+TextField :: #import "kryon/text_field";
+Button :: #import "kryon/button";
 #import "kryon/page_core"
 #import "native_host"
 #import "publications_read"
@@ -94,7 +93,7 @@ EntityCanvasService :: (name: string, request: string) -> string {
     return "{\"status\":\"unavailable\"}"
 }
 EntityCanvasFrame :: (session: Session, bounds: Rectangle, key: s32,
-    modifiers: s32, input: TextFieldInput) -> s32 {
+    modifiers: s32, input: TextField.Input) -> s32 {
     if !entity_canvas_visible { return 0 }
     scope := WebScope()
     defer { WebEnd(scope) }
@@ -102,7 +101,7 @@ EntityCanvasFrame :: (session: Session, bounds: Rectangle, key: s32,
     // and account actions never pass through the game's AppFieldInput.
     area := Rectangle.{bounds.x, bounds.y + 56.0, bounds.width, bounds.height - 56.0}
     if !EntityHostFrame(session, area, key, modifiers, input) { return -1 }
-    if Button(session, ButtonProps.{.key = cast(u64)49001, .id = 49001, .label = "‹",
+    if Button.Draw(session, Button.Props.{.key = cast(u64)49001, .id = 49001, .label = "‹",
             .bounds = Rectangle.{bounds.x + 8.0, bounds.y + 6.0, 76.0, 44.0}}) != 0 || key == 256 || key == 4 {
         if !EntityHostBack() && EntityHostSave() { entity_canvas_visible = false }
     }

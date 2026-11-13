@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tomllib
 
 # Bound this fixture and its compiler children to one managed CPU.
 os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
@@ -97,6 +98,10 @@ def main():
     for commit in (args.published, args.toolchain):
         assert not commit or (len(commit) == 40 and all(c in '0123456789abcdef' for c in commit))
     tool_ref = args.toolchain or json.loads((ROOT / 'ziran.lock').read_text())['toolchain']['commit']
+    local_overrides = {}
+    local = ROOT / 'ziran.local.toml'
+    if allow_dirty and local.exists():
+        local_overrides = tomllib.loads(local.read_text()).get('overrides', {})
     apps = []
     for name in ('one', 'two'):
         app = WORK / name
@@ -108,7 +113,10 @@ def main():
         if args.published:
             (app / 'ziran.local.toml').unlink(missing_ok=True)
         else:
-            (app / 'ziran.local.toml').write_text(f'[overrides]\nentity="{ROOT}"\n')
+            overrides = {**local_overrides, 'entity': str(ROOT)}
+            (app / 'ziran.local.toml').write_text('[overrides]' + '\n' + ''.join(
+                f'{json.dumps(name)}={json.dumps(str((ROOT / path).resolve()))}' + '\n'
+                for name, path in overrides.items()))
         run(['ziran', 'lock'], app)
         selected = Path(run(['ziran', 'pkg', 'path', 'ziran'], app))
         assert compiler is None or compiler == selected

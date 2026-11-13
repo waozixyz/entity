@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Build achievement notifications with the current Kryon widget imports.
+
 - Remember completed password backups for the same shared desktop account across apps; dismissed reminders remain separate from recovery evidence.
 
 - Every backup, including the .key file, is now protected by a password. A new password needs at least 8 characters, a number and a lowercase letter, and the field says what is still missing.

@@ -7,12 +7,12 @@
 #import "std/c_string"
 #import "std/bundle_host"
 #import "std/byte_text_linux"
-#import "kryon/Desktop"
+#import "kryon/desktop_runtime"
 #import "kryon/Frame"
 #import "kryon/session"
 #import "kryon/tree"
 #import "kryon/geometry"
-#import "kryon/text_input_props"
+TextField :: #import "kryon/text_field";
 #import "kryon/hosted_values"
 #import "kryon/app_context_host"
 
@@ -76,7 +76,7 @@ main :: () -> s32 {
     for frame: 1..3 {
         BeginDesktopFrame()
         if BeginFrame(session, cast(u64)frame, bounds) != FrameStatus.FrameOk { return 7 }
-        if !EntityHostFrame(session, bounds, 0, 0, TextFieldInput.{}, true) { return 8 }
+        if !EntityHostFrame(session, bounds, 0, 0, TextField.Input.{}, true) { return 8 }
         if EndFrame(session) != FrameStatus.FrameOk || !EndDesktopFrame() { return 9 }
         print("Thumbnail fixture: hosted frame % completed\n", frame)
     }

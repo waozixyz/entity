@@ -11,14 +11,14 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
-#import "kryon/Desktop"
+#import "kryon/desktop_runtime"
 #import "kryon/Frame"
 #import "kryon/session"
 #import "kryon/tree"
 #import "kryon/tree_input"
 #import "kryon/input_protocol"
 #import "kryon/geometry"
-#import "kryon/text_input_props"
+TextField :: #import "kryon/text_field";
 #import "kryon/hosted_values"
 #import "kryon/app_context_host"
 F :: #import "referral_test";
@@ -72,7 +72,7 @@ Frame :: (pointer: PointerFrame = .{}) -> bool {
     TreePointerUpdate(fixture_session, pointer)
     fixture_frame += 1
     if BeginFrame(fixture_session, cast(u64)1, area) != FrameStatus.FrameOk { return false }
-    if !EntityHostFrame(fixture_session, area, 0, 0, TextFieldInput.{}) { return false }
+    if !EntityHostFrame(fixture_session, area, 0, 0, TextField.Input.{}) { return false }
     return EndFrame(fixture_session) == FrameStatus.FrameOk && EndDesktopFrame()
 }
 Bounds :: (key: u64) -> Rectangle {

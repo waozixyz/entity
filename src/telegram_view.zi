@@ -1,10 +1,8 @@
 // Bot connection and authorization review live inside the shared Profile.
 #import "kryon/app_context"
-#import "kryon/button_props"
-#import "kryon/button_widget"
+Button :: #import "kryon/button";
 #import "kryon/control_props"
-#import "kryon/scroll_props"
-#import "kryon/scroll_widget"
+Scroll :: #import "kryon/scroll";
 #import "kryon/tree"
 #import "kryon/geometry"
 #import "achievement_view"
@@ -75,7 +73,7 @@ TelegramViewFrame :: (navigation: bool) -> bool {
     status_height := AchievementWrappedHeight(TextUntilNul(status[:]), width, font, scale) + 16.0 * scale
     review_height: float32 = ifx review[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(review[:]), width, font, scale) + 16.0 * scale
     authorization_height: float32 = ifx authorization[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(authorization[:]), width, font, scale) + 16.0 * scale
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)77000, .bounds = area,
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)77000, .bounds = area,
             .content_height = cast(s32)(status_height + review_height + authorization_height + 380.0 * scale), .scroll_offset = telegram_scroll, .scale = scale})
     telegram_scroll = scroll.scroll_offset
     if !scroll.opened { return true }
@@ -84,14 +82,14 @@ TelegramViewFrame :: (navigation: bool) -> bool {
     if navigation {
         back := AppLocale("entity.back")
         if back == "" || back == "entity.back" { back = "Back" }
-        if Button(session, ButtonProps.{.id = 77001, .label = back, .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 { telegram_open = false }
+        if Button.Draw(session, Button.Props.{.id = 77001, .label = back, .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 { telegram_open = false }
         y += 56.0 * scale
     }
     AchievementText(session, 77002, "Telegram", Rectangle.{x, y, width, 40.0 * scale}, cast(s32)(26.0 * scale))
     y += 52.0 * scale
     AchievementText(session, 77003, TextUntilNul(status[:]), Rectangle.{x, y, width, status_height}, font)
     y += status_height
-    if Button(session, ButtonProps.{.id = 77004, .label = TextUntilNul(primary[:]),
+    if Button.Draw(session, Button.Props.{.id = 77004, .label = TextUntilNul(primary[:]),
             .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = busy || !enabled, .loading = busy}) != 0 { TelegramViewAction("connect") }
     y += 64.0 * scale
     if authorization_height > 0.0 {
@@ -106,7 +104,7 @@ TelegramViewFrame :: (navigation: bool) -> bool {
     operations: [3]string = .["approve", "cancel", "disconnect"]
     for index: cast(s32)0..2 {
         if labels[index] == "" { continue }
-        if Button(session, ButtonProps.{.id = 77010 + index, .label = labels[index],
+        if Button.Draw(session, Button.Props.{.id = 77010 + index, .label = labels[index],
                 .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = busy || (index == 0 && review_height <= 0.0)}) != 0 { TelegramViewAction(operations[index]) }
         y += 60.0 * scale
     }

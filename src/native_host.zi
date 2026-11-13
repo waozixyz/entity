@@ -32,7 +32,7 @@
 #import "kryon/widget_host"
 #import "kryon/session"
 #import "kryon/geometry"
-#import "kryon/text_input_props"
+TextField :: #import "kryon/text_field";
 #import "kryon/system_clipboard"
 #import "kryon/open_uri"
 portable: AppContext;
@@ -429,7 +429,7 @@ EntityHostBack :: () -> bool {
     return AppContextRun(*portable, APP_COMMAND) && portable.reply == "handled"
 }
 
-EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s32, input: TextFieldInput, dark: bool = false) -> bool {
+EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s32, input: TextField.Input, dark: bool = false) -> bool {
     portable.session = session
     portable.bounds = bounds
     portable.scale = 1.0
@@ -443,7 +443,7 @@ EntityHostFrame :: (session: Session, bounds: Rectangle, key: s32, modifiers: s3
     WidgetHostBegin(session, EntityHostAssetAllowed)
     ran := AppContextRun(*portable, APP_FRAME)
     WidgetHostEnd()
-    portable.input = TextFieldInput.{}
+    portable.input = TextField.Input.{}
     if ran {
         entity_host_may_restart = true
         entity_host_problem = ""

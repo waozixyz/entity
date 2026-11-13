@@ -1,10 +1,8 @@
 // A compiled game-shaped host fixture, using only the public app context.
 #import "kryon/app_context"
 #import "kryon/app_protocol"
-#import "kryon/button_widget"
-#import "kryon/button_props"
-#import "kryon/text_widget"
-#import "kryon/text_props"
+Button :: #import "kryon/button";
+Text :: #import "kryon/text";
 #import "kryon/geometry"
 #import "std/vec"
 #import "std/text_buffer"
@@ -19,11 +17,11 @@ Main :: () -> s64 {
     if AppMode() == APP_FRAME {
         session := AppSession()
         if AppSupports("entity.profile") {
-            if Button(session, ButtonProps.{.key = 20400, .id = 20400, .label = "Profile",
+            if Button.Draw(session, Button.Props.{.key = 20400, .id = 20400, .label = "Profile",
                     .bounds = Rectangle.{20.0, 20.0, 160.0, 48.0}}) != 0 { unused AppService("entity.profile", "open") }
         }
-        Text(session, TextProps.{.key = 20401, .text = "Compiled canvas app", .bounds = Rectangle.{20.0, 90.0, 300.0, 40.0}})
-        if Button(session, ButtonProps.{.key = 20405, .id = 20405, .label = "Save marker",
+        Text.Draw(session, Text.Props.{.key = 20401, .text = "Compiled canvas app", .bounds = Rectangle.{20.0, 90.0, 300.0, 40.0}})
+        if Button.Draw(session, Button.Props.{.key = 20405, .id = 20405, .label = "Save marker",
                 .bounds = Rectangle.{20.0, 150.0, 160.0, 48.0}}) != 0 {
             value: Vec(u8)
             BuilderPrint(*value, "marker-%", AppNow())

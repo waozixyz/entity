@@ -1,6 +1,6 @@
 // A private renderer fixture using the production Profile bundle/lifecycle.
 App :: #import "desktop";
-Desktop :: #import "kryon/Desktop";
+Desktop :: #import "kryon/desktop_runtime";
 #import "native_host"
 #import "leaderboard_model"
 #import "model"

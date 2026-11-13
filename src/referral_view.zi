@@ -77,8 +77,8 @@ DrawReferrals :: () {
     text := TextUntilNul(referral_ui_json[:])
     busy := MatchLiteral(text, FieldAt(text, 0, "busy"), "true")
     area := AppBounds()
-    Box(session, BoxProps.{.key = cast(u64)78000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
-    scroll := Scroll(session, ScrollProps.{.key = cast(u64)78001, .bounds = area,
+    Box.Draw(session, Box.Props.{.key = cast(u64)78000, .bounds = area, .fill = ThemeOr("canvas", 0x142724ff, 0xeef4f2ff)})
+    scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)78001, .bounds = area,
             .content_height = cast(s32)(ifx referral_ui_height > 0.0 then referral_ui_height else 1200.0 * scale), .scroll_offset = referral_ui_scroll})
     referral_ui_scroll = scroll.scroll_offset
     if !scroll.opened { return }
