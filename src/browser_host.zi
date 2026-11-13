@@ -113,11 +113,9 @@ BrowserMain :: (palette: WidgetPalette) -> s32 {
         BeginCanvasFrame()
         viewport := CanvasViewport()
         pointer := PollPointer()
-        key := CanvasPressedKey()
-        modifiers := CanvasModifiers()
         active := ifx browser_profile then session else browser_game.app.session
-        point := CanvasTypedCodepoint()
-        while point != 0 { unused TypedCodepointSend(active, point); point = CanvasTypedCodepoint() }
+        // Keys and typed text arrive in the order the page received them.
+        key, modifiers := CanvasInputTake(active)
         typed: [1024]u8
         text := TypedTextTake(active, typed[:])
         if !browser_mini { EntityHostPump() }
