@@ -9,7 +9,7 @@ ref = "37a64372a6171808d1373b619f9b4f32cc367092"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "302939233e50b42011c9438e556f3b98386fcd4f"
+ref = "b08079641fcc4fbdf85ea009b7cb377708e96888"
 
 [exports]
 canvas_profile_host = "src/canvas_profile_host.zi"
