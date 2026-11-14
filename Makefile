@@ -35,7 +35,16 @@ RUNTIME_SOURCES = $(wildcard $(ZIRAN_ROOT)/cmd/zir/*.[ch] $(ZIRAN_ROOT)/include/
 UI_SOURCES = $(shell rg --files $(KRYON_DIR)/src/ui $(KRYON_DIR)/src/backend -g '*.zi') $(wildcard $(ZIRAN_ROOT)/std/*.zi)
 .PHONY: all test run native native-test model-test publication
 all: build/entity.zx native
-build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile
+# A bundle is only valid for the toolchain that wrote it: another toolchain's
+# runtime rejects its ZIR version. The stamp changes with the compiler ZIRAN
+# names, so a caller that passes its own toolchain gets a bundle built by it.
+TOOLCHAIN_ID := $(ZIRAN) $(shell sha256sum '$(ZIRAN)' 2>/dev/null | cut -c1-16)
+.PHONY: FORCE
+FORCE:
+build/toolchain.id: FORCE
+	@mkdir -p build
+	@printf '%s\n' '$(TOOLCHAIN_ID)' | cmp -s - $@ || printf '%s\n' '$(TOOLCHAIN_ID)' > $@
+build/entity.zx: $(SOURCES) $(UI_SOURCES) $(RUNTIME_SOURCES) $(ASSETS) ziran.lock Makefile build/toolchain.id
 	mkdir -p build
 	$(ZIRAN) bundle --project $(LOCK_FLAGS) \
 		--define KRYON_HOSTED_UI --asset-dir assets=assets --entry entity:Main -o $@ src/entity.zi

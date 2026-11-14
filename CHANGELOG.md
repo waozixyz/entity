@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `build/entity.zx` is rebuilt when the compiler that `ZIRAN` names changes. A bundle only loads in a runtime of the toolchain that wrote it, and a caller that passed its own toolchain got a stale bundle its page rejected.
+
 - The web build includes Kryon's test driver only when `KRYON_TEST_DRIVER` is set, and the canvas profile host test builds its page that way. Kryon no longer puts the driver in ordinary builds.
 
 - Build achievement notifications with the current Kryon widget imports.
