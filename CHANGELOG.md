@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Run the canvas profile host with Kryon's `CanvasAppMainLoop()`, which no longer takes a DOM flag now that Kryon has no DOM backend. Entity builds with Kryon 1be70904 and Ziran 665fbbca.
+
 - `build/entity.zx` is rebuilt when the compiler that `ZIRAN` names changes. A bundle only loads in a runtime of the toolchain that wrote it, and a caller that passed its own toolchain got a stale bundle its page rejected.
 
 - The web build includes Kryon's test driver only when `KRYON_TEST_DRIVER` is set, and the canvas profile host test builds its page that way. Kryon no longer puts the driver in ordinary builds.

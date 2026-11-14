@@ -42,7 +42,7 @@ shutil.copyfile(root / 'tests/canvas_profile_app.zi', consumer / 'src/canvas_pro
 (consumer / 'src/canvas_bare_entry.zi').write_text('''using Runner :: #import "kryon/canvas_app_run";
 #import "canvas_profile_app"
 #program_export
-main :: () -> s32 { return Runner.CanvasAppMainLoop(false) }
+main :: () -> s32 { return Runner.CanvasAppMainLoop() }
 ''')
 locked = json.loads((root / 'ziran.lock').read_text())
 tool_ref = locked['toolchain']['commit']

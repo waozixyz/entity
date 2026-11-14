@@ -116,7 +116,7 @@ EntityCanvasMain :: (client_id: string = "arcade") -> s32 {
     CanvasAppUseHooks(CanvasAppHooks.{.start = EntityCanvasStart, .stop = EntityCanvasStop,
             .pump = EntityCanvasPump, .supports = EntityCanvasSupports,
             .service = EntityCanvasService, .frame = EntityCanvasFrame})
-    return CanvasAppMainLoop(false)
+    return CanvasAppMainLoop()
 }
 
 #program_export
