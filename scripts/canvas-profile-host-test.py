@@ -70,7 +70,8 @@ def build_and_run(entry=None, mode=None):
                '--source', 'src/canvas_bare_entry.zi' if mode == 'bare' else 'src/canvas_profile_app.zi']
     if entry:
         command += ['--entry', entry]
-    subprocess.run(command, cwd=consumer, env=env, check=True)
+    # The test drives this page through Kryon's test driver, so the build asks for it.
+    subprocess.run(command, cwd=consumer, env={**env, 'KRYON_TEST_DRIVER': '1'}, check=True)
     module_map = (consumer / 'build/.ziran/module-map.tsv').read_text().splitlines()
     rewards = [line.split('\t') for line in module_map if line.startswith('M\t')
                and line.split('\t')[2] == 'rewards']

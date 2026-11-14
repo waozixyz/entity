@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The web build includes Kryon's test driver only when `KRYON_TEST_DRIVER` is set, and the canvas profile host test builds its page that way. Kryon no longer puts the driver in ordinary builds.
+
 - Build achievement notifications with the current Kryon widget imports.
 
 - Remember completed password backups for the same shared desktop account across apps; dismissed reminders remain separate from recovery evidence.

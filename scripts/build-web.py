@@ -76,8 +76,11 @@ def main():
     # such as rewards and bypasses the lock's transitive namespace resolution.
     # Kryon selects browser code by the target OS; PLATFORM_WEB remains for
     # Entity's own web selectors.
+    # Kryon's test driver is test code. A page that a test drives is built with
+    # KRYON_TEST_DRIVER set; every other page leaves the driver out.
+    driver = ['--define', 'KRYON_TEST_DRIVER'] if os.environ.get('KRYON_TEST_DRIVER') else []
     subprocess.run([ziran, 'build', *imports, '--target=c', '--target-os', 'web', '--target-cpu', 'wasm32',
-                    '--define', 'PLATFORM_WEB',
+                    '--define', 'PLATFORM_WEB', *driver,
                     '--define', 'BUNDLE_NATIVE_RENDERER', '--entry', entry, *bindings,
                     '-o', str(generated), args.source, *canvas], check=True, env=env)
     if args.canvas_app:
