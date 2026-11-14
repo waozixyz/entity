@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {key: value for key, value in os.environ.items()
        if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')}
 ZIRAN = os.environ.get('ZIRAN_BIN', 'ziran')
-DAOCHI = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[1] / 'kryonlabs/daochi/daochi'))
+DAOCHI = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
 
 
 def package(name):
