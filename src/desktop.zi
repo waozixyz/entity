@@ -19,6 +19,9 @@
 #import "kryon/widget_host"
 #import "kryon/key_input"
 #import "kryon/Frame"
+#import "kryon/tree"
+#import "kryon/geometry"
+#import "kryon/tree_input"
 #import "std/timer_linux"
 using UI :: #import "kryon/session";
 Desktop :: #import "kryon/desktop_runtime";
@@ -44,6 +47,7 @@ OpenEntity :: (path: string) -> bool {
     return EntityHostOpen(bundle_bytes, NativeRoot(root[:]), "entity")
 }
 Draw :: (session: UI.Session) -> bool {
+    key, modifiers := Desktop.DesktopInputTake(session)
     Desktop.BeginDesktopFrame()
     area := Desktop.DesktopViewport()
     pointer := Desktop.PollPointer()
@@ -51,8 +55,6 @@ Draw :: (session: UI.Session) -> bool {
     TreeSecondaryPointerUpdate(session, Desktop.PollSecondaryPointer())
     PointerWheelSend(session, pointer.x, pointer.y, Desktop.DesktopWheelMove())
     if BeginFrame(session, cast(u64)1, area) != FrameStatus.FrameOk { return false }
-    key := KeyboardTake(session)
-    modifiers := KeyboardModifiers(session)
     text: Vec(u8)
     BuilderPrint(*text, "%", TypedTextTake(session, typed[:]))
     input_text := BuilderFinish(text)
@@ -80,11 +82,6 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if !SessionValid(session) { Desktop.CloseDesktop(); return 1 }
     good := true
     while good && Desktop.PollDesktop() {
-        KeyboardModifiersSend(session, Desktop.DesktopModifiers())
-        key := Desktop.DesktopPressedKey()
-        if key != 0 { KeyboardSend(session, key) }
-        point := Desktop.DesktopTypedCodepoint()
-        while point != 0 { TypedCodepointSend(session, point); point = Desktop.DesktopTypedCodepoint() }
         good = Draw(session)
         if Desktop.WindowTakeCloseRequestHost() { break }
         if good { Desktop.PauseDesktop() }
