@@ -12,7 +12,7 @@
 #import "daochi_client/async_client"
 Auth :: #import "daochi_client/auth";
 
-identity :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+account_identity :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 CompletedRead :: (icon: s32) {
     alias_active = true
@@ -29,8 +29,8 @@ main :: () -> s32 {
     directory := NativeEnvironment("ENTITY_PROFILE_REFRESH_DATA")
     if directory == "" || !NativeDirectory(directory) || !CopyCString(directory, account_root[:]) { return 1 }
     account_profile = EntityDefault()
-    unused CopyCString(identity, account_recovery.keys.public_id[:])
-    unused CopyCString(identity, account_profile.owner_id[:])
+    unused CopyCString(account_identity, account_recovery.keys.public_id[:])
+    unused CopyCString(account_identity, account_profile.owner_id[:])
     account_profile.picture = 1
     alias_owner = account_recovery.keys.public_id
     unused CopyCString(TextUntilNul(account_profile.nodes[account_profile.preferred][:]), alias_node[:])
@@ -43,12 +43,12 @@ main :: () -> s32 {
     if !AccountStoreSaveProfile(selected) { return 2 }
     // A second host with this identity reads the first host's choice and clock.
     second := EntityDefault()
-    if !SharedProfileLoad(identity, *second) || second.picture != 7 || second.appearance_changed != 200 { return 8 }
+    if !SharedProfileLoad(account_identity, *second) || second.picture != 7 || second.appearance_changed != 200 { return 8 }
     second.picture = 9
     second.appearance_changed = 300
-    if !SharedProfileSave(identity, second) { return 9 }
+    if !SharedProfileSave(account_identity, second) { return 9 }
     reopened := EntityDefault()
-    if !SharedProfileLoad(identity, *reopened) || reopened.picture != 9 || reopened.appearance_changed != 300 { return 10 }
+    if !SharedProfileLoad(account_identity, *reopened) || reopened.picture != 9 || reopened.appearance_changed != 300 { return 10 }
     // Its authenticated upload finished before the older read arrived.
     picture_dirty = false
     picture_publisher.active = false
@@ -81,9 +81,9 @@ main :: () -> s32 {
     if account_profile.picture != 7 || alias_active { return 7 }
     // Two independent host stores share the same account profile. The second
     // host starts with an older cached record and then receives a newer one.
-    unused CopyCString(identity, account_recovery.keys.public_id[:])
+    unused CopyCString(account_identity, account_recovery.keys.public_id[:])
     account_profile = EntityDefault()
-    unused CopyCString(identity, account_profile.owner_id[:])
+    unused CopyCString(account_identity, account_profile.owner_id[:])
     account_standalone_ready = true
     chosen := account_profile
     chosen.picture = 12
@@ -98,7 +98,7 @@ main :: () -> s32 {
     unused EntityRecordsAnswer(put)
     EntityFree(put)
     account_profile = EntityDefault()
-    unused CopyCString(identity, account_profile.owner_id[:])
+    unused CopyCString(account_identity, account_profile.owner_id[:])
     loaded := EntityHostReadProfile()
     if loaded.picture != 12 || loaded.appearance_changed <= 1 { return 14 }
     alias_owner = account_recovery.keys.public_id
@@ -112,7 +112,7 @@ main :: () -> s32 {
     // Reopening this host must keep the shared selection despite its older record.
     records_owner = .{}
     account_profile = EntityDefault()
-    unused CopyCString(identity, account_profile.owner_id[:])
+    unused CopyCString(account_identity, account_profile.owner_id[:])
     loaded = EntityHostReadProfile()
     if loaded.picture != 12 { return 15 }
     remote := loaded
@@ -124,7 +124,7 @@ main :: () -> s32 {
     loaded = EntityHostReadProfile()
     if loaded.picture != 15 || loaded.appearance_changed != remote.appearance_changed { return 16 }
     reopened_remote := EntityDefault()
-    if !SharedProfileLoad(identity, *reopened_remote) || reopened_remote.picture != 15 { return 17 }
+    if !SharedProfileLoad(account_identity, *reopened_remote) || reopened_remote.picture != 15 { return 17 }
     print("Profile picture local tests: stale reads, pending uploads, fresh restore and owner change passed.\n")
     return 0
 }

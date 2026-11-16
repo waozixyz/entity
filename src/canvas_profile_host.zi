@@ -9,6 +9,11 @@
 TextField :: #import "kryon/text_field";
 Button :: #import "kryon/button";
 #import "kryon/page_core"
+// A page built for a test connects Kryon's test driver to this host's input;
+// ordinary pages carry none of it.
+#if #defined(KRYON_TEST_DRIVER) {
+    #import "kryon/test_driver_frame"
+}
 #import "native_host"
 #import "publications_read"
 #import "entity_records"

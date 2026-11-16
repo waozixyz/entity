@@ -160,8 +160,10 @@ Crypto :: () -> bool {
     if !CreateDirectories(generated) || !CopyFile(JoinPath(mono, "src/monocypher.c"), JoinPath(generated, "monocypher.c")) || !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.c"), JoinPath(generated, "ed25519.c")) { return false }
     if !CopyFile(JoinPath(mono, "src/optional/monocypher-ed25519.h"), JoinPath(generated, "monocypher-ed25519.h")) || !Archive(generated, Out("libmonocypher.a"), Flag("-I", JoinPath(mono, "src"))) { return false }
     if !PlatformSupport() { return false }
+    // Hosts run the profile's ZX bundle through this runtime, so it carries
+    // Ziran's instruction engine; a BOOTSTRAP=1 runtime opens no bundle.
     runtime := Out("runtime")
-    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "BOOTSTRAP=1", Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
+    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
     return CopyFile(JoinPath(runtime, "libziran.a"), Out("libziran.a")) && PkgWrite(Out("link.txt"), LinkText(false))
 }
 // Re-root the provider's resolved dependencies without resolving a second lock.

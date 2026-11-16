@@ -111,8 +111,11 @@ def main():
                         '-sENVIRONMENT=web', '-sEXPORTED_RUNTIME_METHODS=FS', '-sEXPORTED_FUNCTIONS=_main',
                         '--shell-file', str(kryon / 'mk/zx-shell.html'), '-o', str(output)], check=True, env=env)
         return
+    # The page runs the profile's ZX bundle, so its runtime needs Ziran's
+    # instruction engine; a BOOTSTRAP=1 runtime has none. Ziran builds its
+    # own host compiler with HOST_CC for this cross build.
     runtime = work / 'runtime/libziran.a'
-    subprocess.run(['make', '-C', str(toolchain), 'BOOTSTRAP=1', 'BUILD_DIR=' + str(runtime.parent),
+    subprocess.run(['make', '-C', str(toolchain), 'BUILD_DIR=' + str(runtime.parent),
                     'CC=' + emcc, 'AR=' + emar, 'OBJCOPY=true', 'TARGET_MACHINE=wasm32-unknown-emscripten',
                     'CFLAGS=-O2', str(runtime)], check=True, env=env)
     oqs_source = package('liboqs')

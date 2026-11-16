@@ -5,11 +5,11 @@ module_roots = ["src", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "665fbbca60ccf1e3823741d727af9af6c6552958"
+ref = "768495fcbde70e1168c3533c991b462f57b549f8"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "1be70904a388db11ef5fb3938cd2d37ab7dd8eb5"
+ref = "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"
 
 [exports]
 canvas_profile_host = "src/canvas_profile_host.zi"
