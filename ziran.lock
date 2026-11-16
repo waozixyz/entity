@@ -203,8 +203,8 @@
     "name": "Entity"
   },
   "toolchain": {
-    "commit": "768495fcbde70e1168c3533c991b462f57b549f8",
-    "ref": "768495fcbde70e1168c3533c991b462f57b549f8",
+    "commit": "f9f92b46db88b48cede41a6feb560915972b2ce6",
+    "ref": "f9f92b46db88b48cede41a6feb560915972b2ce6",
     "url": "https://github.com/ziranlang/ziran.git"
   }
 }
