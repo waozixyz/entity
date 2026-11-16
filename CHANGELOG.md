@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Build with Ziran v0.5.0 (f9f92b46) and Kryon 0dea8bc2, the same pins as the apps that depend on Entity, so they share one Kryon.
+- Build with Ziran v0.5.0 (f9f92b46) and Kryon 245605c3, the same pins as the apps that depend on Entity, so they share one Kryon.
 - The runtime that hosts and web pages link carries Ziran's instruction engine, so it opens the profile's ZX bundle; a page built for a test connects Kryon's test driver itself.
 - The profile refresh test names its identity constant `account_identity`: Ziran writes a module string constant as a bare C macro, which rewrote DaochiClient's `identity` fields.
 
