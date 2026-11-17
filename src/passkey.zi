@@ -18,8 +18,8 @@
 // credential. As in v3, the node stores only SHA-256 of the login proof.
 #import "recovery"
 #import "account_backup"
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/byte_text_linux"

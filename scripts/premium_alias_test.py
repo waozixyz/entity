@@ -23,13 +23,13 @@ def package(name):
 
 
 std = Path(os.environ.get('ZIRAN_ROOT') or package('ziran'))
-kryon, client, oqs, crypto, monocypher = map(package, ('kryon', 'daochi_client', 'oqs', 'crypto', 'monocypher'))
+kryon, client, oqs, crypto, monocypher = map(package, ('kryon', 'mesh_client', 'oqs', 'crypto', 'monocypher'))
 output = ROOT / 'build/premium-alias-node-test'
 output.mkdir(parents=True, exist_ok=True)
 generated = output / 'generated'
 paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(std / 'std'),
          '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/backend'),
-         '--module-path', str(kryon / 'src/ui'), '--module-path', f'daochi_client={client}',
+         '--module-path', str(kryon / 'src/ui'), '--module-path', f'mesh_client={client}',
          '--module-path', str(client), '--module-path', f'oqs={oqs / "src"}',
          '--module-path', f'crypto={crypto / "src"}']
 subprocess.run([ZIRAN, 'build', '--target=c', '--root', str(ROOT), *paths,
@@ -47,8 +47,8 @@ subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2', '-ffunction-secti
                 str(monocypher / 'src/optional/monocypher-ed25519.c'), os.environ['LIBOQS_LIBRARY'],
                 *flags, '-lX11', '-l:libcurl.so.4', '-lpthread', '-lm', '-lz', '-o', str(executable)],
                check=True, env=ENV)
-node_binary = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
-assert node_binary.is_file(), 'Build the canonical Daochi executable first'
+node_binary = Path(os.environ.get('MESH_BIN', ROOT.parents[2] / 'ziranlang/mesh/mesh'))
+assert node_binary.is_file(), 'Build the canonical Mesh executable first'
 work = ROOT / 'work'
 work.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='premium-alias-', dir=work) as temporary:
@@ -58,10 +58,10 @@ with tempfile.TemporaryDirectory(prefix='premium-alias-', dir=work) as temporary
         port = probe.getsockname()[1]
     address = f'http://127.0.0.1:{port}'
     admin = secrets.token_hex(32)
-    node_env = dict(ENV, DAOCHI_ADDR=f'127.0.0.1:{port}', DAOCHI_DB=str(private / 'node.db'),
-                    DAOCHI_BASE_URL=address, DAOCHI_LAN_DISCOVERY='0',
-                    DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET='1', DAOCHI_PREMIUM_ALIASES_ENABLED='true',
-                    DAOCHI_TOKEN_ISSUER_PRIVATE_KEY_HEX=secrets.token_hex(32), DAOCHI_ADMIN_TOKEN=admin)
+    node_env = dict(ENV, MESH_ADDR=f'127.0.0.1:{port}', MESH_DB=str(private / 'node.db'),
+                    MESH_BASE_URL=address, MESH_LAN_DISCOVERY='0',
+                    MESH_ALLOW_EPHEMERAL_TOKEN_SECRET='1', MESH_PREMIUM_ALIASES_ENABLED='true',
+                    MESH_TOKEN_ISSUER_PRIVATE_KEY_HEX=secrets.token_hex(32), MESH_ADMIN_TOKEN=admin)
     with (private / 'node.log').open('w') as log:
         node = subprocess.Popen([str(node_binary)], cwd=private, env=node_env, stdout=log, stderr=subprocess.STDOUT)
         try:

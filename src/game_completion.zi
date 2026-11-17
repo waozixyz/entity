@@ -1,5 +1,5 @@
 // Pure map identity shared by offline games and their account providers.
-#import "daochi_client/crypto"
+#import "mesh_client/crypto"
 #import "std/number_text"
 
 #scope_file

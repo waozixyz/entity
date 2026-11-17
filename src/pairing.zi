@@ -8,7 +8,7 @@
 // its account to them. When the showing device holds the account, the scanning
 // device posts its keys, both screens show a number to compare, and the showing
 // device seals the account to the scanner, which checks the sender against the
-// code. Daochi relays the sealed messages unread.
+// code. Mesh relays the sealed messages unread.
 //
 // Codes from older apps (inbe-link:1) carry an X25519 key and stay readable;
 // those links are sealed with X25519 alone because the other app has nothing
@@ -17,8 +17,8 @@
 #import "std/text"
 #import "std/vec"
 #import "std/text_buffer"
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
 #import "oqs/Oqs"
 #import "model"
 #import "node_url"

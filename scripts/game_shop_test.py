@@ -30,8 +30,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     fixture = Path(tempfile.mkdtemp(prefix='fixture-', dir=out))
     fixture.chmod(0o700)
-    compiler, kryon, daochi, crypto, oqs, mono = (package(name) for name in
-        ('ziran', 'kryon', 'daochi_client', 'crypto', 'oqs', 'monocypher'))
+    compiler, kryon, mesh, crypto, oqs, mono = (package(name) for name in
+        ('ziran', 'kryon', 'mesh_client', 'crypto', 'oqs', 'monocypher'))
     generated = out / 'generated'
     # This disposable output also held the previous fixture's module path.
     shutil.rmtree(generated, ignore_errors=True)
@@ -39,7 +39,7 @@ def main():
              '--module-path', 'kryon=' + str(kryon / 'src/backend'),
              '--module-path', str(kryon / 'src/backend'),
              '--module-path', 'kryon=' + str(kryon / 'src/ui'), '--module-path', str(kryon / 'src/ui'),
-             '--module-path', 'daochi_client=' + str(daochi), '--module-path', str(daochi),
+             '--module-path', 'mesh_client=' + str(mesh), '--module-path', str(mesh),
              '--module-path', 'crypto=' + str(crypto / 'src'), '--module-path', 'oqs=' + str(oqs / 'src')]
     model = out / 'model'
     subprocess.run([ZIRAN, 'build', '--root', str(ROOT), *paths, '--target=c', '--entry',
@@ -92,12 +92,12 @@ BundleAppServices :: (context: *void, module: *u8, function: *u8, arguments: *Ho
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
     url = 'http://127.0.0.1:' + str(port)
-    node_env = {**ENV, 'DAOCHI_ADDR': '127.0.0.1:' + str(port), 'DAOCHI_DB': str(fixture / 'node.db'),
-                'DAOCHI_BASE_URL': url, 'DAOCHI_LAN_DISCOVERY': '0', 'DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET': '1',
-                'DAOCHI_SHOVEY_ISLAND_LAUNCH_AT': str(int(time.time()) - 86400),
-                'DAOCHI_ADMIN_TOKEN': admin, 'DAOCHI_TOKEN_ISSUER_PUBLIC_KEY_HEX': public.hex(),
-                'DAOCHI_TOKEN_ISSUER_PRIVATE_KEY_HEX': private.hex()}
-    node_binary = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
+    node_env = {**ENV, 'MESH_ADDR': '127.0.0.1:' + str(port), 'MESH_DB': str(fixture / 'node.db'),
+                'MESH_BASE_URL': url, 'MESH_LAN_DISCOVERY': '0', 'MESH_ALLOW_EPHEMERAL_TOKEN_SECRET': '1',
+                'MESH_SHOVEY_ISLAND_LAUNCH_AT': str(int(time.time()) - 86400),
+                'MESH_ADMIN_TOKEN': admin, 'MESH_TOKEN_ISSUER_PUBLIC_KEY_HEX': public.hex(),
+                'MESH_TOKEN_ISSUER_PRIVATE_KEY_HEX': private.hex()}
+    node_binary = Path(os.environ.get('MESH_BIN', ROOT.parents[2] / 'ziranlang/mesh/mesh'))
     devices = {name: fixture / name for name in ('first', 'second', 'other')}
     for path in devices.values():
         path.mkdir(mode=0o700)

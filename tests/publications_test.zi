@@ -4,8 +4,8 @@
 #import "level_collections"
 #import "account_store"
 #import "model"
-#import "daochi_client/client"
-#import "daochi_client/async_client"
+#import "mesh_client/client"
+#import "mesh_client/async_client"
 #import "std/net_http"
 #import "std/date_time_linux"
 #import "std/json_scan"
@@ -13,7 +13,7 @@
 #import "std/byte_text_linux"
 #import "std/text_buffer"
 #import "std/vec"
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 
 NODE :: "http://127.0.0.1:9"
 AUTHOR :: "abababababababababababababababababababababababababababababababab"

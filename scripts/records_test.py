@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The entity.records service: on one device, then two devices of one
-throwaway account syncing through a private local Daochi node. Nothing here
+throwaway account syncing through a private local Mesh node. Nothing here
 touches real accounts, nodes or displays."""
 import os
 from pathlib import Path
@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV = {key: value for key, value in os.environ.items()
        if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')}
 ZIRAN = os.environ.get('ZIRAN_BIN', 'ziran')
-DAOCHI = Path(os.environ.get('DAOCHI_BIN', ROOT.parents[2] / 'kryonlabs/daochi/daochi'))
+MESH = Path(os.environ.get('MESH_BIN', ROOT.parents[2] / 'ziranlang/mesh/mesh'))
 
 
 def package(name):
@@ -25,7 +25,7 @@ def package(name):
 
 std_root = Path(os.environ.get('ZIRAN_ROOT') or package('ziran'))
 kryon = package('kryon')
-daochi = package('daochi_client')
+mesh = package('mesh_client')
 oqs = package('oqs')
 crypto = package('crypto')
 monocypher = package('monocypher')
@@ -37,7 +37,7 @@ ENV['XDG_DATA_HOME'] = str(output / 'shared')
 ENV['YUE_DESKTOP_RECOVERY'] = '0'
 paths = ['--module-path', str(ROOT / 'src'), '--module-path', str(std_root / 'std'),
          '--module-path', f'kryon={kryon / "src/backend"}', '--module-path', str(kryon / 'src/backend'),
-         '--module-path', str(kryon / 'src/ui'), '--module-path', f'daochi_client={daochi}', '--module-path', str(daochi),
+         '--module-path', str(kryon / 'src/ui'), '--module-path', f'mesh_client={mesh}', '--module-path', str(mesh),
          '--module-path', f'oqs={oqs / "src"}', '--module-path', f'crypto={crypto / "src"}']
 flags = subprocess.check_output(['pkg-config', '--libs', 'gtk+-3.0'], text=True).split()
 
@@ -72,18 +72,18 @@ subprocess.run([str(local)], check=True, env={**ENV, 'ENTITY_DATA': str(data)})
 private(data)
 print('Entity records on one device: save, list with fields, read, delete and reload passed')
 
-assert DAOCHI.is_file(), f'Build the Daochi node first ({DAOCHI}) or set DAOCHI_BIN'
+assert MESH.is_file(), f'Build the Mesh node first ({MESH}) or set MESH_BIN'
 synced = build('entity_records_sync_test')
 node_folder = output / 'node'
 node_folder.mkdir(mode=0o700)
-node_binary = node_folder / 'daochi'
-shutil.copy2(DAOCHI, node_binary)
+node_binary = node_folder / 'mesh'
+shutil.copy2(MESH, node_binary)
 with socket.socket() as probe:
     probe.bind(('127.0.0.1', 0))
     port = probe.getsockname()[1]
-node_env = {**ENV, 'DAOCHI_ADDR': f'127.0.0.1:{port}', 'DAOCHI_DB': str(node_folder / 'node.db'),
-            'DAOCHI_BASE_URL': f'http://127.0.0.1:{port}', 'DAOCHI_LAN_DISCOVERY': '0',
-            'DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET': '1'}
+node_env = {**ENV, 'MESH_ADDR': f'127.0.0.1:{port}', 'MESH_DB': str(node_folder / 'node.db'),
+            'MESH_BASE_URL': f'http://127.0.0.1:{port}', 'MESH_LAN_DISCOVERY': '0',
+            'MESH_ALLOW_EPHEMERAL_TOKEN_SECRET': '1'}
 node_url = f'http://127.0.0.1:{port}'
 with (node_folder / 'node.log').open('w') as log:
     node = subprocess.Popen([str(node_binary)], cwd=node_folder, env=node_env, stdout=log, stderr=subprocess.STDOUT)

@@ -9,8 +9,8 @@
 #import "recovery"
 #import "std/c_string"
 #import "std/text_buffer"
-#import "daochi_client/async_client"
-Auth :: #import "daochi_client/auth";
+#import "mesh_client/async_client"
+Auth :: #import "mesh_client/auth";
 
 account_identity :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

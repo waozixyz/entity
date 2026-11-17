@@ -109,7 +109,7 @@ under a key derived from the password with Argon2id (64 MiB, 3 passes), so its
 strength depends on that password. No server can reset it. Older files keep
 opening.
 
-A backup can also be saved on the account's Daochi node (`account_backup`). The
+A backup can also be saved on the account's [Mesh](https://mesh.ziran-lang.org) node (`account_backup`). The
 node keeps only the sealed text and a verifier; a new device gets the salt,
 derives its proof from the password and receives the text only for that proof,
 under per-account attempt limits. Signing in with a username or public ID needs
@@ -130,7 +130,7 @@ Device links seal the account with X25519 and ML-KEM-768 together. The QR code
 carries the relay ID and a key hash, and the keys travel through the relay. Older
 `inbe-link:1` codes keep working.
 
-Recovery retains the existing plain and passphrase-protected Daochi key formats.
+Recovery retains the existing plain and passphrase-protected Mesh key formats.
 An optional protected native context preserves Werkzeug's record vault across
 backup/import and new shared QR transfers. Plain-key QR transfers retain Inbe's
 existing payload. Receivers validate the account keys before import. Older Inbe
@@ -153,7 +153,7 @@ run with `ENTITY_PRIVATE_DISPLAY=1` on a private Xvfb display.
 
 The `entity.records` app service (`entity/entity_records`) keeps the account's
 own records of each kind an app names, such as Shovey's level drafts in
-`private.entity.v1.levels` (Daochi `docs/entity-data.md`). Requests (`list`,
+`private.entity.v1.levels` (Mesh `docs/entity-data.md`). Requests (`list`,
 `get`, `put`, `delete`, `status`) answer at once from the device's copy, so a
 save never waits for the node; the native host then syncs the records in the
 account's signed sync as the `entity` app, sealed with the record key of
@@ -161,7 +161,7 @@ their kind. Records saved before an account is connected stay on the device
 and become that account's own once it is. Documents are JSON objects of at
 most 140 KiB. Native hosts route the service and call `EntityHostPump` each
 frame. `make records-test` checks one device and two devices of a throwaway
-account through a private local Daochi node.
+account through a private local Mesh node.
 
 ## Collection sharing client
 
@@ -420,7 +420,7 @@ verify Profile/Back navigation.
 
 Click the picture in Profile or Account to open one modal with Abstract and
 Classic tabs. Classic retains the existing icon set; Abstract contains three
-generated bitmap pictures. The chosen picture family follows the verified Daochi account in
+generated bitmap pictures. The chosen picture family follows the verified Mesh account in
 `private.entity.v1.profile`, record `00000000000000000000000000000001`, schema
 `entity.profile-appearance.v1`, through the existing encrypted Entity record
 service. Old profile documents keep their classic picture.
@@ -468,7 +468,7 @@ positive integer `units` and nonnegative integer `balance`, both at most
 9007199254740991, matching the existing reward helper's monetary semantics.
 `Done` means this reply credited the account; `AlreadyClaimed` means
 `credited:false`, carrying the catalog units without reporting a new award.
-`result.claim` uses the existing Daochi `RewardClaim` model. Neither implies
+`result.claim` uses the existing Mesh `RewardClaim` model. Neither implies
 remote record synchronization. Provider `busy`, `signin`, `ineligible` and
 `failed` remain distinct terminal states; arbitrary success text is rejected.
 Malformed, duplicate-field, wrong-reward or oversized replies stop without an
@@ -611,14 +611,14 @@ proof of purchase origin. Account keys remain native.
 
 A custom signed-account provider imports `entity/referral_native` and calls
 `EntityReferralsConnect(client, context)` with `(context: *void, output: *Client)
--> bool`, returning the current verified Daochi Client, false when signed out.
+-> bool`, returning the current verified Mesh Client, false when signed out.
 Forward `entity.referrals` to `EntityReferralsAnswer(request)` and pump
 `EntityReferralsPump()` after each frame. Call `EntityReferralsReset()` on
 logout/relogin (even the same key), account replacement, callback reconfiguration and disposal. The
 adapter also detects owner, node and device changes before queueing, before
 sending and after polling, and clears receipts and private lists. Shared
 AccountStore/native hosts do this automatically. It uses the existing signed
-Daochi challenge/login and Bearer request protocol through BeginRequest.
+Mesh challenge/login and Bearer request protocol through BeginRequest.
 
 The empty service request returns a bounded snapshot: owner, generation,
 ready, can_claim, busy, operation, error, share_url, me, page and receipt.
@@ -698,4 +698,4 @@ Run `build-queue -- make canvas-profile-host-test ZIRAN=/path/to/ziran` for a
 real generated browser host test of the cover, shared referrals/sign-in, input
 isolation, document reload and mini behavior. Signed referral acceptance and
 cross-device assertions must also run through the adopting application's
-fresh private Daochi browser integration fixture.
+fresh private Mesh browser integration fixture.

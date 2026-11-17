@@ -35,11 +35,23 @@ run(compiler, 'bundle', '--project', '--entry', entry, '--root', work / 'ir', '-
 run(compiler, 'run', work / 'test.zx')
 
 # Exercise the dependency's existing reward wire/model fixture with a fake node.
-daochi = Path(subprocess.check_output([compiler, 'pkg', 'path', 'daochi_client'], env=env, text=True).strip())
-run(compiler, 'build', '--root', daochi, '--module-path', tool_root / 'std',
-    '--target=c', '--no-main', '-o', work / 'wire', daochi / 'rewards.zi')
+mesh = Path(subprocess.check_output([compiler, 'pkg', 'path', 'mesh_client'], env=env, text=True).strip())
+run(compiler, 'build', '--root', mesh, '--module-path', tool_root / 'std',
+    '--module-path', f'mesh_client={mesh}',
+    '--target=c', '--no-main', '-o', work / 'wire', mesh / 'rewards.zi')
+# Qualified self-imports use package-prefixed C header names.
+headers = []
+for source in mesh.glob('*.zi'):
+    module = source.stem
+    matches = [path for path in [work / 'wire' / (module + '.h'),
+               *(work / 'wire').glob('p*_' + module + '.h')] if path.is_file()]
+    if matches:
+        selected = min(matches, key=lambda path: len(path.name))
+        headers.append(f'#define MESH_{module.upper()}_HEADER "{selected.name}"\n')
+(work / 'wire/test_headers.h').write_text(''.join(headers))
 run(env.get('CC', 'cc'), '-std=c11', '-O0', '-ffunction-sections', '-fdata-sections',
     '-Wl,--gc-sections', '-I' + str(tool_root / 'include'), '-I' + str(work / 'wire'),
-    daochi / 'tests/rewards_test.c', *sorted((work / 'wire').rglob('*.c')),
+    '-include', work / 'wire/test_headers.h',
+    mesh / 'tests/rewards_test.c', *sorted((work / 'wire').rglob('*.c')),
     '-o', work / 'reward-wire-test')
 run(work / 'reward-wire-test')

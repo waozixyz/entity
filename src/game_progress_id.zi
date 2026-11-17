@@ -1,7 +1,7 @@
 // Record IDs are an account-provider concern. Portable games address
 // progress by game name and use the pure game_progress document model.
 #import "game_progress"
-#import "daochi_client/crypto"
+#import "mesh_client/crypto"
 
 // Every host derives the same record ID for one game. The account remains
 // the record's owner; no device, installation or wrapper goes into its ID.

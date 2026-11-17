@@ -15,7 +15,7 @@
 #import "std/timer_linux"
 #import "std/text_buffer"
 #import "std/byte_text_linux"
-#import "daochi_client/keys"
+#import "mesh_client/keys"
 
 alias_result: [32]u8;
 alias_message: [256]u8;

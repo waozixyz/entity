@@ -173,10 +173,10 @@ Use the same Cloud project as Drive above.
    certificate pair. Sign in with Google needs them too.
 3. In [Data Access](https://console.cloud.google.com/auth/scopes) add only
    `openid`. The node keeps no email or name.
-4. Set this on the Daochi node, web client first, then restart it:
+4. Set this on the Mesh node, web client first, then restart it:
 
    ```sh
-   DAOCHI_GOOGLE_SIGNIN_CLIENT_IDS=WEB_CLIENT_ID
+   MESH_GOOGLE_SIGNIN_CLIENT_IDS=WEB_CLIENT_ID
    ```
 
    The Google button stays hidden until the node has this value.

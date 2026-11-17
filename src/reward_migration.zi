@@ -1,10 +1,10 @@
 // Open only the node's immutable pre-upgrade Shovey progress snapshot. The
 // proof is the XChaCha nonce-prefix subkey for that version, never the account
 // private key or the reusable game-progress record key.
-#import "daochi_client/entity"
-#import "daochi_client/crypto"
-#import "daochi_client/keys"
-Wire :: #import "daochi_client/wire";
+#import "mesh_client/entity"
+#import "mesh_client/crypto"
+#import "mesh_client/keys"
+Wire :: #import "mesh_client/wire";
 #import "game_progress"
 #import "std/json_scan"
 #import "std/c_string"

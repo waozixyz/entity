@@ -3,8 +3,8 @@
 #import "referral_model"
 #import "dew_model"
 #import "model"
-#import "daochi_client/client"
-#import "daochi_client/async_client"
+#import "mesh_client/client"
+#import "mesh_client/async_client"
 #import "kryon/http_transfer"
 #import "std/net_http"
 #import "std/date_time_linux"
@@ -12,7 +12,7 @@
 #import "std/json_scan"
 #import "std/text_buffer"
 #import "std/vec"
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 ReferralClient :: #type (context: *void, output: *Client) -> bool;
 referral_client: ReferralClient;
 referral_context: *void;

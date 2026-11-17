@@ -2,7 +2,7 @@
 // Google class, scope or Android adapter. The adapter receives sealed v3 only.
 #import "recovery"
 #import "passphrase"
-#import "daochi_client/keys"
+#import "mesh_client/keys"
 #import "std/text_buffer"
 #import "std/c_string"
 #import "std/byte_text_linux"

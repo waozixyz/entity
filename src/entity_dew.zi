@@ -1,6 +1,6 @@
 // The entity.dew service an app calls through its host: the account's Dew
 // to show, and rewards to claim, such as a game's secret chest. The node
-// grants every reward and gives each to an account once (daochi_client's
+// grants every reward and gives each to an account once (mesh_client's
 // rewards); an app only names it. Without a connected account the balance is
 // shown as 0 and a claim answers "signin", so the app can ask the player to
 // connect one and claim again.
@@ -23,14 +23,14 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/date_time_linux"
-#import "daochi_client/async_client"
-#import "daochi_client/client"
-#import "daochi_client/rewards"
-#import "daochi_client/crypto"
-#import "daochi_client/keys"
+#import "mesh_client/async_client"
+#import "mesh_client/client"
+#import "mesh_client/rewards"
+#import "mesh_client/crypto"
+#import "mesh_client/keys"
 #import "reward_migration"
 #import "game_shop_native"
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 #import "kryon/http_transfer"
 
 ENTITY_DEW_SERVICE :: "entity.dew"

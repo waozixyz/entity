@@ -14,8 +14,8 @@
 #import "std/net_http"
 #import "std/timer_linux"
 #import "std/date_time_linux"
-#import "daochi_client/keys"
-#import "daochi_client/async_client"
+#import "mesh_client/keys"
+#import "mesh_client/async_client"
 #import "kryon/http_transfer"
 
 transfer: HttpTransfer;

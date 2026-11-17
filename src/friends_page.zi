@@ -168,7 +168,7 @@ FriendsPage :: (x: float32, y: *float32, width: float32) {
                 TextLine(cast(u64)row_key, name_text, x, y.* + 8.0 * scale, content_width - status_width - 8.0 * scale, 16)
                 Muted(cast(u64)(row_key + 3), Label("profile_request_sent", "Request sent"),
                     x + content_width - status_width, y.* + 8.0 * scale, status_width)
-                // Daochi lets the sender withdraw a pending request through decline.
+                // Mesh lets the sender withdraw a pending request through decline.
                 if !busy && Action(row_key + 2, Label("entity.cancel", "Cancel"),
                     Rectangle.{x + width - cancel_width, y.*, cancel_width, 44.0 * scale}) {
                     FriendAction("decline", TextUntilNul(id[:]))

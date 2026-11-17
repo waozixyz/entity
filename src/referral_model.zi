@@ -1,5 +1,5 @@
 #import "std/text_buffer"
-// Public referral responses only. Keys, purchases and credits belong to Daochi.
+// Public referral responses only. Keys, purchases and credits belong to Mesh.
 #import "model"
 #import "std/json_scan"
 #import "std/c_string"

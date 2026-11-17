@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Use the Mesh client namespace for account sync while preserving existing account keys, records and protocol bytes.
+
 - Build with Ziran v0.5.0 (f9f92b46) and Kryon cc731751, the same pins as the apps that depend on Entity, so they share one Kryon.
 - The `native-profile` artifact runs `zi2zx` without the `bundle` verb that one-format Ziran removed, so hosts that request Entity's Profile bundle build it again.
 - The runtime that hosts and web pages link carries Ziran's instruction engine, so it opens the profile's ZX bundle; a page built for a test connects Kryon's test driver itself.

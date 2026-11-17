@@ -2,7 +2,7 @@
 #import "std/json_document"
 #import "std/text_buffer"
 #import "std/vec"
-Rewards :: #import "daochi_client/rewards";
+Rewards :: #import "mesh_client/rewards";
 
 GAME_REWARD_CLIENT_OWNER_MAX :: 128
 GAME_REWARD_CLIENT_REPLY_MAX :: 4096

@@ -42,7 +42,7 @@ try{
   async function until(fn,message,timeout=45000){const end=Date.now()+timeout;while(Date.now()<end){const value=await fn();if(value)return value;await delay(100);}throw Error(message+'\n'+diagnostics);}
   await call('Runtime.enable');await call('Page.enable');
   // This test never contacts an external node. Signed acceptance is exercised
-  // separately against the adopting app's disposable Daochi fixture.
+  // separately against the adopting app's disposable Mesh fixture.
   await call('Network.enable');
   await call('Network.setBlockedURLs',{urls:['https://*']});
   await call('Emulation.setDeviceMetricsOverride',{width:960,height:1100,deviceScaleFactor:1,mobile:false});

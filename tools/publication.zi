@@ -1,4 +1,4 @@
-// Publishes a JSON document as a public Daochi publication from an account
+// Publishes a JSON document as a public Mesh publication from an account
 // key file, so a game can ship content such as its level campaign without a
 // new release. Players read public publications without an account.
 //
@@ -14,11 +14,11 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/date_time_linux"
-#import "daochi_client/async_client"
-#import "daochi_client/client"
-#import "daochi_client/crypto"
-#import "daochi_client/keys"
-Auth :: #import "daochi_client/auth";
+#import "mesh_client/async_client"
+#import "mesh_client/client"
+#import "mesh_client/crypto"
+#import "mesh_client/keys"
+Auth :: #import "mesh_client/auth";
 #import "kryon/http_transfer"
 
 libc :: #system_library "libc";

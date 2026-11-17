@@ -33,7 +33,7 @@ consumer.mkdir(exist_ok=True)
 # Only the explicit test fixture is staged; all product code is imported
 # from the canonical package overrides.
 shutil.copyfile(root / 'tests/canvas_profile_app.zi', consumer / 'src/canvas_profile_app.zi')
-# Deliberately shares a name with daochi_client's private rewards module.
+# Deliberately shares a name with mesh_client's private rewards module.
 # The app calls this implementation while the real provider uses its own.
 (consumer / 'src/rewards.zi').write_text('''CanvasRewardsFixture :: () -> string {
     return "consumer rewards"

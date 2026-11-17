@@ -2,9 +2,9 @@
 #import "account_store"
 #import "model"
 #import "recovery"
-#import "daochi_client/client"
-#import "daochi_client/async_client"
-#import "daochi_client/social"
+#import "mesh_client/client"
+#import "mesh_client/async_client"
+#import "mesh_client/social"
 #import "kryon/http_transfer"
 #import "std/net_http"
 #import "std/date_time_linux"
@@ -12,7 +12,7 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 friend_owner: [65]u8;
 friend_node: [512]u8;
 friend_pending: PendingRequest;

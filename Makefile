@@ -3,7 +3,7 @@ LOCK_FLAGS := $(if $(wildcard ziran.local.toml),,--locked)
 KRYON_DIR = $(shell $(ZIRAN) pkg path kryon $(LOCK_FLAGS))
 ZIRAN_ROOT = $(shell $(ZIRAN) pkg path ziran $(LOCK_FLAGS))
 QRCODE_DIR = $(shell $(ZIRAN) pkg path qrcode $(LOCK_FLAGS))
-DAOCHI_CLIENT_DIR = $(shell $(ZIRAN) pkg path daochi_client $(LOCK_FLAGS))
+MESH_CLIENT_DIR = $(shell $(ZIRAN) pkg path mesh_client $(LOCK_FLAGS))
 CRYPTO_DIR = $(shell $(ZIRAN) pkg path crypto $(LOCK_FLAGS))
 OQS_DIR = $(shell $(ZIRAN) pkg path oqs $(LOCK_FLAGS))
 LIBOQS_DIR = $(shell $(ZIRAN) pkg path liboqs $(LOCK_FLAGS))
@@ -14,8 +14,8 @@ LIBOQS_LIBRARY ?= build/liboqs/lib/liboqs.a
 MODULE_PATHS = --module-path src --module-path kryon=$(KRYON_DIR)/src/backend \
 	--module-path $(KRYON_DIR)/src/backend --module-path kryon=$(KRYON_DIR)/src/ui \
 	--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_ROOT)/std \
-	--module-path qrcode=$(QRCODE_DIR)/src --module-path daochi_client=$(DAOCHI_CLIENT_DIR) \
-	--module-path $(DAOCHI_CLIENT_DIR) --module-path crypto=$(CRYPTO_DIR)/src --module-path oqs=$(OQS_DIR)/src
+	--module-path qrcode=$(QRCODE_DIR)/src --module-path mesh_client=$(MESH_CLIENT_DIR) \
+	--module-path $(MESH_CLIENT_DIR) --module-path crypto=$(CRYPTO_DIR)/src --module-path oqs=$(OQS_DIR)/src
 ACHIEVEMENT_TEST_BINDS = --bind kryon/font_metrics:MeasureGlyphWidth=achievement_shape_host:MeasureGlyphWidth \
 	--bind kryon/font_metrics:MeasureGlyphLineHeight=achievement_shape_host:MeasureGlyphLineHeight \
 	--bind kryon/image_raster:ImageWidth=achievement_shape_host:ImageWidth \
@@ -107,7 +107,7 @@ build/liboqs/lib/liboqs.a: ziran.lock Makefile
 		-DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF -DOQS_DIST_BUILD=OFF -DOQS_OPT_TARGET=generic '-DOQS_MINIMAL_BUILD=SIG_ml_dsa_44;KEM_ml_kem_768'
 	cmake --build build/liboqs --target oqs
 
-# Native game shop and production browser routing against a private Daochi node.
+# Native game shop and production browser routing against a private Mesh node.
 .PHONY: game-shop-test
 game-shop-test: $(LIBOQS_LIBRARY)
 	ZIRAN_BIN=$(ZIRAN) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/game_shop_test.py
@@ -124,7 +124,7 @@ build/entity: build/generated/native/.complete build/ziran/libziran.a $(LIBOQS_L
 		-I$(MONOCYPHER_DIR)/src $$(rg --files build/generated/native -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) \
 		$$(pkg-config --libs sdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0) -lX11 -l:libcurl.so.4 -lm -lpthread -lz -o $@
 native: build/entity
-# Publishes a JSON document as a public Daochi publication; see tools/publication.zi.
+# Publishes a JSON document as a public Mesh publication; see tools/publication.zi.
 publication: build/publication
 build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) ziran.lock Makefile
 	rm -rf build/publication-c
@@ -132,23 +132,23 @@ build/publication: tools/publication.zi src/publications_read.zi $(UI_SOURCES) b
 	$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/publication-c $$(find build/publication-c -type d -printf ' -iquote %p') \
 		-I$(MONOCYPHER_DIR)/src $$(rg --files build/publication-c -g '*.c') $(MONOCYPHER_SOURCES) build/ziran/libziran.a $(LIBOQS_LIBRARY) -l:libcurl.so.4 -lm -lpthread -lz -o $@
 # The entity.records service alone and between two devices through a
-# private local Daochi node (DAOCHI_BIN, by default the checkout's build).
+# private local Mesh node (MESH_BIN, by default the checkout's build).
 .PHONY: records-test
 records-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) MESH_CLIENT_DIR=$(MESH_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/records_test.py
 # Account aliases set the way the Alias page does, through a private local
-# Daochi node (DAOCHI_BIN, by default the checkout's build).
+# Mesh node (MESH_BIN, by default the checkout's build).
 .PHONY: alias-test
 alias-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) MESH_CLIENT_DIR=$(MESH_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/alias_test.py
 .PHONY: premium-alias-node-test
 premium-alias-node-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) MESH_CLIENT_DIR=$(MESH_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(abspath $(LIBOQS_LIBRARY)) python3 scripts/premium_alias_test.py
 native-test: $(LIBOQS_LIBRARY)
-	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) DAOCHI_CLIENT_DIR=$(DAOCHI_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
+	ZIRAN_BIN=$(ZIRAN) ZIRAN_ROOT=$(ZIRAN_ROOT) KRYON_DIR=$(KRYON_DIR) MESH_CLIENT_DIR=$(MESH_CLIENT_DIR) CRYPTO_DIR=$(CRYPTO_DIR) \
 		OQS_DIR=$(OQS_DIR) MONOCYPHER_DIR=$(MONOCYPHER_DIR) LIBOQS_LIBRARY=$(LIBOQS_LIBRARY) python3 scripts/native_test.py
 run: all
 	./build/entity build/entity.zx

@@ -1,11 +1,11 @@
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 #import "referral_model"
 #import "model"
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/net_http"
-#import "daochi_client/async_client"
-#import "daochi_client/client"
+#import "mesh_client/async_client"
+#import "mesh_client/client"
 #import "std/byte_text_linux"
 #import "referral_native"
 #import "referral_locales"

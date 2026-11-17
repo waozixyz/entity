@@ -1,10 +1,10 @@
-// The optional backup a Daochi node keeps. The node holds only text sealed on
+// The optional backup a Mesh node keeps. The node holds only text sealed on
 // this device, so it cannot read the account or reset the password. It hands
 // the text back to whoever presents the proof derived from the password.
 #import "recovery"
 #import "alias_model"
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/byte_text_linux"

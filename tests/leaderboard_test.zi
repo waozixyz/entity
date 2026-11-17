@@ -2,7 +2,7 @@
 #import "leaderboard_native"
 #import "account_store"
 #import "recovery"
-#import "daochi_client/keys"
+#import "mesh_client/keys"
 #import "model"
 #import "native_files"
 #import "std/c_string"
@@ -12,8 +12,8 @@
 #import "std/net_http"
 #import "std/date_time_linux"
 #import "std/json_scan"
-#import "daochi_client/async_client"
-Auth :: #import "daochi_client/auth";
+#import "mesh_client/async_client"
+Auth :: #import "mesh_client/auth";
 
 installed: bool = true;
 IsInstalled :: (game: string) -> bool { return installed && (game == "arcade.shovey" || game == "wurm") }

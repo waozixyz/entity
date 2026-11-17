@@ -5,17 +5,17 @@
 #import "model"
 #import "recovery"
 #import "std/net_http"
-#import "daochi_client/crypto"
+#import "mesh_client/crypto"
 #import "native_files"
 #import "std/c_string"
 #import "std/json_scan"
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/date_time_linux"
-#import "daochi_client/async_client"
-#import "daochi_client/client"
-#import "daochi_client/keys"
-Auth :: #import "daochi_client/auth";
+#import "mesh_client/async_client"
+#import "mesh_client/client"
+#import "mesh_client/keys"
+Auth :: #import "mesh_client/auth";
 #import "kryon/http_transfer"
 #import "dew_play"
 

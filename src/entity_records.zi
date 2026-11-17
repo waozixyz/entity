@@ -1,5 +1,5 @@
 // The "entity.records" app service: the account's own records of each kind
-// (Daochi docs/entity-data.md), such as Shovey's levels, kept once for the
+// (Mesh docs/entity-data.md), such as Shovey's levels, kept once for the
 // account and shared by every app. A request is answered at once from this
 // device's copy, so saving never waits for the node; the records then sync
 // in the account's signed sync as the entity app, sealed with the record key
@@ -34,15 +34,15 @@
 #import "std/vec"
 #import "std/net_http"
 #import "std/date_time_linux"
-#import "daochi_client/entity"
-#import "daochi_client/crypto"
-#import "daochi_client/keys"
-#import "daochi_client/client"
-#import "daochi_client/sync"
-#import "daochi_client/async_client"
-#import "daochi_client/async_sync"
-Auth :: #import "daochi_client/auth";
-RecordCodec :: #import "daochi_client/record_codec";
+#import "mesh_client/entity"
+#import "mesh_client/crypto"
+#import "mesh_client/keys"
+#import "mesh_client/client"
+#import "mesh_client/sync"
+#import "mesh_client/async_client"
+#import "mesh_client/async_sync"
+Auth :: #import "mesh_client/auth";
+RecordCodec :: #import "mesh_client/record_codec";
 #import "kryon/http_transfer"
 
 records_c :: #system_library "c";

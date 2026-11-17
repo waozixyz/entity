@@ -2,7 +2,7 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
-Rewards :: #import "daochi_client/rewards";
+Rewards :: #import "mesh_client/rewards";
 
 identity: string = "alice";
 reply: string;

@@ -11,11 +11,11 @@
 #import "std/timer_linux"
 #import "std/text_buffer"
 #import "std/byte_text_linux"
-#import "daochi_client/keys"
-#import "daochi_client/async_client"
+#import "mesh_client/keys"
+#import "mesh_client/async_client"
 #import "native_management"
 #import "shared_account"
-Auth :: #import "daochi_client/auth";
+Auth :: #import "mesh_client/auth";
 
 backup_observer: ManagementProvider;
 

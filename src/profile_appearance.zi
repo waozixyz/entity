@@ -1,4 +1,4 @@
-// One versioned appearance record for the Daochi account, independent of app.
+// One versioned appearance record for the Mesh account, independent of app.
 #import "model"
 #import "std/json_scan"
 #import "std/text_buffer"

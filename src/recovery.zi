@@ -20,8 +20,8 @@
 // before it releases a stored copy, so a node can never open what it holds.
 // The work factors are fixed: anything else is refused, so a hostile node or
 // file can neither weaken the proof it receives nor exhaust this device.
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/byte_text_linux"

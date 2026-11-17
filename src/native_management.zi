@@ -17,13 +17,13 @@
 #import "std/text_buffer"
 #import "std/date_time_linux"
 #import "std/net_http"
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
-#import "daochi_client/client"
-Auth :: #import "daochi_client/auth";
-#import "daochi_client/async_client"
-#import "daochi_client/async_account"
-#import "daochi_client/social"
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
+#import "mesh_client/client"
+Auth :: #import "mesh_client/auth";
+#import "mesh_client/async_client"
+#import "mesh_client/async_account"
+#import "mesh_client/social"
 #import "kryon/http_transfer"
 Json :: #import "std/json_scan";
 

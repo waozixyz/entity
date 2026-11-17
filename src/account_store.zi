@@ -10,10 +10,10 @@
 #import "pairing_client"
 #import "shared_account"
 #import "picture_publish"
-#import "daochi_client/keys"
-#import "daochi_client/crypto"
-#import "daochi_client/client"
-Auth :: #import "daochi_client/auth";
+#import "mesh_client/keys"
+#import "mesh_client/crypto"
+#import "mesh_client/client"
+Auth :: #import "mesh_client/auth";
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
@@ -21,7 +21,7 @@ Auth :: #import "daochi_client/auth";
 #import "std/file"
 #import "std/date_time_linux"
 #import "std/net_http"
-#import "daochi_client/async_client"
+#import "mesh_client/async_client"
 #import "kryon/http_transfer"
 #if #defined(PLATFORM_WEB) {
     #import "kryon/file_picker"
