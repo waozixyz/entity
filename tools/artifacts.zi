@@ -217,11 +217,13 @@ Profile :: () -> bool {
     if !Step("tar", "-cf", Out("headers.tar"), "-C", generated, ".") { return false }
     if !CopyFile(JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "web/ziran_web.js"), Out("ziran_web.js")) { return false }
     if !CopyFile(JoinPath(Package("kryon"), "assets/fonts/LiberationSans-Regular.ttf"), Out("font.ttf")) { return false }
-    // Use the existing Profile recipe and asset embedding, with private output.
+    // Profile hosts carry only their declared pictures, never leaderboard/game art.
+    assets := Out("profile-assets")
+    if !Step("python3", JoinPath(root, "scripts/stage-assets.py"), "--group", "profile", "--output", assets) { return false }
     args: Vec(string)
     initial: [5]string = .["env", Flag("ZIRAN_PACKAGE_MAP=", module_map), JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2zx"), "--root", root]
     for initial { VecPush(args, it) }
-    rest: [11]string = .["--define", "KRYON_HOSTED_UI", "--asset-dir", Flag("assets=", JoinPath(root, "assets")), "--entry", "entity:Main", "-o", Out("entity.zx"), JoinPath(root, "src/entity.zi"), "", ""]
+    rest: [11]string = .["--define", "KRYON_HOSTED_UI", "--asset-dir", Flag("assets=", JoinPath(assets, "assets")), "--entry", "entity:Main", "-o", Out("entity.zx"), JoinPath(root, "src/entity.zi"), "", ""]
     for rest { if it.count > 0 { VecPush(args, it) } }
     return PkgRunToStderr(VecSlice(args, 0, args.count), project) == 0 && PkgWrite(Out("link.txt"), LinkText(true))
 }

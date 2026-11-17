@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Limit native Profile artifacts to the declared profile pictures, excluding game and leaderboard artwork.
+
 - Use the Mesh client namespace for account sync while preserving existing account keys, records and protocol bytes.
 
 - Build with Ziran v0.5.0 (f9f92b46) and Kryon cc731751, the same pins as the apps that depend on Entity, so they share one Kryon.
