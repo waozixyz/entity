@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Build with Ziran 7fbc8152 and Kryon 3627ea8a, the Kryon without raylib, together with Plot, Game2D, CSS and Apps.
+- The `native-crypto` artifact's Android and Windows runtimes generate their C with the toolchain's own `zi2c` under the device's target conditions, so an ARMv7 build no longer cross-compiles a code generator against glibc symbols bionic lacks; Android consumers also link liblog, which the runtime's diagnostics use.
+
 - Limit native Profile artifacts to the declared profile pictures, excluding game and leaderboard artwork.
 
 - Use the Mesh client namespace for account sync while preserving existing account keys, records and protocol bytes.

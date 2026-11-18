@@ -94,7 +94,8 @@ Archive :: (generated: string, output: string, include: string = "") -> bool {
 SystemLinkText :: (profile: bool) -> string {
     if web { return ifx profile then "js-library\tziran_web.js\nembed\tentity.zx@/entity.zx\nembed\tfont.ttf@/kryon-font.ttf\n" else "flag\t-sUSE_ZLIB=1\nflag\t-sASYNCIFY\nflag\t-sALLOW_MEMORY_GROWTH=1\nflag\t-sFORCE_FILESYSTEM=1\nflag\t-lidbfs.js\n" }
     if windows { return ifx profile then "flag\t-flto=1\nlibrary\t-luser32\nlibrary\t-lshell32\nlibrary\t-lole32\nlibrary\t-lcomdlg32\n" else "library\t-lws2_32\nlibrary\t-liphlpapi\nlibrary\t-lcrypt32\nlibrary\t-lsecur32\nlibrary\t-lbcrypt\nlibrary\t-ladvapi32\nlibrary\t-lm\n" }
-    if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\n" }
+    // The Ziran runtime reports diagnostics through liblog's __android_log_print.
+    if android { return ifx profile then "library\t-landroid\nlibrary\t-llog\n" else "library\t-lm\nlibrary\t-lz\nlibrary\t-ldl\nlibrary\t-llog\n" }
     return ifx profile then "pkg-config\tsdl2 cairo freetype2 fontconfig pangocairo gtk+-3.0\nlibrary\t-lX11\n" else "library\t-l:libcurl.so.4\nlibrary\t-lm\nlibrary\t-lpthread\nlibrary\t-lz\nlibrary\t-ldl\n"
 }
 // Consumers append these rows in descriptor dependency order; all native
@@ -163,7 +164,12 @@ Crypto :: () -> bool {
     // Hosts run the profile's ZX bundle through this runtime, so it carries
     // Ziran's instruction engine; a BOOTSTRAP=1 runtime opens no bundle.
     runtime := Out("runtime")
-    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
+    // A device runtime's C is generated on this host by the toolchain's own
+    // zi2c, under the device's target conditions: Linux branches such as
+    // glibc's __errno_location never reach bionic or MinGW.
+    generator := ifx android || windows then Flag("GEN_ZI2C=", JoinPath(PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), "build/bin/zi2c")) else ""
+    target := ifx windows then "ZIRAN_DEFINES=--target-os windows --target-cpu x64 --define _WIN32 --define __x86_64__" else ifx android && abi == "arm64-v8a" then "ZIRAN_DEFINES=--target-os android --target-cpu arm64 --define __aarch64__" else ifx android then "ZIRAN_DEFINES=--target-os android --target-cpu none --define __arm__" else ""
+    if !Step("make", "-s", "-j1", "-C", PkgGetenv("ZIRAN_TOOLCHAIN_ROOT"), Flag("BUILD_DIR=", runtime), Flag("CC=", cc), Flag("AR=", ar), generator, target,ifx web then "CFLAGS=-O2 -sUSE_ZLIB=1" else ifx windows then Flag("CFLAGS=-O2 -I", Package("zlib")) else "CFLAGS=-O2 -fPIC", ifx web then "OBJCOPY=true" else ifx android then Flag("OBJCOPY=", JoinPath(PathParent(cc), "llvm-objcopy")) else ifx windows then Flag("OBJCOPY=", PkgJoin(mingw, "objcopy")) else "", ifx web then "TARGET_MACHINE=wasm32-unknown-emscripten" else ifx android then Flag("TARGET_MACHINE=", ifx abi == "arm64-v8a" then "aarch64-linux-android" else "arm-linux-androideabi") else "", JoinPath(runtime, "libziran.a")) { return false }
     return CopyFile(JoinPath(runtime, "libziran.a"), Out("libziran.a")) && PkgWrite(Out("link.txt"), LinkText(false))
 }
 // Re-root the provider's resolved dependencies without resolving a second lock.
