@@ -1,0 +1,142 @@
+#import "Entity/telegram_mini_app"
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/vec"
+
+// Synthetic wire fixtures. The price and link have no merchant binding.
+Offer :: "{\"product_id\":\"dew_10\",\"title\":\"10 Dew\",\"amount\":23,\"units\":10000000}"
+Launch :: "{\"app_id\":\"inbe\",\"start_param\":\"invite_ab-1\",\"chat_type\":\"private\",\"stars_available\":true}"
+InvoiceID :: "a71c55c90123456789abcdef01234567"
+InvoiceURL :: "https://t.me/$fake_invoice"
+AccountID :: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+PurchaseReply :: (id: string, product: string, currency: string, amount: string,
+    units: string, state: string, link: string) -> string {
+    data: Vec(u8)
+    BuilderPrint(*data, "{\"invoice_id\":\"%\",\"product_id\":\"%\",\"currency\":\"%\",\"amount\":%,\"units\":%,\"status\":\"%\",\"invoice_url\":\"%\"}",
+        id, product, currency, amount, units, state, link)
+    return BuilderFinish(data)
+}
+
+FixtureCatalog :: (offers: string) -> string {
+    data: Vec(u8)
+    BuilderPrint(*data, "{\"currency\":\"XTR\",\"products\":[%]}", offers)
+    return BuilderFinish(data)
+}
+
+CheckRequest :: () -> s32 {
+    scratch: Vec(u8)
+    init_data := "auth_date=123&user=%7B%22id%22%3A1%7D&start_param=next%2Bstep&hash=synthetic"
+    if !TelegramLaunchRequest("inbe", init_data, *scratch) { return 1 }
+    doc: JsonDocument
+    if !JsonRead(*doc, TextView(VecSlice(scratch, 0, scratch.count))) || JsonCount(*doc, doc.root) != 2 ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "app_id"), "inbe") ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "init_data"), init_data) { return 2 }
+    if !TelegramStarsInvoiceRequest("inbe", "dew_10", "purchase-123", init_data, *scratch) ||
+    !JsonRead(*doc, TextView(VecSlice(scratch, 0, scratch.count))) || JsonCount(*doc, doc.root) != 4 ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "product_id"), "dew_10") ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "request_id"), "purchase-123") ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "init_data"), init_data) { return 3 }
+    if TelegramLaunchRequest("inbe", "", *scratch) || scratch.count != 0 ||
+    TelegramLaunchRequest("inbe", "auth_date=123\r\n", *scratch) ||
+    TelegramStarsInvoiceRequest("inbe", "dew_10", "xxx", init_data, *scratch) { return 4 }
+    if !TelegramStarsCatalogRequestPath("inbe", *scratch) ||
+    TextView(VecSlice(scratch, 0, scratch.count)) != "/api/v1/tokens/purchases/telegram/catalog?app_id=inbe" ||
+    TelegramStarsCatalogRequestPath("inbe&app_id=other", *scratch) || scratch.count != 0 { return 5 }
+    if !TelegramStarsStatusRequestPath(InvoiceID, *scratch) ||
+    TextView(VecSlice(scratch, 0, scratch.count)) != "/api/v1/tokens/purchases/telegram/invoices/a71c55c90123456789abcdef01234567" ||
+    TelegramStarsStatusRequestPath("id%2Fadmin", *scratch) ||
+    TelegramStarsStatusRequestPath("../id", *scratch) { return 6 }
+    if !TelegramStarsCancelRequestPath(InvoiceID, *scratch) ||
+    TextView(VecSlice(scratch, 0, scratch.count)) != "/api/v1/tokens/purchases/telegram/invoices/a71c55c90123456789abcdef01234567/cancel" ||
+    TelegramStarsCancelRequestPath("a71c55c9", *scratch) || scratch.count != 0 ||
+    !TelegramStarsBalanceRequestPath("inbe", *scratch) ||
+    TextView(VecSlice(scratch, 0, scratch.count)) != "/api/v1/tokens/purchases/telegram/balance?app_id=inbe" { return 7 }
+    return 0
+}
+
+CheckLaunch :: () -> s32 {
+    launch: TelegramLaunchContext
+    if !TelegramReadLaunch(Launch, "inbe", *launch) || !launch.stars_available ||
+    TextUntilNul(launch.start_param[:]) != "invite_ab-1" || TextUntilNul(launch.chat_type[:]) != "private" { return 11 }
+    if TelegramReadLaunch(Launch, "other", *launch) || launch.stars_available || launch.start_param[0] != 0 { return 12 }
+    if !TelegramReadLaunch("{\"app_id\":\"inbe\",\"stars_available\":false}", "inbe", *launch) ||
+    launch.stars_available || launch.start_param[0] != 0 || launch.chat_type[0] != 0 { return 13 }
+    if TelegramReadLaunch("{\"app_id\":\"inbe\",\"stars_available\":false,\"stars_availabl\\u0065\":true}", "inbe", *launch) ||
+    TelegramReadLaunch("{\"app_id\":\"inbe\",\"start_param\":\"https://invalid\",\"stars_available\":true}", "inbe", *launch) ||
+    TelegramReadLaunch("{\"app_id\":\"inbe\",\"chat_type\":\"private\\u0000suffix\",\"stars_available\":true}", "inbe", *launch) ||
+    TelegramReadLaunch("{\"app_id\":\"inbe\",\"stars_available\":\"true\"}", "inbe", *launch) { return 14 }
+    return 0
+}
+
+CheckPurchase :: () -> s32 {
+    catalog: TelegramStarsCatalog
+    if !TelegramReadStarsCatalog(FixtureCatalog(Offer), *catalog) || catalog.count != 1 ||
+    TextUntilNul(catalog.products[0].title[:]) != "10 Dew" || catalog.products[0].amount != 23 ||
+    catalog.products[0].units != 10000000 { return 21 }
+    expected := catalog.products[0]
+    duplicate: Vec(u8)
+    BuilderPrint(*duplicate, "%,%", Offer, Offer)
+    if TelegramReadStarsCatalog(FixtureCatalog(BuilderFinish(duplicate)), *catalog) || catalog.count != 0 ||
+    !TelegramReadStarsCatalog(FixtureCatalog(""), *catalog) || catalog.count != 0 { return 22 }
+    if TelegramReadStarsCatalog("{\"currency\":\"USD\",\"products\":[]}", *catalog) ||
+    TelegramReadStarsCatalog(FixtureCatalog("{\"product_id\":\"dew_10\",\"title\":\"10 Dew\",\"amount\":2.3e1,\"units\":10000000}"), *catalog) ||
+    TelegramReadStarsCatalog(FixtureCatalog("{\"product_id\":\"dew_10\",\"title\":\"10 Dew\",\"amount\":23,\"units\":9007199254740992}"), *catalog) { return 23 }
+
+    invoice: TelegramStarsInvoice
+    pending := PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "10000000", "pending", InvoiceURL)
+    if !TelegramReadStarsInvoice(pending, *expected, "", *invoice) || invoice.state != .Pending ||
+    TextUntilNul(invoice.invoice_id[:]) != InvoiceID || TextUntilNul(invoice.invoice_url[:]) != InvoiceURL { return 24 }
+    if TelegramReadStarsInvoice(pending, *expected, "different", *invoice) || invoice.state != .Unknown ||
+    invoice.invoice_url[0] != 0 { return 25 }
+    pending_status := "{\"invoice_id\":\"a71c55c90123456789abcdef01234567\",\"product_id\":\"dew_10\",\"currency\":\"XTR\",\"amount\":23,\"units\":10000000,\"status\":\"pending\"}"
+    if !TelegramReadStarsInvoice(pending_status, *expected, InvoiceID, *invoice) ||
+    invoice.state != .Pending || invoice.invoice_url[0] != 0 { return 30 }
+    if TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_100", "XTR", "23", "10000000", "credited", ""), *expected, InvoiceID, *invoice) ||
+    TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "USD", "23", "10000000", "credited", ""), *expected, InvoiceID, *invoice) ||
+    TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "XTR", "24", "10000000", "credited", ""), *expected, InvoiceID, *invoice) ||
+    TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "20000000", "credited", ""), *expected, InvoiceID, *invoice) { return 26 }
+    if TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "10000000", "paid", ""), *expected, InvoiceID, *invoice) ||
+    TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "10000000", "pending", ""), *expected, "", *invoice) ||
+    TelegramReadStarsInvoice(PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "10000000", "pending", "https://t.me/$bad?redirect=x"), *expected, "", *invoice) ||
+    TelegramInvoiceLinkValid("https://t.me@untrusted.example/$invoice") ||
+    TelegramInvoiceLinkValid("https://t.me/invoice/x/y") ||
+    !TelegramInvoiceLinkValid("https://t.me/invoice/sample-1_") { return 27 }
+    statuses: [5]string = .["credited", "cancelled", "failed", "expired", "refunded"]
+    states: [5]TelegramStarsState = .[.Credited, .Cancelled, .Failed, .Expired, .Refunded]
+    for status, index: statuses {
+        body := PurchaseReply(InvoiceID, "dew_10", "XTR", "23", "10000000", status, InvoiceURL)
+        if !TelegramReadStarsInvoice(body, *expected, InvoiceID, *invoice) || invoice.state != states[index] ||
+        invoice.invoice_url[0] != 0 { return 28 }
+    }
+    if TelegramInvoiceClosedState("paid") != .Paid || TelegramInvoiceClosedState("pending") != .Pending ||
+    TelegramInvoiceClosedState("cancelled") != .Cancelled || TelegramInvoiceClosedState("failed") != .Failed ||
+    TelegramInvoiceClosedState("credited") != .Unknown { return 29 }
+    return 0
+}
+
+CheckBalance :: () -> s32 {
+    response: Vec(u8)
+    defer { VecFree(response) }
+    BuilderPrint(*response, "{\"account_id\":\"%\",\"app_id\":\"inbe\",\"asset_id\":\"waozi:token\",\"balance\":-10000000}", AccountID)
+    reply := TextView(VecSlice(response, 0, response.count))
+    balance: s64
+    if !TelegramReadStarsBalance(reply, AccountID, "inbe", *balance) || balance != -10000000 ||
+    TelegramReadStarsBalance(reply, AccountID, "other", *balance) || balance != 0 ||
+    TelegramReadStarsBalance(reply, "different-account", "inbe", *balance) { return 31 }
+    VecClear(response)
+    BuilderPrint(*response, "{\"account_id\":\"%\",\"app_id\":\"inbe\",\"asset_id\":\"other:asset\",\"balance\":150}", AccountID)
+    if TelegramReadStarsBalance(TextView(VecSlice(response, 0, response.count)), AccountID, "inbe", *balance) { return 32 }
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    status := CheckRequest()
+    if status != 0 { return status }
+    status = CheckLaunch()
+    if status != 0 { return status }
+    status = CheckPurchase()
+    if status != 0 { return status }
+    return CheckBalance()
+}

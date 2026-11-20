@@ -1,0 +1,314 @@
+// Wire contract for an authenticated Entity host inside a Telegram Mini App.
+// The wallet node verifies launch data and settles the payment.
+#import "std/c_string"
+#import "std/json_document"
+#import "std/text_buffer"
+#import "std/vec"
+
+TelegramLaunchPath :: "/api/v1/telegram/launch"
+TelegramStarsCatalogPath :: "/api/v1/tokens/purchases/telegram/catalog"
+TelegramStarsBalancePath :: "/api/v1/tokens/purchases/telegram/balance"
+TelegramStarsInvoicesPath :: "/api/v1/tokens/purchases/telegram/invoices"
+TelegramStarsCurrency :: "XTR"
+TelegramStarsAsset :: "waozi:token"
+TelegramInitDataMax :: 16384
+TelegramStarsProductsMax :: 32
+
+TelegramLaunchContext :: struct {
+    start_param: [513]u8
+    chat_type: [16]u8
+    stars_available: bool
+}
+
+TelegramStarsProduct :: struct {
+    product_id: [129]u8
+    title: [129]u8
+    amount: s64
+    units: s64
+}
+
+TelegramStarsCatalog :: struct {
+    products: [TelegramStarsProductsMax]TelegramStarsProduct
+    count: s32
+}
+
+TelegramStarsState :: enum {
+    Unknown
+    Pending
+    Credited
+    Cancelled
+    Failed
+    Expired
+    Refunded
+}
+
+TelegramStarsInvoice :: struct {
+    invoice_id: [129]u8
+    invoice_url: [257]u8
+    product_id: [129]u8
+    amount: s64
+    units: s64
+    state: TelegramStarsState
+}
+
+TelegramInvoiceClosed :: enum {
+    Unknown
+    Paid
+    Pending
+    Cancelled
+    Failed
+}
+
+TelegramInvoiceClosedState :: (status: string) -> TelegramInvoiceClosed {
+    if status == "paid" { return .Paid }
+    if status == "pending" { return .Pending }
+    if status == "cancelled" { return .Cancelled }
+    if status == "failed" { return .Failed }
+    return .Unknown
+}
+
+TelegramLaunchRequest :: (app_id: string, init_data: string, output: *Vec(u8)) -> bool {
+    return WriteRequest(app_id, init_data, "", "", output)
+}
+
+TelegramStarsInvoiceRequest :: (app_id: string, product_id: string, request_id: string,
+    init_data: string, output: *Vec(u8)) -> bool {
+    VecClear(<<output)
+    if !ValidID(product_id, 1, 128) || !ValidID(request_id, 8, 128) { return false }
+    return WriteRequest(app_id, init_data, product_id, request_id, output)
+}
+
+TelegramStarsCatalogRequestPath :: (app_id: string, output: *Vec(u8)) -> bool {
+    return WritePath(TelegramStarsCatalogPath, "?app_id=", app_id, 1, 64, output)
+}
+
+TelegramStarsBalanceRequestPath :: (app_id: string, output: *Vec(u8)) -> bool {
+    return WritePath(TelegramStarsBalancePath, "?app_id=", app_id, 1, 64, output)
+}
+
+TelegramStarsStatusRequestPath :: (invoice_id: string, output: *Vec(u8)) -> bool {
+    VecClear(<<output)
+    return HexID(invoice_id, 32) && WritePath(TelegramStarsInvoicesPath, "/", invoice_id, 32, 32, output)
+}
+
+TelegramStarsCancelRequestPath :: (invoice_id: string, output: *Vec(u8)) -> bool {
+    if !TelegramStarsStatusRequestPath(invoice_id, output) || !BuilderAppend(<<output, "/cancel") {
+        VecClear(<<output)
+        return false
+    }
+    return true
+}
+
+// Verify the account, app and asset before replacing a displayed wallet amount.
+TelegramReadStarsBalance :: (body: string, account_id: string, app_id: string, output: *s64) -> bool {
+    output.* = 0
+    doc: JsonDocument
+    defer { ReleaseDocument(*doc) }
+    if !ReadObject(*doc, body) || !HexID(account_id, 64) || !ValidID(app_id, 1, 64) ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "account_id"), account_id) ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "app_id"), app_id) ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "asset_id"), TelegramStarsAsset) { return false }
+    balance, ok := JsonInteger(*doc, JsonMember(*doc, doc.root, "balance"))
+    if !ok || balance < -9007199254740991 || balance > 9007199254740991 { return false }
+    output.* = balance
+    return true
+}
+
+TelegramReadLaunch :: (body: string, app_id: string, output: *TelegramLaunchContext) -> bool {
+    output.* = .{}
+    doc: JsonDocument
+    defer { ReleaseDocument(*doc) }
+    if !ReadObject(*doc, body) || !ValidID(app_id, 1, 64) ||
+    !JsonIs(*doc, JsonMember(*doc, doc.root, "app_id"), app_id) { return false }
+    context: TelegramLaunchContext
+    if !ReadText(*doc, doc.root, "start_param", context.start_param[:], true) ||
+    !ReadText(*doc, doc.root, "chat_type", context.chat_type[:], true) { return false }
+    start := TextUntilNul(context.start_param[:])
+    if !URLToken(start, 0, 512) { return false }
+    chat := TextUntilNul(context.chat_type[:])
+    if chat != "" && chat != "sender" && chat != "private" && chat != "group" &&
+    chat != "supergroup" && chat != "channel" { return false }
+    available, ok := JsonBool(*doc, JsonMember(*doc, doc.root, "stars_available"))
+    if !ok { return false }
+    context.stars_available = available
+    output.* = context
+    return true
+}
+
+TelegramReadStarsCatalog :: (body: string, output: *TelegramStarsCatalog) -> bool {
+    output.* = .{}
+    doc: JsonDocument
+    defer { ReleaseDocument(*doc) }
+    if !ReadObject(*doc, body) || !IsStars(*doc, doc.root) { return false }
+    array := JsonMember(*doc, doc.root, "products")
+    if JsonKindOf(*doc, array) != .Array || JsonCount(*doc, array) > TelegramStarsProductsMax { return false }
+    catalog: TelegramStarsCatalog
+    node := JsonFirst(*doc, array)
+    while node >= 0 {
+        product := *catalog.products[catalog.count]
+        if !UniqueObject(*doc, node) || !ReadProductID(*doc, node, product.product_id[:]) ||
+        !ReadText(*doc, node, "title", product.title[:], false) || product.title[0] == 0 ||
+        !ReadTerms(*doc, node, *product.amount, *product.units) { return false }
+        for index: cast(s32)0..catalog.count - 1 {
+            if TextUntilNul(catalog.products[index].product_id[:]) == TextUntilNul(product.product_id[:]) { return false }
+        }
+        catalog.count += 1
+        node = JsonNext(*doc, node)
+    }
+    output.* = catalog
+    return true
+}
+
+// Use an empty invoice_id only for the response to creating a new invoice.
+// The expected product comes from the offer the user accepted. For later
+// status reads the caller passes the same terms and the recorded invoice ID.
+TelegramReadStarsInvoice :: (body: string, expected: *TelegramStarsProduct,
+    invoice_id: string, output: *TelegramStarsInvoice) -> bool {
+    output.* = .{}
+    doc: JsonDocument
+    defer { ReleaseDocument(*doc) }
+    if !ReadObject(*doc, body) || !IsStars(*doc, doc.root) { return false }
+    invoice: TelegramStarsInvoice
+    link_bytes: [257]u8
+    if !ReadText(*doc, doc.root, "invoice_id", invoice.invoice_id[:], false) ||
+    !ReadText(*doc, doc.root, "invoice_url", link_bytes[:], true) ||
+    !ReadProductID(*doc, doc.root, invoice.product_id[:]) ||
+    !ReadTerms(*doc, doc.root, *invoice.amount, *invoice.units) { return false }
+    id := TextUntilNul(invoice.invoice_id[:])
+    link := TextUntilNul(link_bytes[:])
+    if !HexID(id, 32) || (invoice_id != "" && id != invoice_id) ||
+    TextUntilNul(invoice.product_id[:]) != TextUntilNul(expected.product_id[:]) ||
+    invoice.amount != expected.amount || invoice.units != expected.units ||
+    (link != "" && !TelegramInvoiceLinkValid(link)) { return false }
+    invoice.state = ReadState(*doc, JsonMember(*doc, doc.root, "status"))
+    if invoice.state == .Unknown || (invoice_id == "" && invoice.state == .Pending && link == "") { return false }
+    if invoice.state == .Pending { invoice.invoice_url = link_bytes }
+    output.* = invoice
+    return true
+}
+
+TelegramInvoiceLinkValid :: (link: string) -> bool {
+    dollar := "https://t.me/$"
+    invoice := "https://t.me/invoice/"
+    if link.count > dollar.count && link[:dollar.count] == dollar {
+        return URLToken(link[dollar.count:], 1, 128)
+    }
+    if link.count > invoice.count && link[:invoice.count] == invoice {
+        return URLToken(link[invoice.count:], 1, 128)
+    }
+    return false
+}
+
+#scope_file
+HexID :: (value: string, length: s64) -> bool {
+    if value.count != length { return false }
+    for byte: value {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+URLToken :: (value: string, minimum: s64, maximum: s64, allow_dot: bool = false) -> bool {
+    if value.count < minimum || value.count > maximum { return false }
+    for byte: value {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "-" ||
+            (allow_dot && byte == #char ".")) { return false }
+    }
+    return true
+}
+
+ValidID :: (value: string, minimum: s64, maximum: s64) -> bool {
+    return value != "." && value != ".." && URLToken(value, minimum, maximum, true)
+}
+
+WriteRequest :: (app_id: string, init_data: string, product: string, request_id: string, output: *Vec(u8)) -> bool {
+    VecClear(<<output)
+    if !ValidID(app_id, 1, 64) || init_data.count < 1 || init_data.count > TelegramInitDataMax { return false }
+    for byte: init_data {
+        if byte < 32 || byte > 126 { return false }
+    }
+    if !BuilderAppend(<<output, "{\"app_id\":") || !JsonQuoteInto(output, app_id, true) ||
+    !BuilderAppend(<<output, ",\"init_data\":") || !JsonQuoteInto(output, init_data, true) ||
+    (product != "" && (!BuilderAppend(<<output, ",\"product_id\":") || !JsonQuoteInto(output, product, true) ||
+        !BuilderAppend(<<output, ",\"request_id\":") || !JsonQuoteInto(output, request_id, true))) ||
+    !BuilderAppend(<<output, "}") {
+        VecClear(<<output)
+        return false
+    }
+    return true
+}
+
+WritePath :: (prefix: string, separator: string, id: string, minimum: s64, maximum: s64, output: *Vec(u8)) -> bool {
+    VecClear(<<output)
+    if !ValidID(id, minimum, maximum) || !BuilderAppend(<<output, prefix) ||
+    !BuilderAppend(<<output, separator) || !BuilderAppend(<<output, id) {
+        VecClear(<<output)
+        return false
+    }
+    return true
+}
+
+ReadObject :: (doc: *JsonDocument, body: string) -> bool {
+    return body.count > 0 && body.count <= 16384 && JsonRead(doc, body) && UniqueObject(doc, doc.root)
+}
+
+ReleaseDocument :: (doc: *JsonDocument) {
+    JsonReset(doc)
+    VecFree(doc.nodes)
+}
+
+UniqueObject :: (doc: *JsonDocument, node: s32) -> bool {
+    if JsonKindOf(doc, node) != .Object || JsonCount(doc, node) > 32 { return false }
+    key: Vec(u8)
+    defer { VecFree(key) }
+    first := JsonFirst(doc, node)
+    while first >= 0 {
+        VecClear(key)
+        if !JsonKeyInto(doc, first, *key) || key.count == 0 ||
+        JsonMember(doc, node, TextView(VecSlice(key, 0, key.count))) != first { return false }
+        first = JsonNext(doc, first)
+    }
+    return true
+}
+
+ReadText :: (doc: *JsonDocument, object: s32, key: string, output: []u8, optional: bool) -> bool {
+    node := JsonMember(doc, object, key)
+    if optional && node < 0 { return true }
+    if JsonKindOf(doc, node) != .String { return false }
+    text: Vec(u8)
+    defer { VecFree(text) }
+    if !JsonStringInto(doc, node, *text) { return false }
+    for index: cast(s64)0..text.count - 1 {
+        if text[index] < 32 || text[index] == 127 { return false }
+    }
+    return CopyCString(TextView(VecSlice(text, 0, text.count)), output)
+}
+
+ReadProductID :: (doc: *JsonDocument, node: s32, output: []u8) -> bool {
+    return ReadText(doc, node, "product_id", output, false) && ValidID(TextUntilNul(output), 1, 128)
+}
+
+IsStars :: (doc: *JsonDocument, node: s32) -> bool {
+    return JsonIs(doc, JsonMember(doc, node, "currency"), TelegramStarsCurrency)
+}
+
+ReadTerms :: (doc: *JsonDocument, node: s32, amount: *s64, units: *s64) -> bool {
+    count, count_ok := JsonInteger(doc, JsonMember(doc, node, "amount"))
+    quantity, quantity_ok := JsonInteger(doc, JsonMember(doc, node, "units"))
+    if !count_ok || !quantity_ok || count <= 0 || count > 9007199254740991 ||
+    quantity <= 0 || quantity > 9007199254740991 { return false }
+    amount.* = count
+    units.* = quantity
+    return true
+}
+
+ReadState :: (doc: *JsonDocument, node: s32) -> TelegramStarsState {
+    if JsonIs(doc, node, "pending") { return .Pending }
+    if JsonIs(doc, node, "credited") { return .Credited }
+    if JsonIs(doc, node, "cancelled") { return .Cancelled }
+    if JsonIs(doc, node, "failed") { return .Failed }
+    if JsonIs(doc, node, "expired") { return .Expired }
+    if JsonIs(doc, node, "refunded") { return .Refunded }
+    return .Unknown
+}

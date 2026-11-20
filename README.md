@@ -218,6 +218,11 @@ operation may still finish; these functions do not undo publications.
 fake-transport lifecycle tests, existing wire helper tests and a portable VM
 smoke test without accounts or network access.
 
+## Telegram Mini Apps
+
+Use the [Telegram Mini App developer contract](docs/telegram-mini-app.md) for
+issuer-verified launch parameters and Stars checkout in Entity hosts.
+
 ## Standalone hosts and Dew
 
 The `entity/native_host` export opens the same profile bundle for native hosts.

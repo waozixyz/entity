@@ -311,3 +311,15 @@ canvas-profile-host-test: canvas-profile-lifecycle-test
 .PHONY: password-test
 password-test: build/entity.zx build/ziran/libziran.a $(LIBOQS_LIBRARY)
 	python3 scripts/password-test.py
+
+.PHONY: telegram-mini-app-test
+telegram-mini-app-test:
+	mkdir -p build/telegram-mini-app-test
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry telegram_mini_app_test:main -o build/telegram-mini-app-test tests/telegram_mini_app_test.zi
+	$(CC) -std=c99 -O2 -I$(ZIRAN_ROOT)/include -Ibuild/telegram-mini-app-test $$(rg --files build/telegram-mini-app-test -g '*.c') -lm -o build/telegram-mini-app-test/test
+	build/telegram-mini-app-test/test
+	$(ZIRAN) bundle --project $(LOCK_FLAGS) --entry telegram_mini_app_test:main -o build/telegram-mini-app-test/test.zx tests/telegram_mini_app_test.zi
+	@result=$$($(ZIRAN) run build/telegram-mini-app-test/test.zx) && \
+		printf 'Telegram Mini App VM fixture returned %s\n' "$$result" && test "$$result" = 0
+
+test: telegram-mini-app-test
