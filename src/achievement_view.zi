@@ -153,7 +153,8 @@ AchievementCommand :: (command: string) -> bool {
     return true
 }
 
-AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: float32) -> float32 {
+AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: float32,
+    line_breaks: s32 = 0) -> float32 {
     request: Vec(u8)
     BuilderPrint(*request, "{\"width\":%,\"font\":%,\"scale\":%,\"text\":", cast(s32)width, font, scale)
     EntityQuote(*request, value)
@@ -169,7 +170,7 @@ AchievementWrappedHeight :: (value: string, width: float32, font: s32, scale: fl
     // standard Text still owns wrapping and all glyph rendering.
     columns := cast(s32)(width / (cast(float32)font * 2.0))
     if columns < 1 { columns = 1 }
-    lines := (cast(s32)value.count + columns - 1) / columns + 1
+    lines := (cast(s32)value.count + columns - 1) / columns + 1 + line_breaks
     return cast(float32)(lines * (font + cast(s32)(4.0 * scale)))
 
 }

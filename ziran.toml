@@ -64,8 +64,8 @@ git = "https://github.com/ziranlang/qrcode.git"
 ref = "master"
 
 [dependencies.mesh_client]
-git = "https://github.com/ziranlang/mesh-client.git"
-ref = "c1ac6095d01bcfdd4c5ae49c4636aaf9a0303449"
+git = "https://git.waozi.xyz/ziranlang/mesh-client.git"
+ref = "08062f44b69500b27e0bf603fa9b04fa748277ef"
 
 [dependencies.oqs]
 git = "https://github.com/ziranlang/oqs.git"

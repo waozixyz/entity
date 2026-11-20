@@ -323,3 +323,10 @@ telegram-mini-app-test:
 		printf 'Telegram Mini App VM fixture returned %s\n' "$$result" && test "$$result" = 0
 
 test: telegram-mini-app-test
+
+.PHONY: telegram-view-test
+telegram-view-test: build/entity.zx build/ziran/libziran.a
+	LDLIBS='$(abspath build/ziran/libziran.a) -lpthread' $(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry telegram_view_test:main --exe -o build/telegram-view-test tests/telegram_view_test.zi
+	build/telegram-view-test/telegram_view_test
+
+test: telegram-view-test

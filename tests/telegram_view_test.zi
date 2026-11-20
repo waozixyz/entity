@@ -1,0 +1,228 @@
+// Exercise the shipped Profile bundle and real retained button input without a display.
+#import "model"
+#import "kryon/app_context_host"
+#import "kryon/app_protocol"
+#import "kryon/hosted_values"
+#import "kryon/hosted_app"
+#import "kryon/widget_host"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/pixmap"
+#import "kryon/tree"
+#import "kryon/tree_draw"
+#import "kryon/tree_input"
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/file"
+#import "std/vec"
+
+OwnerA :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+OwnerB :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+RequestA :: "0123456789abcdef0123456789abcdef"
+RequestB :: "fedcba9876543210fedcba9876543210"
+Review :: "App access\nRead Lumi balance"
+MultiLineReview :: "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np"
+StarsLabel :: "Approve with Telegram Stars"
+StarsFields :: ",\"approve_stars\":\"Approve with Telegram Stars\",\"stars_disclosure\":\"Read Dew balance and buy Dew with Stars\""
+BaseLabel :: "Approve app access"
+
+app: AppContext;
+profile: string;
+page: string;
+event: [256]u8;
+event_count: s32;
+failures: s32;
+
+Allows :: (context: *void, name: string) -> bool {
+    return name == "entity.telegram" || name == "AppServiceHost" || name == "AppLocaleHost" ||
+    name == "ReadStoreHost" || name == "WriteStoreHost" || name == "ClipboardCopyHost"
+}
+
+HostText :: (value: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostValueKind.HostString,
+        .type_name = HostTextData("string"), .data = HostTextData(value), .length = cast(usize)value.count}
+}
+
+Services :: (context: *void, module: *u8, function: *u8,
+    args: *HostValue, count: s32, result: *HostValue) -> s32 {
+    name := TextFromCString(function)
+    if name == "AppServiceHost" && count == 2 {
+        result.* = HostText("")
+        if AppArgumentText(args[0]) != "entity.telegram" { return 1 }
+        request := AppArgumentText(args[1])
+        if request == "" { result.* = HostText(page); return 1 }
+        unused CopyCString(request, event[:])
+        event_count += 1
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 { result.* = HostText(AppArgumentText(args[0])); return 1 }
+    if name == "WriteStoreHost" && count == 2 { result.* = HostScalar("bool", 1); return 1 }
+    if name == "ReadStoreHost" && count == 2 && AppArgumentText(args[0]) == "entity.json" {
+        output := args[1]
+        if output.elements == null || output.length <= cast(usize)profile.count { return 0 }
+        for index: 0..profile.count {
+            byte := ifx index < profile.count then profile[index] else cast(u8)0
+            output.elements[index].bits = cast(u64)byte
+            output.elements[index].integer = cast(s64)byte
+        }
+        result.* = HostScalar("s32", profile.count)
+        return 1
+    }
+    return 0
+}
+
+Expect :: (ok: bool, message: string) {
+    if !ok { print("FAIL: %\n", message); failures += 1 }
+}
+
+Assets :: (path: string) -> bool { return true }
+
+Frame :: () {
+    unused BeginFrame(app.session, 1, app.bounds)
+    WidgetHostBegin(app.session, Assets)
+    Expect(AppContextRun(*app, APP_FRAME), "production Profile frame runs")
+    WidgetHostEnd()
+    unused EndFrame(app.session)
+}
+
+Find :: (label: string) -> s32 {
+    for index: cast(s32)0..TreeCount(app.session) - 1 {
+        if TreeNodeAt(app.session, index).semantic_label == label { return index }
+    }
+    return -1
+}
+
+Enabled :: (label: string) -> bool {
+    node := Find(label)
+    return node >= 0 && !TreeNodeAt(app.session, node).disabled
+}
+
+Activate :: (label: string) -> bool {
+    node := Find(label)
+    return node >= 0 && TreeActivateAt(app.session, node)
+}
+
+SetPage :: (owner: string, request_id: string, review: string, stars: string = StarsFields, busy: string = "false") {
+    EntityFree(page)
+    document: Vec(u8)
+    BuilderPrint(*document, "{\"owner\":\"%\",\"request_id\":\"%\",\"status\":\"Authorization\",\"primary\":\"Connect\",\"approve\":\"%\",\"busy\":%,\"review\":", owner, request_id, BaseLabel, busy)
+    EntityQuote(*document, review)
+    BuilderPrint(*document, "%}", stars)
+    page = BuilderFinish(document)
+}
+
+EventMatches :: (operation: string, owner: string, request_id: string) -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"operation\":\"%\",\"owner\":\"%\",\"request_id\":\"%\"}", operation, owner, request_id)
+    expected := BuilderFinish(out)
+    defer { EntityFree(expected) }
+    return TextUntilNul(event[:]) == expected
+}
+
+#program_export
+main :: () -> s32 {
+    state := EntityDefault()
+    state.controls = 0
+    EntityAddExtension(*state, "telegram", "Review Telegram authorization")
+    profile = EntityEncode(state)
+    defer { EntityFree(profile); EntityFree(page) }
+    bytes, ok := ReadEntireFile("build/entity.zx")
+    if !ok { return 1 }
+    defer { EntityFree(bytes) }
+    app.session = SessionOpen()
+    defer { unused SessionClose(app.session) }
+    app.bounds = Rectangle.{0.0, 0.0, 480.0, 840.0}
+    app.scale = 1.0
+    app.expected_id = "entity"
+    app.allows = Allows
+    app.services = Services
+    app.widgets = WidgetHostCall
+    if !AppContextOpen(*app, bytes) { return 2 }
+    defer { HostedAppClose(*app.app) }
+
+    SetPage(OwnerA, RequestA, Review, "")
+    Frame()
+    Expect(Activate("Review Telegram authorization"), "the shared Profile extension routes to Telegram")
+    Frame()
+    Frame()
+    Expect(Find(StarsLabel) < 0 && Activate(BaseLabel), "legacy hosts expose only ordinary approval")
+    Frame()
+    Expect(event_count == 1 && EventMatches("approve", OwnerA, RequestA), "ordinary approval keeps the base event and scope")
+
+    SetPage(OwnerA, RequestA, Review)
+    Frame()
+    Expect(Find(Review) >= 0 && Find("Read Dew balance and buy Dew with Stars") >= 0, "both review and app disclosure render")
+    Expect(Find(StarsLabel) >= 0 && !Activate(StarsLabel), "the first Stars frame is disabled")
+    Frame()
+    Expect(Activate(StarsLabel), "Stars consent is available after rendering the review")
+    Frame()
+    Expect(event_count == 2 && EventMatches("approve_stars", OwnerA, RequestA), "Stars emits a separate owner/request event")
+
+    Frame()
+    Frame()
+    Expect(Activate(StarsLabel), "queue an activation for the displayed owner")
+    SetPage(OwnerB, RequestA, Review)
+    Frame()
+    Expect(event_count == 2 && !Enabled(StarsLabel), "an old owner's activation cannot approve the new owner")
+    Frame()
+    Expect(Activate(StarsLabel), "queue an activation for the displayed request")
+    SetPage(OwnerB, RequestB, Review)
+    Frame()
+    Expect(event_count == 2 && !Enabled(StarsLabel), "an old request cannot approve a new request under the same owner")
+    Frame()
+    Expect(Activate(StarsLabel), "queue an activation before the terms change")
+    SetPage(OwnerB, RequestB, "Different access terms")
+    Frame()
+    Expect(event_count == 2 && !Enabled(StarsLabel), "changed review text invalidates its retained activation")
+
+    Frame()
+    Expect(Activate(StarsLabel), "queue an activation before the host becomes busy")
+    SetPage(OwnerB, RequestB, Review, StarsFields, "true")
+    Frame()
+    Expect(event_count == 2 && Find(StarsLabel) >= 0 && !Activate(StarsLabel), "busy review suppresses both queued and new activations")
+    SetPage(OwnerB, RequestB, Review)
+    Frame()
+    Expect(!Enabled(StarsLabel), "a busy review must render again after becoming idle")
+    Frame()
+    Expect(Activate(StarsLabel), "queue an activation before restarting the route")
+    app.command = "back"
+    Expect(AppContextRun(*app, APP_COMMAND), "close the Telegram review")
+    Frame()
+    Expect(Activate("Review Telegram authorization"), "open the same request again")
+    Frame()
+    Frame()
+    Expect(event_count == 2 && Find(StarsLabel) >= 0 && !Enabled(StarsLabel), "closing and reopening clears retained consent")
+
+    SetPage(OwnerB, RequestB, "")
+    Frame()
+    Expect(Find(StarsLabel) < 0, "empty review hides Stars")
+    SetPage(OwnerB, RequestB, Review, ",\"approve_stars\":\"Approve with Telegram Stars\"")
+    Frame()
+    Expect(Find(StarsLabel) < 0, "missing disclosure hides Stars")
+    SetPage(OwnerB, "short", Review)
+    Frame()
+    Expect(Find(StarsLabel) < 0, "malformed request scope hides Stars")
+    SetPage(OwnerB, RequestB, Review, ",\"approve_stars\":\"Approve with Telegram Stars\",\"stars_disclosure\":\"terms\\u0000hidden\"")
+    Frame()
+    Expect(Find(StarsLabel) < 0, "truncated disclosure cannot be approved")
+    SetPage(OwnerB, RequestB, Review, ",\"approve_stars\":\"Approve with Telegram Stars\",\"stars_disclosure\":\"terms\",\"own\\u0065r\":\"duplicate\"")
+    Frame()
+    Expect(Find(StarsLabel) < 0 && event_count == 2, "ambiguous duplicate owner hides Stars")
+
+    SetPage(OwnerB, RequestB, MultiLineReview)
+    Frame()
+    review_node := Find(MultiLineReview)
+    Expect(review_node >= 0 && TreeNodeAt(app.session, review_node).bounds.height >= 256.0,
+        "the fallback layout reserves space for every review line")
+
+    SetPage(OwnerB, RequestB, Review)
+    Frame()
+    Frame()
+    Expect(Activate(StarsLabel), "fresh matching review is usable")
+    Frame()
+    Expect(event_count == 3 && EventMatches("approve_stars", OwnerB, RequestB), "only fresh consent sends the new scope")
+    if failures == 0 { print("Telegram Profile consent local test passed\n") }
+    return failures
+}

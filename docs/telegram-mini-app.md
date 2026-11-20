@@ -46,6 +46,23 @@ one Dew is 1,000,000 units. Display both from the catalog and render the title
 as text. The issuer configures an explicit XTR price for each enabled canonical
 pack. Telegram requires XTR for digital purchases in Mini Apps. [Telegram Stars payments](https://core.telegram.org/bots/payments-stars)
 
+## Shared Profile authorization review
+
+Hosts can offer Stars consent from the existing `entity.telegram` panel. Include
+the localized `stars_disclosure` (up to 2048 decoded UTF-8 bytes) and
+`approve_stars` button label (up to 255 bytes). Supply both with the complete
+`review` (up to 8192 bytes), `owner` (64 lowercase hex digits), and `request_id`
+(32 lowercase hex digits) for the same approval request. Use a Stars label
+distinct from the ordinary `approve` label. Set `busy: true` while the host is
+processing a request.
+
+The Stars action becomes available after rendering the matching review. A click
+sends `{"operation":"approve_stars","owner":"…","request_id":"…"}` through
+`entity.telegram`. The host must recheck the active owner, pending request, and
+authorized terms before signing a Stars-enabled grant. Ordinary `approve` still
+sends the base authorization action. Hosts can omit the two additions to use
+the base approval flow.
+
 ## Invoice and settlement
 
 | Method and path | Request | Successful response |

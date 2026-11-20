@@ -55,6 +55,15 @@
       "url": "https://github.com/webmproject/libwebp.git"
     },
     {
+      "commit": "08062f44b69500b27e0bf603fa9b04fa748277ef",
+      "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
+      "dependency_refs": {"crypto": "master", "oqs": "master"},
+      "id": "p3e75fb71e59471c7",
+      "name": "mesh_client",
+      "ref": "08062f44b69500b27e0bf603fa9b04fa748277ef",
+      "url": "https://git.waozi.xyz/ziranlang/mesh-client.git"
+    },
+    {
       "commit": "f5f186bb13569ef13338f81366ff63fb9b9282f6",
       "dependencies": {"av1": "p5d7d12505a42f7b3", "dav1d": "pb24767b9eb34d961", "image_codec": "p69c0e968ae5735d9", "libaom": "p74ab3cb6eb3b86fa", "libavif": "p57c0272208aae8db"},
       "dependency_refs": {"av1": "bd278217e2bac754d868b3d6502eac4257658d4b", "dav1d": "54706fc6bc0cdecab7e9593974a4039cc038fca7", "image_codec": "360553150917f352e49e1beb78917370792ccaef", "libaom": "b141d9c45db236335351c8a4b2a14b3ade27c937", "libavif": "1aadfad932c98c069a1204261b1856f81f3bc199"},
@@ -115,15 +124,6 @@
       "ref": "b141d9c45db236335351c8a4b2a14b3ade27c937",
       "source": true,
       "url": "https://aomedia.googlesource.com/aom"
-    },
-    {
-      "commit": "c1ac6095d01bcfdd4c5ae49c4636aaf9a0303449",
-      "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
-      "dependency_refs": {"crypto": "master", "oqs": "master"},
-      "id": "p8204ae87a845c1c3",
-      "name": "mesh_client",
-      "ref": "c1ac6095d01bcfdd4c5ae49c4636aaf9a0303449",
-      "url": "https://github.com/ziranlang/mesh-client.git"
     },
     {
       "commit": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
@@ -189,8 +189,8 @@
     }
   ],
   "root": {
-    "dependencies": {"curl": "p8da229d15597ab5c", "kryon": "pe02c713a1b0b858a", "mesh_client": "p8204ae87a845c1c3", "monocypher": "p966a7198f42a3ddc", "oqs": "p7098ac9cd92f7e5f", "qrcode": "p0dfa70137405b096", "zlib": "p82dbc05081cd4d96"},
-    "dependency_refs": {"curl": "19b299005fbe2d895f4ad525cfdae62a2220c3ea", "kryon": "452813114e40e2385485bf5f6bc555cb90371d16", "mesh_client": "c1ac6095d01bcfdd4c5ae49c4636aaf9a0303449", "monocypher": "master", "oqs": "master", "qrcode": "master", "zlib": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"},
+    "dependencies": {"curl": "p8da229d15597ab5c", "kryon": "pe02c713a1b0b858a", "mesh_client": "p3e75fb71e59471c7", "monocypher": "p966a7198f42a3ddc", "oqs": "p7098ac9cd92f7e5f", "qrcode": "p0dfa70137405b096", "zlib": "p82dbc05081cd4d96"},
+    "dependency_refs": {"curl": "19b299005fbe2d895f4ad525cfdae62a2220c3ea", "kryon": "452813114e40e2385485bf5f6bc555cb90371d16", "mesh_client": "08062f44b69500b27e0bf603fa9b04fa748277ef", "monocypher": "master", "oqs": "master", "qrcode": "master", "zlib": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"},
     "name": "Entity"
   },
   "toolchain": {

@@ -7,6 +7,7 @@ Scroll :: #import "kryon/scroll";
 #import "kryon/geometry"
 #import "achievement_view"
 #import "model"
+#import "std/json_document"
 #import "std/json_scan"
 #import "std/text_buffer"
 #import "std/c_string"
@@ -14,15 +15,20 @@ Scroll :: #import "kryon/scroll";
 telegram_open: bool;
 telegram_scroll: s32;
 telegram_page: [16385]u8;
+telegram_stars: TelegramStarsReview;
+telegram_stars_key: u64 = 77014;
+telegram_stars_rendered: bool;
+
 TelegramViewRoute :: (route: string) -> bool {
     if route != "telegram" || !AppSupports("entity.telegram") { return false }
     telegram_open = true
     telegram_scroll = 0
+    TelegramClearStarsReview()
     return true
 }
 TelegramViewCommand :: (command: string) -> bool {
-    if command == "reload" { telegram_open = false; telegram_page = .{}; return false }
-    if command == "back" && telegram_open { telegram_open = false; AppReply("handled"); return true }
+    if command == "reload" { telegram_open = false; telegram_page = .{}; TelegramClearStarsReview(); return false }
+    if command == "back" && telegram_open { telegram_open = false; TelegramClearStarsReview(); AppReply("handled"); return true }
     return false
 }
 TelegramViewAction :: (operation: string) {
@@ -31,20 +37,16 @@ TelegramViewAction :: (operation: string) {
     request_id: [33]u8
     unused ReadStringText(page, FieldAt(page, 0, "owner"), owner[:])
     unused ReadStringText(page, FieldAt(page, 0, "request_id"), request_id[:])
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"operation\":\"%\",\"owner\":", operation)
-    EntityQuote(*out, TextUntilNul(owner[:]))
-    BuilderPrint(*out, ",\"request_id\":")
-    EntityQuote(*out, TextUntilNul(request_id[:]))
-    BuilderPrint(*out, "}")
-    query := BuilderFinish(out)
-    if AppService("entity.telegram", query) == "account" { AppReply("account") }
-    AchievementRelease(query)
+    TelegramClearStarsReview()
+    TelegramSendAction(operation, TextUntilNul(owner[:]), TextUntilNul(request_id[:]))
 }
 TelegramViewFrame :: (navigation: bool) -> bool {
     if !telegram_open { return false }
     response := AppService("entity.telegram", "")
-    if response.count < 2 || response.count >= telegram_page.count { return true }
+    if response.count < 2 || response.count >= telegram_page.count {
+        TelegramClearStarsReview()
+        return true
+    }
     unused CopyCString(response, telegram_page[:])
     document := TextUntilNul(telegram_page[:])
     status: [4097]u8
@@ -70,19 +72,38 @@ TelegramViewFrame :: (navigation: bool) -> bool {
     width := area.width - 40.0 * scale
     if width > 680.0 * scale { width = 680.0 * scale }
     font := cast(s32)(16.0 * scale)
+    stars: TelegramStarsReview
+    stars_valid := width > 0.0 && area.height > 0.0 && font > 0 && document.count == response.count &&
+    FieldAt(document, 0, "approve_stars") >= 0 && TelegramReadStarsReview(document, TextUntilNul(approve[:]), *stars)
+    if !stars_valid { TelegramClearStarsReview() }
+    review_text := ifx stars_valid then TextUntilNul(stars.review[:]) else TextUntilNul(review[:])
+    disclosure := TextUntilNul(stars.disclosure[:])
     status_height := AchievementWrappedHeight(TextUntilNul(status[:]), width, font, scale) + 16.0 * scale
-    review_height: float32 = ifx review[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(review[:]), width, font, scale) + 16.0 * scale
+    review_height: float32 = 0.0
+    if review_text != "" {
+        review_height = ifx stars_valid then TelegramReviewHeight(review_text, width, font, scale) else AchievementWrappedHeight(review_text, width, font, scale) + 16.0 * scale
+    }
     authorization_height: float32 = ifx authorization[0] == 0 then 0.0 else AchievementWrappedHeight(TextUntilNul(authorization[:]), width, font, scale) + 16.0 * scale
+    stars_height: float32 = ifx stars_valid then TelegramReviewHeight(disclosure, width, font, scale) else 0.0
+    stars_extent: float32 = ifx stars_valid then stars_height + 60.0 * scale else 0.0
     scroll := Scroll.Draw(session, Scroll.Props.{.key = cast(u64)77000, .bounds = area,
-            .content_height = cast(s32)(status_height + review_height + authorization_height + 380.0 * scale), .scroll_offset = telegram_scroll, .scale = scale})
+            .content_height = cast(s32)(status_height + review_height + authorization_height + stars_extent + 380.0 * scale), .scroll_offset = telegram_scroll, .scale = scale})
     telegram_scroll = scroll.scroll_offset
-    if !scroll.opened { return true }
+    if !scroll.opened { TelegramClearStarsReview(); return true }
+    if stars_valid && !TelegramSameStarsReview(*stars, *telegram_stars) {
+        telegram_stars = stars
+        telegram_stars_key += 1
+        telegram_stars_rendered = false
+    }
     x := scroll.content.x + (scroll.content.width - width) * 0.5
     y := scroll.content.y + 16.0 * scale
     if navigation {
         back := AppLocale("entity.back")
         if back == "" || back == "entity.back" { back = "Back" }
-        if Button.Draw(session, Button.Props.{.id = 77001, .label = back, .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 { telegram_open = false }
+        if Button.Draw(session, Button.Props.{.id = 77001, .label = back, .bounds = Rectangle.{x, y, width, 44.0 * scale}}) != 0 {
+            telegram_open = false
+            TelegramClearStarsReview()
+        }
         y += 56.0 * scale
     }
     AchievementText(session, 77002, "Telegram", Rectangle.{x, y, width, 40.0 * scale}, cast(s32)(26.0 * scale))
@@ -97,7 +118,7 @@ TelegramViewFrame :: (navigation: bool) -> bool {
         y += authorization_height
     }
     if review_height > 0.0 {
-        AchievementText(session, 77006, TextUntilNul(review[:]), Rectangle.{x, y, width, review_height}, font)
+        AchievementText(session, 77006, review_text, Rectangle.{x, y, width, review_height}, font)
         y += review_height
     }
     labels: [3]string = .[TextUntilNul(approve[:]), TextUntilNul(cancel[:]), TextUntilNul(disconnect[:])]
@@ -108,6 +129,106 @@ TelegramViewFrame :: (navigation: bool) -> bool {
                 .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = busy || (index == 0 && review_height <= 0.0)}) != 0 { TelegramViewAction(operations[index]) }
         y += 60.0 * scale
     }
-    unused End(session)
+    stars_pressed := false
+    // A retained activation belongs to the key used by the previous frame.
+    // Changing the review or leaving it invalidates that key before dispatch.
+    stars_current := stars_valid && telegram_open && telegram_stars.owner[0] != 0
+    if stars_current {
+        AchievementText(session, 77013, disclosure, Rectangle.{x, y, width, stars_height}, font)
+        y += stars_height
+        ready := telegram_stars_rendered && !stars.busy
+        stars_pressed = Button.Draw(session, Button.Props.{.id = 77014, .key = telegram_stars_key,
+                .label = TextUntilNul(stars.label[:]), .bounds = Rectangle.{x, y, width, 48.0 * scale}, .disabled = !ready}) != 0 && ready
+    }
+    if End(session) && stars_current {
+        telegram_stars_rendered = true
+        if stars_pressed {
+            TelegramClearStarsReview()
+            TelegramSendAction("approve_stars", TextUntilNul(stars.owner[:]), TextUntilNul(stars.request_id[:]))
+        }
+    } else { TelegramClearStarsReview() }
     return true
+}
+
+#scope_file
+
+TelegramStarsReview :: struct {
+    owner: [65]u8;
+    request_id: [33]u8;
+    review: [8193]u8;
+    disclosure: [2049]u8;
+    label: [256]u8;
+    busy: bool;
+}
+
+TelegramClearStarsReview :: () {
+    telegram_stars.owner[0] = 0
+    telegram_stars_rendered = false
+}
+
+TelegramSameStarsReview :: (a: *TelegramStarsReview, b: *TelegramStarsReview) -> bool {
+    return a.busy == b.busy && TextUntilNul(a.owner[:]) == TextUntilNul(b.owner[:]) &&
+    TextUntilNul(a.request_id[:]) == TextUntilNul(b.request_id[:]) && TextUntilNul(a.review[:]) == TextUntilNul(b.review[:]) &&
+    TextUntilNul(a.disclosure[:]) == TextUntilNul(b.disclosure[:]) && TextUntilNul(a.label[:]) == TextUntilNul(b.label[:])
+}
+
+TelegramReviewHeight :: (text: string, width: float32, font: s32, scale: float32) -> float32 {
+    line_breaks: s32 = 0
+    for byte: text { if byte == 10 { line_breaks += 1 } }
+    return AchievementWrappedHeight(text, width, font, scale, line_breaks) + 16.0 * scale
+}
+
+TelegramReadStarsReview :: (page: string, base_label: string, review: *TelegramStarsReview) -> bool {
+    doc: JsonDocument
+    text: Vec(u8)
+    defer { JsonReset(*doc); VecFree(doc.nodes); VecFree(text) }
+    if !JsonRead(*doc, page) || JsonKindOf(*doc, doc.root) != .Object || JsonCount(*doc, doc.root) > 32 { return false }
+    member := JsonFirst(*doc, doc.root)
+    while member >= 0 {
+        VecClear(text)
+        if !JsonKeyInto(*doc, member, *text) || JsonMember(*doc, doc.root, TextView(VecSlice(text, 0, text.count))) != member { return false }
+        member = JsonNext(*doc, member)
+    }
+    busy := JsonMember(*doc, doc.root, "busy")
+    value, valid := JsonBool(*doc, busy)
+    if busy >= 0 && !valid { return false }
+    review.busy = value
+    return TelegramReadReviewText(*doc, "owner", review.owner[:]) && TelegramReviewID(TextUntilNul(review.owner[:]), 64) &&
+    TelegramReadReviewText(*doc, "request_id", review.request_id[:]) && TelegramReviewID(TextUntilNul(review.request_id[:]), 32) &&
+    TelegramReadReviewText(*doc, "review", review.review[:]) &&
+    TelegramReadReviewText(*doc, "stars_disclosure", review.disclosure[:]) &&
+    TelegramReadReviewText(*doc, "approve_stars", review.label[:]) && TextUntilNul(review.label[:]) != base_label
+}
+
+TelegramReadReviewText :: (doc: *JsonDocument, member: string, output: []u8) -> bool {
+    bytes: Vec(u8)
+    defer { VecFree(bytes) }
+    if !JsonStringInto(doc, JsonMember(doc, doc.root, member), *bytes) || bytes.count >= output.count { return false }
+    text := TextView(VecSlice(bytes, 0, bytes.count))
+    has_text := false
+    for byte: text {
+        if (byte < 32 && byte != 9 && byte != 10 && byte != 13) || byte == 127 { return false }
+        if byte > 32 { has_text = true }
+    }
+    return has_text && CopyCString(text, output)
+}
+
+TelegramReviewID :: (text: string, length: s64) -> bool {
+    if text.count != length { return false }
+    for byte: text {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+TelegramSendAction :: (operation: string, owner: string, request_id: string) {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"operation\":\"%\",\"owner\":", operation)
+    EntityQuote(*out, owner)
+    BuilderPrint(*out, ",\"request_id\":")
+    EntityQuote(*out, request_id)
+    BuilderPrint(*out, "}")
+    query := BuilderFinish(out)
+    if AppService("entity.telegram", query) == "account" { AppReply("account") }
+    AchievementRelease(query)
 }
