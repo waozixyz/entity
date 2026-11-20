@@ -9,7 +9,7 @@ ref = "9432a110709c4a4f72c4f732fcfc368e15213a54"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "452813114e40e2385485bf5f6bc555cb90371d16"
+ref = "43e6ea3d76ded207e2be93ff82b2a609c3cfeb91"
 
 [exports]
 canvas_profile_host = "src/canvas_profile_host.zi"
@@ -65,7 +65,7 @@ ref = "master"
 
 [dependencies.mesh_client]
 git = "https://git.waozi.xyz/ziranlang/mesh-client.git"
-ref = "08062f44b69500b27e0bf603fa9b04fa748277ef"
+ref = "d99d9e9802061f726773a0f89d15ec4ed3366957"
 
 [dependencies.oqs]
 git = "https://github.com/ziranlang/oqs.git"
