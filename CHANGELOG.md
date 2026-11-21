@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Show optional host activity items with their saved names, icons and colors below the Profile summary.
 - Add an optional, separate Telegram Stars consent action to the shared Profile authorization review.
 - Export the Telegram Mini App launch and Stars checkout client contract, including validation of catalog and invoice replies.
 - Build with Ziran 7fbc8152 and Kryon 3627ea8a, the Kryon without raylib, together with Plot, Game2D, CSS and Apps.

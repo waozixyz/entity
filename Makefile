@@ -183,6 +183,22 @@ profile-shared-test:
 
 test: profile-shared-test
 
+.PHONY: profile-activity-test
+profile-activity-test:
+	$(ZIRAN) build --project $(LOCK_FLAGS) --target=c --entry profile_activity_test:main --exe -o build/profile-activity-test tests/profile_activity_test.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-activity-test/profile_activity_test
+
+test: profile-activity-test
+
+.PHONY: profile-activity-view-test
+profile-activity-view-test:
+	mkdir -p build/profile-activity-view-test
+	$(ZIRAN) build --project $(LOCK_FLAGS) $(ACHIEVEMENT_TEST_BINDS) --target=c --entry profile_activity_view_test:main -o build/profile-activity-view-test tests/profile_activity_view_test.zi
+	$(CC) -std=c11 -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -I$(ZIRAN_ROOT)/include -Ibuild/profile-activity-view-test $$(rg --files build/profile-activity-view-test -g '*.c') -lm -o build/profile-activity-view-test/test
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS build/profile-activity-view-test/test
+
+test: profile-activity-view-test
+
 # Portable collection protocol and owner-bound service lifecycle, no accounts.
 .PHONY: collection-client-test
 collection-client-test:

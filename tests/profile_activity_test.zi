@@ -1,0 +1,32 @@
+#import "profile_activity"
+#import "std/text_buffer"
+#import "std/vec"
+
+#program_export
+main :: () -> s32 {
+    items: ProfileActivityItems
+    ProfileActivityItemsRead("{\"stats\":[{\"label\":\"Today\",\"value\":\"1/1\"}],\"items_title\":\"Completed habits\",\"items\":[{\"label\":\"Diary\",\"shape\":\"S2rr:M3 5H20V20H3Z\",\"color\":1234567890},{\"label\":\"Walking\"},{\"shape\":\"ignored\"}]}", *items)
+    if items.count != 2 || TextUntilNul(items.title[:]) != "Completed habits" { return 1 }
+    if TextUntilNul(items.items[0].label[:]) != "Diary" ||
+    TextUntilNul(items.items[0].shape[:]) != "S2rr:M3 5H20V20H3Z" ||
+    items.items[0].color != 1234567890 { return 2 }
+    if TextUntilNul(items.items[1].shape[:]) != "" || items.items[1].color != 0 { return 3 }
+    // Old hosts have only summary figures; a new read clears the previous items.
+    ProfileActivityItemsRead("{\"stats\":[]}", *items)
+    if items.count != 0 || TextUntilNul(items.title[:]) != "" { return 4 }
+    document: Vec(u8)
+    BuilderPrint(*document, "{\"items\":[")
+    for index: 0..PROFILE_ACTIVITY_ITEM_LIMIT + 2 {
+        BuilderPrint(*document, "%{\"label\":\"Item\",\"color\":4294967295}",
+            ifx index > 0 then "," else "")
+    }
+    BuilderPrint(*document, "]}")
+    ProfileActivityItemsRead(BuilderFinish(document), *items)
+    if items.count != PROFILE_ACTIVITY_ITEM_LIMIT ||
+    items.items[PROFILE_ACTIVITY_ITEM_LIMIT - 1].color != cast(u32)4294967295 { return 5 }
+    ProfileActivityItemsRead("{\"items\":[{\"label\":\"Bad color\",\"color\":4294967296}]}", *items)
+    if items.count != 1 || items.items[0].color != 0 { return 6 }
+    ProfileActivityItemsRead("", *items)
+    if items.count != 0 { return 7 }
+    return 0
+}

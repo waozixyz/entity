@@ -35,6 +35,13 @@ The default node is `https://api.waozi.xyz`. Selecting a node does not create an
 account or enable synchronization. A host maps the node selection to its own
 existing account and storage operations.
 
+The optional `entity.activity` service supplies up to three summary `stats`
+with `label`, `value` and a symbolic `icon`. It may also supply `items_title`
+and up to 64 `items`, each with a `label`, an SVG path `shape`, and an unsigned
+RGBA `color` packed as `0xRRGGBBAA`. These named items appear below the figures
+and contribute to the Profile's scroll height. Older summary-only hosts keep
+their existing layout.
+
 The optional `entity.assets` service supplies an absolute extracted asset root to
 hosts that need one. Other hosts use the bundle-relative `assets/entity/` paths.
 The picture atlas comes from Kryon and the flower picture from Inner Breeze.

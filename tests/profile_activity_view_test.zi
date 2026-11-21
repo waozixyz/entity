@@ -1,0 +1,38 @@
+Profile :: #import "entity";
+#import "profile_activity"
+#import "achievement_shape_host"
+#import "kryon/session"
+#import "kryon/tree"
+#import "kryon/tree_draw"
+#import "paint_queue"
+#import "geometry"
+
+#program_export
+AppDarkHost :: () -> bool { return true }
+#program_export
+AppSupportsHost :: (capability: string) -> bool { unused capability; return false }
+#program_export
+AppThemeColorHost :: (token: string) -> u32 { unused token; return 0 }
+
+#program_export
+main :: () -> s32 {
+    Profile.scale = 1.0
+    Profile.activity_count = 0
+    ProfileActivityItemsRead("", *Profile.activity_items)
+    if Profile.ProfileActivity(0.0, 0.0, 360.0, false) != 0.0 { return 1 }
+    Profile.activity_count = 3
+    summary := Profile.ProfileActivity(0.0, 0.0, 360.0, false)
+    if summary != 128.0 { return 2 }
+    ProfileActivityItemsRead("{\"items_title\":\"Completed habits\",\"items\":[{\"label\":\"Diary\",\"shape\":\"S2rr:M3 5H20V20H3Z\",\"color\":1234567890},{\"label\":\"Walking\"}]}", *Profile.activity_items)
+    height := Profile.ProfileActivity(0.0, 0.0, 360.0, false)
+    if height != summary + 34.0 + 2.0 * 48.0 + 8.0 { return 3 }
+    Profile.activity_count = 0
+    Profile.session = SessionOpen()
+    BeginFrame(Profile.session, cast(u64)1, Rectangle.{0.0, 0.0, 360.0, 640.0})
+    drawn := Profile.ProfileActivity(0.0, 0.0, 360.0, true)
+    painted := PendingPaintCount(Profile.session)
+    unused EndFrame(Profile.session)
+    unused SessionClose(Profile.session)
+    if drawn != height - summary || painted == 0 { return 4 }
+    return 0
+}

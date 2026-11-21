@@ -24,6 +24,7 @@
 #import "std/vec"
 #import "kryon/app_context"
 #import "profile_theme"
+#import "profile_activity"
 #import "kryon/app_protocol"
 #import "session"
 #import "geometry"
@@ -1542,11 +1543,13 @@ ActivityStat :: struct { label: [64]u8; value: [32]u8; icon: [16]u8 }
 activity_stats: [3]ActivityStat;
 activity_count: s32;
 activity_tick: s32;
+activity_items: ProfileActivityItems;
 
 ProfileActivityRead :: () {
     activity_tick += 1
     if activity_tick % 30 != 1 { return }
     json := AppService("entity.activity", "")
+    ProfileActivityItemsRead(json, *activity_items)
     at := FieldAt(json, 0, "stats")
     count := ArrayCount(json, at)
     activity_count = 0
@@ -1570,9 +1573,8 @@ ActivityShape :: (icon: string) -> string {
 }
 
 ProfileActivity :: (x: float32, y: float32, width: float32, draw: bool) -> float32 {
-    if activity_count == 0 { return 0.0 }
-    height := 112.0 * scale
-    if draw {
+    height := ifx activity_count > 0 then 112.0 * scale else 0.0
+    if draw && activity_count > 0 {
         gap := 8.0 * scale
         tile := (width - gap * cast(float32)(activity_count - 1)) / cast(float32)activity_count
         for index: 0..activity_count - 1 {
@@ -1597,7 +1599,38 @@ ProfileActivity :: (x: float32, y: float32, width: float32, draw: bool) -> float
                     .size = cast(s32)(22.0 * scale), .align = TextAlign.TextAlignCenter, .wrap = Text.Wrap.TextWrapEllipsis})
         }
     }
-    return height + 16.0 * scale
+    if activity_count > 0 { height += 16.0 * scale }
+    if activity_items.count > 0 {
+        title := TextUntilNul(activity_items.title[:])
+        if title != "" {
+            if draw { TextLine(1240, title, x, y + height, width, 18) }
+            height += 34.0 * scale
+        }
+        for index: 0..activity_items.count - 1 {
+            item := *activity_items.items[index]
+            if draw {
+                top := y + height
+                color := ThemeOr("accent", 0x49a68eff, 0x298a71ff)
+                if item.color != 0 { color = ColorFromPacked(item.color) }
+                Box.Draw(session, Box.Props.{.key = cast(u64)(127000 + index * 3),
+                        .bounds = Rectangle.{x, top + 4.0 * scale, 36.0 * scale, 36.0 * scale},
+                        .fill = color, .radius = 18.0 * scale})
+                shape := TextUntilNul(item.shape[:])
+                if shape == "" { shape = "S1.8rr:M5 12L10 17L19 7" }
+                SvgIcon.Draw(session, SvgIcon.Props.{.shape = shape, .color = Color.{255, 255, 255, 255},
+                        .bounds = Rectangle.{x + 8.0 * scale, top + 12.0 * scale,
+                            20.0 * scale, 20.0 * scale}})
+                Text.Draw(session, Text.Props.{.key = cast(u64)(127001 + index * 3),
+                        .text = TextUntilNul(item.label[:]),
+                        .bounds = Rectangle.{x + 48.0 * scale, top + 10.0 * scale,
+                            width - 48.0 * scale, 26.0 * scale},
+                        .size = cast(s32)(16.0 * scale), .wrap = Text.Wrap.TextWrapEllipsis})
+            }
+            height += 48.0 * scale
+        }
+        height += 8.0 * scale
+    }
+    return height
 }
 
 DewCommand :: (operation: string, sequence: s32, size: string = "", period: string = "") {

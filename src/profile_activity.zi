@@ -1,0 +1,37 @@
+// Optional named activity items supplied by the embedding host.
+#import "std/json_scan"
+
+PROFILE_ACTIVITY_ITEM_LIMIT :: 64
+ProfileActivityItem :: struct {
+    label: [160]u8
+    shape: [1024]u8
+    color: u32
+}
+ProfileActivityItems :: struct {
+    title: [128]u8
+    items: [PROFILE_ACTIVITY_ITEM_LIMIT]ProfileActivityItem
+    count: s32
+}
+
+ProfileActivityItemsRead :: (document: string, output: *ProfileActivityItems) {
+    output.* = ProfileActivityItems.{}
+    unused ReadStringText(document, FieldAt(document, 0, "items_title"), output.title[:])
+    at := FieldAt(document, 0, "items")
+    count := ArrayCount(document, at)
+    for index: 0..count - 1 {
+        if output.count >= PROFILE_ACTIVITY_ITEM_LIMIT { break }
+        row := ElementAt(document, at, cast(s32)index)
+        item: ProfileActivityItem
+        if ReadStringText(document, FieldAt(document, row, "label"), item.label[:]) < 1 {
+            continue
+        }
+        unused ReadStringText(document, FieldAt(document, row, "shape"), item.shape[:])
+        color := ReadNumber(document, FieldAt(document, row, "color"))
+        if color.valid && color.value >= 0 && color.value <= 4294967295 &&
+        color.value == cast(float64)cast(u32)color.value {
+            item.color = cast(u32)color.value
+        }
+        output.items[output.count] = item
+        output.count += 1
+    }
+}
